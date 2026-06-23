@@ -1,0 +1,28 @@
+{
+  "name": "toolkit-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dev Workflow MCP Hub — bridges AI coding agents with Jira, GitHub, and more",
+  "type": "module",
+  "scripts": {
+    "mcp": "node --import tsx src/mcp-server.ts",
+    "mcp:prod": "node dist/mcp-server.js",
+    "mcp:inspect": "npx @modelcontextprotocol/inspector node --import tsx src/mcp-server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.x"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.9"
+  }
+}
