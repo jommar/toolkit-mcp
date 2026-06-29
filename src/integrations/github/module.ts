@@ -46,6 +46,16 @@ export const githubCreatePrSchema = z.object({
   draft: z.boolean().optional().default(false).describe('Create as draft PR.'),
 });
 
+export const githubAddPrCommentSchema = z.object({
+  repo: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/, 'Must be in "owner/name" format')
+    .describe('Repository "owner/name" (e.g., "TransActComm/Portage-backend").'),
+  prNumber: z.number().int().positive().describe('Pull request number.'),
+  body: z.string().min(1).max(65536).describe('Comment body (Markdown supported).'),
+});
+
 export const githubListBranchesSchema = z.object({
   repo: z
     .string()
@@ -197,6 +207,16 @@ export const githubCreatePrHandler: ToolHandler<z.infer<typeof githubCreatePrSch
     return { content: [{ type: 'text', text: JSON.stringify(pr) }] };
   };
 
+export const githubAddPrCommentHandler: ToolHandler<z.infer<typeof githubAddPrCommentSchema>> =
+  (_clients) => async (args) => {
+    const comment = await _clients.github.addPrComment({
+      repo: args.repo,
+      prNumber: args.prNumber,
+      body: args.body,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+  };
+
 export const githubListBranchesHandler: ToolHandler<z.infer<typeof githubListBranchesSchema>> =
   (_clients) => async (args) => {
     const page = args.cursor ? parseInt(args.cursor, 10) : 1;
@@ -266,6 +286,11 @@ export const githubToolDescriptors = [
     name: 'github_create_pr',
     description: 'Create a pull request on GitHub.',
     inputSchema: zodToJsonSchema(githubCreatePrSchema),
+  },
+  {
+    name: 'github_add_pr_comment',
+    description: 'Add an issue-level comment to a pull request.',
+    inputSchema: zodToJsonSchema(githubAddPrCommentSchema),
   },
   {
     name: 'github_list_branches',

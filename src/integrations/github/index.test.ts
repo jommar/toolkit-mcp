@@ -58,11 +58,12 @@ describe('GitHubModule', () => {
       mockGitHub = makeMockGitHub();
     });
 
-    it('returns 7 handlers', () => {
+    it('returns 8 handlers', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
-      expect(Object.keys(handlers)).toHaveLength(7);
+      expect(Object.keys(handlers)).toHaveLength(8);
       expect(handlers).toHaveProperty('github_get_prs');
       expect(handlers).toHaveProperty('github_create_pr');
+      expect(handlers).toHaveProperty('github_add_pr_comment');
       expect(handlers).toHaveProperty('github_list_branches');
       expect(handlers).toHaveProperty('github_get_pr_details');
       expect(handlers).toHaveProperty('github_get_pr_reviews');
@@ -91,9 +92,9 @@ describe('GitHubModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 7 tool descriptors', () => {
+    it('returns 8 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(7);
+      expect(descriptors).toHaveLength(8);
     });
 
     it('descriptors have name, description, and inputSchema', () => {

@@ -540,6 +540,36 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('addPrComment', () => {
+    it('calls POST /repos/{repo}/issues/{prNumber}/comments and returns the comment', async () => {
+      http.post.mockResolvedValue({
+        data: {
+          id: 555,
+          html_url: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+          body: 'Looks good',
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.addPrComment({ repo: 'Org/Repo', prNumber: 42, body: 'Looks good' });
+
+      expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/comments', { body: 'Looks good' });
+      expect(result).toEqual({
+        id: 555,
+        htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+        body: 'Looks good',
+      });
+    });
+
+    it('rejects an invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.addPrComment({ repo: 'bad-repo', prNumber: 1, body: 'x' })).rejects.toThrow(
+        'Invalid repo format',
+      );
+      expect(http.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe('listBranches', () => {
     it('calls GET /repos/{repo}/branches and returns parsed branches', async () => {
       http.get.mockResolvedValue({

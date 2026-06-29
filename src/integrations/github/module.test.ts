@@ -8,6 +8,7 @@ vi.mock('../../services/index.js', () => ({
 import {
   githubGetPrsHandler,
   githubCreatePrHandler,
+  githubAddPrCommentHandler,
   githubListBranchesHandler,
   githubGetPrDetailsHandler,
   githubGetPrReviewsHandler,
@@ -25,6 +26,7 @@ function makeMockGitHub() {
     findPrsForIssueKeys: vi.fn(),
     searchPrsByBranchName: vi.fn(),
     createPullRequest: vi.fn(),
+    addPrComment: vi.fn(),
     listBranches: vi.fn(),
     getPullRequest: vi.fn(),
     getPullRequestReviews: vi.fn(),
@@ -183,6 +185,27 @@ describe('githubCreatePrHandler', () => {
     });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(created);
+  });
+});
+
+describe('githubAddPrCommentHandler', () => {
+  let mockGitHub: ReturnType<typeof makeMockGitHub>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls addPrComment with correct args and returns the created comment', async () => {
+    const comment = { id: 555, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555', body: 'Looks good' };
+    mockGitHub.addPrComment.mockResolvedValue(comment);
+
+    const handler = githubAddPrCommentHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, body: 'Looks good' });
+
+    expect(mockGitHub.addPrComment).toHaveBeenCalledWith({ repo: 'Org/Repo', prNumber: 42, body: 'Looks good' });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(comment);
   });
 });
 

@@ -10,6 +10,6 @@ export type {
   JiraComment,
   IssueLinkType,
 } from './jira/jira-client.js';
-export type { PrInfo, PrSearchResult, PrCreated, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions } from './github/github-client.js';
+export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions } from './github/github-client.js';
 export { DEV_FIELDS, toSlimIssue, toSlimComment, toSlimAttachment, adfToText } from './slim.js';
 export type { SlimIssue, SlimComment, SlimAttachment } from './slim.js';

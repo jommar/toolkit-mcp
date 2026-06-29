@@ -161,6 +161,7 @@ Exactly one sentence. Concise. No filler.
 | `jira_add_comment` | "Add a comment to a Jira issue." |
 | `github_get_prs` | "Find pull requests for one or more issue keys." |
 | `github_create_pr` | "Create a pull request from a branch." |
+| `github_add_pr_comment` | "Add an issue-level comment to a pull request." |
 | `github_list_branches` | "List branches in a GitHub repository." |
 | `mcp_get_health` | "Report which integrations are active." |
 

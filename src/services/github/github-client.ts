@@ -28,6 +28,12 @@ export interface PrCreated {
   state: string;
 }
 
+export interface PrComment {
+  id: number;
+  htmlUrl: string;
+  body: string;
+}
+
 export interface BranchInfo {
   name: string;
   sha: string;
@@ -426,6 +432,25 @@ export class GitHubClient {
       number: data.number,
       htmlUrl: data.html_url,
       state: data.state,
+    };
+  }
+
+  /**
+   * Add an issue-level comment to a pull request.
+   * PR conversation comments use the issues comments endpoint — the PR number
+   * is the issue number.
+   */
+  async addPrComment(input: { repo: string; prNumber: number; body: string }): Promise<PrComment> {
+    if (!REPO_PATTERN.test(input.repo)) {
+      throw new Error(`Invalid repo format: "${input.repo}". Must be in "owner/name" format.`);
+    }
+    const { data } = await this.http.post<any>(`/repos/${input.repo}/issues/${input.prNumber}/comments`, {
+      body: input.body,
+    });
+    return {
+      id: data.id,
+      htmlUrl: data.html_url,
+      body: data.body,
     };
   }
 
