@@ -92,6 +92,35 @@ export const githubGetPrReviewsSchema = z.object({
     .describe('Pull request number.'),
 });
 
+export const githubGetPrCommentsSchema = z.object({
+  repo: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/, 'Must be in "owner/name" format')
+    .describe('Repository "owner/name" (e.g., "TransActComm/Portage-backend").'),
+  prNumber: z
+    .number()
+    .int()
+    .positive()
+    .describe('Pull request number.'),
+  limit: z.number().min(1).max(100).optional().default(20).describe('Maximum items per page (default 20).'),
+  cursor: z.string().max(50).optional().describe('Opaque pagination token from a previous response.'),
+});
+
+export const githubUpdatePrCommentSchema = z.object({
+  repo: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/, 'Must be in "owner/name" format')
+    .describe('Repository "owner/name" (e.g., "TransActComm/Portage-backend").'),
+  commentId: z
+    .number()
+    .int()
+    .positive()
+    .describe('Comment ID to update.'),
+  body: z.string().min(1).max(65536).describe('Updated comment body (Markdown supported).'),
+});
+
 export const githubGetPrChecksSchema = z.object({
   repo: z
     .string()
@@ -217,6 +246,30 @@ export const githubAddPrCommentHandler: ToolHandler<z.infer<typeof githubAddPrCo
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 
+export const githubGetPrCommentsHandler: ToolHandler<z.infer<typeof githubGetPrCommentsSchema>> =
+  (_clients) => async (args) => {
+    const page = args.cursor ? parseInt(args.cursor, 10) : 1;
+    const comments = await _clients.github.getPrComments(args.repo, args.prNumber, {
+      perPage: args.limit,
+      page,
+    });
+    const hasMore = comments.length >= (args.limit ?? 20);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(paginated(comments, hasMore ? String(page + 1) : undefined)),
+        },
+      ],
+    };
+  };
+
+export const githubUpdatePrCommentHandler: ToolHandler<z.infer<typeof githubUpdatePrCommentSchema>> =
+  (_clients) => async (args) => {
+    const comment = await _clients.github.updatePrComment(args.repo, args.commentId, args.body);
+    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+  };
+
 export const githubListBranchesHandler: ToolHandler<z.infer<typeof githubListBranchesSchema>> =
   (_clients) => async (args) => {
     const page = args.cursor ? parseInt(args.cursor, 10) : 1;
@@ -291,6 +344,16 @@ export const githubToolDescriptors = [
     name: 'github_add_pr_comment',
     description: 'Add an issue-level comment to a pull request.',
     inputSchema: zodToJsonSchema(githubAddPrCommentSchema),
+  },
+  {
+    name: 'github_get_pr_comments',
+    description: 'List issue-level (conversation) comments on a pull request.',
+    inputSchema: zodToJsonSchema(githubGetPrCommentsSchema),
+  },
+  {
+    name: 'github_update_pr_comment',
+    description: 'Update an existing issue-level comment on a pull request by comment ID.',
+    inputSchema: zodToJsonSchema(githubUpdatePrCommentSchema),
   },
   {
     name: 'github_list_branches',

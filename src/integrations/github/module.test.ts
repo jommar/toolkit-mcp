@@ -9,6 +9,8 @@ import {
   githubGetPrsHandler,
   githubCreatePrHandler,
   githubAddPrCommentHandler,
+  githubGetPrCommentsHandler,
+  githubUpdatePrCommentHandler,
   githubListBranchesHandler,
   githubGetPrDetailsHandler,
   githubGetPrReviewsHandler,
@@ -27,6 +29,8 @@ function makeMockGitHub() {
     searchPrsByBranchName: vi.fn(),
     createPullRequest: vi.fn(),
     addPrComment: vi.fn(),
+    getPrComments: vi.fn(),
+    updatePrComment: vi.fn(),
     listBranches: vi.fn(),
     getPullRequest: vi.fn(),
     getPullRequestReviews: vi.fn(),
@@ -206,6 +210,86 @@ describe('githubAddPrCommentHandler', () => {
     expect(mockGitHub.addPrComment).toHaveBeenCalledWith({ repo: 'Org/Repo', prNumber: 42, body: 'Looks good' });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(comment);
+  });
+});
+
+describe('githubGetPrCommentsHandler', () => {
+  let mockGitHub: ReturnType<typeof makeMockGitHub>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls getPrComments with correct args and returns paginated response', async () => {
+    const comments = [
+      { id: 1, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-1', body: 'First!', user: 'alice', createdAt: '2025-01-01T00:00:00Z' },
+      { id: 2, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-2', body: 'Second', user: 'bob', createdAt: '2025-01-02T00:00:00Z' },
+    ];
+    mockGitHub.getPrComments.mockResolvedValue(comments);
+
+    const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+
+    expect(mockGitHub.getPrComments).toHaveBeenCalledWith('Org/Repo', 42, {
+      perPage: 20,
+      page: 1,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toEqual(comments);
+    expect(parsed.hasMore).toBe(false);
+  });
+
+  it('uses cursor as page number', async () => {
+    mockGitHub.getPrComments.mockResolvedValue([]);
+
+    const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
+    await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' });
+
+    expect(mockGitHub.getPrComments).toHaveBeenCalledWith('Org/Repo', 42, {
+      perPage: 10,
+      page: 2,
+    });
+  });
+
+  it('sets hasMore when result count equals limit', async () => {
+    const comments = Array.from({ length: 20 }, (_, i) => ({
+      id: i,
+      htmlUrl: `https://github.com/Org/Repo/pull/42#issuecomment-${i}`,
+      body: 'comment',
+      user: 'user',
+      createdAt: '2025-01-01T00:00:00Z',
+    }));
+    mockGitHub.getPrComments.mockResolvedValue(comments);
+
+    const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toHaveLength(20);
+    expect(parsed.hasMore).toBe(true);
+    expect(parsed.nextPageToken).toBe('2');
+  });
+});
+
+describe('githubUpdatePrCommentHandler', () => {
+  let mockGitHub: ReturnType<typeof makeMockGitHub>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls updatePrComment with correct args and returns updated comment', async () => {
+    const updated = { id: 555, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555', body: 'Updated comment', user: 'alice', createdAt: '2025-01-01T00:00:00Z' };
+    mockGitHub.updatePrComment.mockResolvedValue(updated);
+
+    const handler = githubUpdatePrCommentHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', commentId: 555, body: 'Updated comment' });
+
+    expect(mockGitHub.updatePrComment).toHaveBeenCalledWith('Org/Repo', 555, 'Updated comment');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(updated);
   });
 });
 

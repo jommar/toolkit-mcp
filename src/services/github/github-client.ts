@@ -32,6 +32,8 @@ export interface PrComment {
   id: number;
   htmlUrl: string;
   body: string;
+  user: string;
+  createdAt: string;
 }
 
 export interface BranchInfo {
@@ -451,6 +453,51 @@ export class GitHubClient {
       id: data.id,
       htmlUrl: data.html_url,
       body: data.body,
+      user: data.user?.login ?? 'unknown',
+      createdAt: data.created_at,
+    };
+  }
+
+  /**
+   * List issue-level (conversation) comments on a pull request.
+   * PRs are issues on GitHub, so this uses the issues comments endpoint.
+   */
+  async getPrComments(
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; page?: number },
+  ): Promise<PrComment[]> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const { data } = await this.http.get<any[]>(`/repos/${repo}/issues/${prNumber}/comments`, {
+      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
+    });
+    return data.map((c: any) => ({
+      id: c.id,
+      htmlUrl: c.html_url,
+      body: c.body ?? '',
+      user: c.user?.login ?? 'unknown',
+      createdAt: c.created_at,
+    }));
+  }
+
+  /**
+   * Update an existing issue-level comment on a pull request by comment ID.
+   */
+  async updatePrComment(repo: string, commentId: number, body: string): Promise<PrComment> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const { data } = await this.http.patch<any>(`/repos/${repo}/issues/comments/${commentId}`, {
+      body,
+    });
+    return {
+      id: data.id,
+      htmlUrl: data.html_url,
+      body: data.body,
+      user: data.user?.login ?? 'unknown',
+      createdAt: data.created_at,
     };
   }
 

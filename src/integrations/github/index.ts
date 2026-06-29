@@ -7,6 +7,10 @@ import {
   githubCreatePrSchema,
   githubAddPrCommentHandler,
   githubAddPrCommentSchema,
+  githubGetPrCommentsHandler,
+  githubGetPrCommentsSchema,
+  githubUpdatePrCommentHandler,
+  githubUpdatePrCommentSchema,
   githubListBranchesHandler,
   githubListBranchesSchema,
   githubGetPrDetailsHandler,
@@ -42,6 +46,14 @@ export class GitHubModule implements IntegrationModule<{ github: GitHubClient }>
       github_add_pr_comment: async (args) => {
         const parsed = githubAddPrCommentSchema.parse(args);
         return await githubAddPrCommentHandler(clients)(parsed);
+      },
+      github_get_pr_comments: async (args) => {
+        const parsed = githubGetPrCommentsSchema.parse(args);
+        return await githubGetPrCommentsHandler(clients)(parsed);
+      },
+      github_update_pr_comment: async (args) => {
+        const parsed = githubUpdatePrCommentSchema.parse(args);
+        return await githubUpdatePrCommentHandler(clients)(parsed);
       },
       github_list_branches: async (args) => {
         const parsed = githubListBranchesSchema.parse(args);

@@ -547,6 +547,8 @@ describe('GitHubClient', () => {
           id: 555,
           html_url: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
           body: 'Looks good',
+          user: { login: 'alice' },
+          created_at: '2025-01-01T00:00:00Z',
         },
       });
 
@@ -558,6 +560,8 @@ describe('GitHubClient', () => {
         id: 555,
         htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
         body: 'Looks good',
+        user: 'alice',
+        createdAt: '2025-01-01T00:00:00Z',
       });
     });
 
