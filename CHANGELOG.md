@@ -5,6 +5,23 @@ All notable changes to the toolkit-mcp project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-06-29
+
+### Added
+
+- **Figma integration**: 8 new MCP tools for design file access
+  - `figma_get_me` — authenticated user profile
+  - `figma_get_file` — file overview (pages, metadata)
+  - `figma_get_nodes` — inspect specific design nodes
+  - `figma_get_images` — export frames as image URLs
+  - `figma_get_comments` — read design comments
+  - `figma_get_styles` — list colors, text styles, effects
+  - `figma_get_variables` — list design token collections
+  - `figma_get_versions` — version history
+  - Configuration: `FIGMA_TOKEN` env var (personal access token)
+  - Auth: `X-Figma-Token` header
+  - New files: `src/services/figma/figma-client.ts`, `src/integrations/figma/`
+
 ## [0.2.0] — 2026-06-23
 
 ### Added

@@ -16,12 +16,12 @@ An MCP server that exposes developer toolchain operations (Jira issue management
 │  │               (central dispatch)                 │ │
 │  └──────┬─────────────────────────────┬────────────┘ │
 │         │                             │               │
-│  ┌──────┴──────┐            ┌─────────┴──────────┐   │
-│  │  Jira Module │            │  GitHub Module      │   │
-│  │  8 tools     │            │  7 tools            │   │
-│  │  3 resources │            │  1 resource         │   │
-│  │  2 prompts   │            │                     │   │
-│  └──────┬──────┘            └─────────┬──────────┘   │
+│  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
+│  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │
+│  │  8 tools     │    │  8 tools           │   │  8 tools           │   │
+│  │  3 resources │    │  1 resource        │   │                    │   │
+│  │  2 prompts   │    │                    │   │                    │   │
+│  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   │
 │         │                             │               │
 │  ┌──────┴─────────────────────────────┴──────────┐   │
 │  │       Service Layer: src/services/               │   │
@@ -58,6 +58,7 @@ All variables are optional — tools only register if their required env vars ar
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools, resources, and prompts |
 | `GH_TOKEN` | GitHub | All 7 GitHub tools and `github://prs/{issueKey}` resource |
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
+| `FIGMA_TOKEN` | Figma | All Figma tools |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
 | `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
 | `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
@@ -68,7 +69,7 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 
 ## Tools
 
-16 tools total (15 conditional + 1 built-in always registered).
+24 tools total (23 conditional + 1 built-in always registered).
 
 ### Jira Tools (registered when `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` are set)
 
@@ -94,6 +95,19 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 | `github_get_pr_reviews` | Get PR review comments and review thread summaries. | `repo`, `prNumber` |
 | `github_get_pr_checks` | Get PR status check / CI results (check-runs for the latest commit on the PR). | `repo`, `prNumber` |
 | `github_search_prs` | Flexible PR search by author, repo, state, or free-text query. Provide at least one of `query`, `author`, or `repo`. | `query`, `author`, `repo`, `state`, `limit`, `cursor` |
+
+### Figma Tools (registered when `FIGMA_TOKEN` is set)
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `figma_get_me` | Return the authenticated Figma user profile. | *(none)* |
+| `figma_get_file` | Get a Figma file overview (name, pages, last modified). | `fileKey` |
+| `figma_get_nodes` | Inspect specific nodes/design elements by ID. | `fileKey`, `ids` |
+| `figma_get_images` | Export frames as PNG/SVG/PDF image URLs. | `fileKey`, `ids`, `format`, `scale` |
+| `figma_get_comments` | Read design comments on a file. | `fileKey` |
+| `figma_get_styles` | List colors, text styles, and effects. | `fileKey` |
+| `figma_get_variables` | List design tokens and variable collections. | `fileKey` |
+| `figma_get_versions` | List version history for a file. | `fileKey` |
 
 ### Built-in (always registered)
 
@@ -153,6 +167,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 
 - **Jira module** — registered only if `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_TOKEN` are all set.
 - **GitHub module** — registered only if `GH_TOKEN` is set.
+- **Figma module** — registered only if `FIGMA_TOKEN` is set.
 - **Fallback** — if no env vars are set, the server starts with only `mcp_get_health`. No crashes.
 - The server logs active integrations at startup: `[mcp] Jira integration: active`.
 
@@ -160,7 +175,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 
 ## Testing
 
-174 tests across 10 test files using **vitest**:
+219 tests across 12 test files using **vitest**:
 
 ```bash
 npm run test                 # Run all tests

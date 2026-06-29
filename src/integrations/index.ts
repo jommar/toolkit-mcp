@@ -65,9 +65,10 @@ export interface IntegrationModule<C extends Record<string, unknown> = Record<st
 
 import { JiraModule } from './jira/index.js';
 import { GitHubModule } from './github/index.js';
+import { FigmaModule } from './figma/index.js';
 
 /**
  * Module registry — explicitly import and export all module implementations.
  * Adding a new module requires creating its directory AND adding its import here.
  */
-export const modules: IntegrationModule<any>[] = [new JiraModule(), new GitHubModule()];
+export const modules: IntegrationModule<any>[] = [new JiraModule(), new GitHubModule(), new FigmaModule()];

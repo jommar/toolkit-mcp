@@ -3,18 +3,19 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 vi.mock('../services/index.js', () => ({
   JiraClient: class MockJiraClient {},
   GitHubClient: class MockGitHubClient {},
+  FigmaClient: class MockFigmaClient {},
 }));
 
 import { modules, IntegrationModule } from './index.js';
 
 describe('Module Registry', () => {
-  it('exports exactly 2 modules', () => {
-    expect(modules).toHaveLength(2);
+  it('exports exactly 3 modules', () => {
+    expect(modules).toHaveLength(3);
   });
 
-  it('both modules have correct ids', () => {
+  it('all modules have correct ids', () => {
     const ids = modules.map((m) => m.id).sort();
-    expect(ids).toEqual(['github', 'jira']);
+    expect(ids).toEqual(['figma', 'github', 'jira']);
   });
 
   it('each module implements IntegrationModule interface', () => {
@@ -40,6 +41,7 @@ describe('Module Registry', () => {
       const clients: Record<string, unknown> = {};
       if (mod.id === 'jira') clients.jira = {};
       if (mod.id === 'github') clients.github = {};
+      if (mod.id === 'figma') clients.figma = {};
 
       const handlers = mod.createToolHandlers(clients);
       expect(typeof handlers).toBe('object');
@@ -67,5 +69,11 @@ describe('Module Registry', () => {
     const githubMod = modules.find((m) => m.id === 'github')!;
     expect(typeof githubMod.getResourceHandler).toBe('function');
     expect(githubMod.getPromptHandler).toBeUndefined();
+  });
+
+  it('FigmaModule has no getResourceHandler or getPromptHandler', () => {
+    const figmaMod = modules.find((m) => m.id === 'figma')!;
+    expect(figmaMod.getResourceHandler).toBeUndefined();
+    expect(figmaMod.getPromptHandler).toBeUndefined();
   });
 });

@@ -67,6 +67,7 @@ vi.mock('@modelcontextprotocol/sdk/server', () => ({
 vi.mock('./services/index.js', () => ({
   JiraClient: class MockJiraClient {},
   GitHubClient: class MockGitHubClient {},
+  FigmaClient: class MockFigmaClient {},
 }));
 
 // Mock the config so loadMcpConfig returns a predictable value
