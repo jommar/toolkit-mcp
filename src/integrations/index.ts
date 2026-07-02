@@ -2,9 +2,14 @@ import { Server } from '@modelcontextprotocol/sdk/server';
 
 /**
  * A tool handler: receives validated args, returns MCP CallToolResult content.
+ * Supports text, image, and audio content types per the MCP spec.
  */
 export type ToolHandlerFn = (args: Record<string, unknown>) => Promise<{
-  content: { type: 'text'; text: string }[];
+  content: (
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: string }
+    | { type: 'audio'; data: string; mimeType: string }
+  )[];
 }>;
 
 /**
@@ -66,9 +71,15 @@ export interface IntegrationModule<C extends Record<string, unknown> = Record<st
 import { JiraModule } from './jira/index.js';
 import { GitHubModule } from './github/index.js';
 import { FigmaModule } from './figma/index.js';
+import { ConfluenceModule } from './confluence/index.js';
 
 /**
  * Module registry — explicitly import and export all module implementations.
  * Adding a new module requires creating its directory AND adding its import here.
  */
-export const modules: IntegrationModule<any>[] = [new JiraModule(), new GitHubModule(), new FigmaModule()];
+export const modules: IntegrationModule<any>[] = [
+  new JiraModule(),
+  new GitHubModule(),
+  new FigmaModule(),
+  new ConfluenceModule(),
+];

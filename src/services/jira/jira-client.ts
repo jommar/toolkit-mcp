@@ -274,6 +274,36 @@ export class JiraClient {
       ...(input.comment ? { comment: { body: toAdf(input.comment) } } : {}),
     });
   }
+
+  /**
+   * Download an attachment's content and return it as base64.
+   * Steps: (1) fetch metadata (filename, mimeType), (2) download raw bytes.
+   */
+  async getAttachmentContent(
+    attachmentId: string,
+  ): Promise<{ id: string; filename: string; mimeType: string; size: number; contentBase64: string }> {
+    // First get attachment metadata
+    const { data: meta } = await this.http.get<{
+      id: string;
+      filename: string;
+      mimeType: string;
+      size: number;
+    }>(`/attachment/${encodeURIComponent(attachmentId)}`);
+
+    // Download the raw file bytes (follows redirect to CDN automatically)
+    const response = await this.http.get<ArrayBuffer>(`/attachment/content/${encodeURIComponent(attachmentId)}`, {
+      responseType: 'arraybuffer',
+    });
+
+    const raw = Buffer.from(response.data);
+    return {
+      id: meta.id,
+      filename: meta.filename,
+      mimeType: meta.mimeType,
+      size: meta.size ?? raw.length,
+      contentBase64: raw.toString('base64'),
+    };
+  }
 }
 
 /** Wrap a plain string as a minimal Atlassian Document Format (ADF) doc. */

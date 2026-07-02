@@ -16,6 +16,7 @@ import {
   jiraAssignIssueHandler,
   jiraAddCommentHandler,
   jiraLinkIssuesHandler,
+  jiraGetAttachmentHandler,
 } from './module.js';
 
 function makeMockJira() {
@@ -32,6 +33,7 @@ function makeMockJira() {
     addComment: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     linkIssues: vi.fn(),
+    getAttachmentContent: vi.fn(),
   };
 }
 
@@ -523,5 +525,68 @@ describe('jiraLinkIssuesHandler', () => {
         type: 'InvalidType',
       }),
     ).rejects.toThrow('Link type "InvalidType" not found. Available: Blocks');
+  });
+});
+
+describe('jiraGetAttachmentHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('returns native image content for image mime types', async () => {
+    mockJira.getAttachmentContent.mockResolvedValue({
+      id: '39824',
+      filename: 'screenshot.png',
+      mimeType: 'image/png',
+      size: 107133,
+      contentBase64: 'iVBORw0KGgo=',
+    });
+
+    const handler = jiraGetAttachmentHandler({ jira: mockJira as any });
+    const result = await handler({ attachmentId: '39824', issueKey: 'TRIPS-1260' });
+
+    expect(result.content).toHaveLength(2);
+    expect(result.content[0]).toEqual({
+      type: 'image',
+      data: 'iVBORw0KGgo=',
+      mimeType: 'image/png',
+    });
+    // metadata text follows
+    const meta = JSON.parse((result.content[1] as { type: 'text'; text: string }).text);
+    expect(meta).toMatchObject({
+      id: '39824',
+      filename: 'screenshot.png',
+      mimeType: 'image/png',
+      size: 107133,
+      issueKey: 'TRIPS-1260',
+    });
+  });
+
+  it('returns text content with base64 for non-image mime types', async () => {
+    mockJira.getAttachmentContent.mockResolvedValue({
+      id: '50001',
+      filename: 'spec.pdf',
+      mimeType: 'application/pdf',
+      size: 524288,
+      contentBase64: 'JVBERi0xLjQK',
+    });
+
+    const handler = jiraGetAttachmentHandler({ jira: mockJira as any });
+    const result = await handler({ attachmentId: '50001' });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+    const body = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
+    expect(body).toMatchObject({
+      id: '50001',
+      filename: 'spec.pdf',
+      mimeType: 'application/pdf',
+      size: 524288,
+      issueKey: null,
+      contentBase64: 'JVBERi0xLjQK',
+    });
   });
 });

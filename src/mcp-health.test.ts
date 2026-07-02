@@ -4,8 +4,8 @@ import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createHealthHandler } from "./mcp-health.js";
 
 describe("createHealthHandler", () => {
-  it("returns health with both integrations active", async () => {
-    const handler = createHealthHandler(true, true, true);
+  it("returns health with all integrations active", async () => {
+    const handler = createHealthHandler(true, true, true, true);
     const result = await handler({});
 
     expect(result.content).toHaveLength(1);
@@ -14,16 +14,18 @@ describe("createHealthHandler", () => {
     expect(body.integrations.jira).toBe(true);
     expect(body.integrations.github).toBe(true);
     expect(body.integrations.figma).toBe(true);
+    expect(body.integrations.confluence).toBe(true);
   });
 
   it("returns health with no integrations active", async () => {
-    const handler = createHealthHandler(false, false, false);
+    const handler = createHealthHandler(false, false, false, false);
     const result = await handler({});
 
     const body = JSON.parse(result.content[0].text);
     expect(body.integrations.jira).toBe(false);
     expect(body.integrations.github).toBe(false);
     expect(body.integrations.figma).toBe(false);
+    expect(body.integrations.confluence).toBe(false);
   });
 
   it("returns health with mixed integration states", async () => {

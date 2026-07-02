@@ -95,6 +95,18 @@ export const jiraLinkIssuesSchema = z.object({
   comment: z.string().max(65536).optional().describe('Optional comment for the link.'),
 });
 
+export const jiraGetAttachmentSchema = z.object({
+  attachmentId: z
+    .string()
+    .max(20)
+    .describe('Attachment ID (e.g., "39824") from the attachment list returned in jira_get_issues.'),
+  issueKey: z
+    .string()
+    .max(20)
+    .optional()
+    .describe('Issue key for context (e.g., "TRIPS-1260").'),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred types for prompt schemas
 // ---------------------------------------------------------------------------
@@ -122,7 +134,11 @@ export const jiraTriageIssuePromptSchema = z.object({
 type ToolHandler<T = unknown> = (
   clients: { jira: JiraClient },
 ) => (args: T) => Promise<{
-  content: { type: 'text'; text: string }[];
+  content: (
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: string }
+    | { type: 'audio'; data: string; mimeType: string }
+  )[];
 }>;
 
 export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
@@ -257,6 +273,48 @@ export const jiraAddCommentHandler: ToolHandler<z.infer<typeof jiraAddCommentSch
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 
+export const jiraGetAttachmentHandler: ToolHandler<z.infer<typeof jiraGetAttachmentSchema>> =
+  (_clients) => async (args) => {
+    const result = await _clients.jira.getAttachmentContent(args.attachmentId);
+
+    // For images, return native MCP image content so clients render directly.
+    if (result.mimeType.startsWith('image/')) {
+      return {
+        content: [
+          { type: 'image', data: result.contentBase64, mimeType: result.mimeType },
+          {
+            type: 'text',
+            text: JSON.stringify({
+              id: result.id,
+              filename: result.filename,
+              mimeType: result.mimeType,
+              size: result.size,
+              issueKey: args.issueKey ?? null,
+            }),
+          },
+        ],
+      };
+    }
+
+    // For non-image attachments, return metadata as text. LLM can decide
+    // how to handle the file (text previews, save to disk via shell, etc.).
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            id: result.id,
+            filename: result.filename,
+            mimeType: result.mimeType,
+            size: result.size,
+            issueKey: args.issueKey ?? null,
+            contentBase64: result.contentBase64,
+          }),
+        },
+      ],
+    };
+  };
+
 export const jiraLinkIssuesHandler: ToolHandler<z.infer<typeof jiraLinkIssuesSchema>> =
   (_clients) => async (args) => {
     const { inwardKey, outwardKey, type, comment } = args;
@@ -335,5 +393,10 @@ export const jiraToolDescriptors = [
     name: 'jira_link_issues',
     description: 'Link two Jira issues together.',
     inputSchema: zodToJsonSchema(jiraLinkIssuesSchema),
+  },
+  {
+    name: 'jira_get_attachment',
+    description: 'Download a Jira attachment by ID and return it as base64 + data URI.',
+    inputSchema: zodToJsonSchema(jiraGetAttachmentSchema),
   },
 ];
