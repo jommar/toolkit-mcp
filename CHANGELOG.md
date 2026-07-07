@@ -5,6 +5,18 @@ All notable changes to the toolkit-mcp project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **GitHub: update PR tool** (`github_update_pr`) — Update an existing pull request's title, body, state, base branch, or maintainer settings via `PATCH /repos/{owner}/{repo}/pulls/{number}`. Parameters: `repo`, `prNumber`, `title`, `body`, `state`, `base`, `maintainerCanModify`.
+- **`GitHubClient.updatePullRequest()`** — Calls `PATCH /repos/{owner}/{repo}/pulls/{number}` with a partial update object. Returns `PullRequestDetail`. Validates that at least one update field is provided.
+- **GitHub: inline PR review comments** (`github_create_pr_review_comment`, `github_get_pr_review_comments`, `github_update_pr_review_comment`, `github_delete_pr_review_comment`) — Line-specific diff comments on pull requests, with optional suggested changes via the `suggestedReplacement` parameter (rendered as GitHub suggestion code fences).
+- **GitHub: formal PR review submission** (`github_submit_pr_review`) — Submit a formal PR review with `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` events, optionally including inline comments and a summary body.
+- **New service types:** `PrReviewComment`, `CreateReviewCommentInput`, `PrReviewSubmitted`, `PrReviewEvent`, `SubmitPrReviewInput`.
+- **`GitHubClient` methods:** `createPrReviewComment()`, `getPrReviewComments()`, `updatePrReviewComment()`, `deletePrReviewComment()`, `submitPrReview()`.
+- **Architecture plan:** `docs/plans/04-pr-review-capabilities.md`.
+
 ## [0.2.0] — 2026-06-29
 
 ### Added

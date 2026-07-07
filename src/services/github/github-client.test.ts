@@ -19,6 +19,8 @@ interface MockAxiosInstance {
   get: Mock;
   post: Mock;
   put: Mock;
+  patch: Mock;
+  delete: Mock;
   interceptors: {
     response: {
       use: Mock;
@@ -33,6 +35,8 @@ function mockAxiosInstance(): MockAxiosInstance {
     get: vi.fn(),
     post: vi.fn(),
     put: vi.fn(),
+    patch: vi.fn(),
+    delete: vi.fn(),
     interceptors,
     defaults: { headers: { common: {} } },
   };
@@ -1048,7 +1052,499 @@ describe('GitHubClient', () => {
     });
   });
 
-  describe('getReviewStatus regression', () => {
+  describe('updatePullRequest', () => {
+    const prDetail = {
+      number: 42,
+      title: 'Updated Title',
+      body: 'Updated body',
+      state: 'open',
+      html_url: 'https://github.com/Org/Repo/pull/42',
+      user: { login: 'alice' },
+      created_at: '2025-01-01T00:00:00Z',
+      updated_at: '2025-01-02T00:00:00Z',
+      closed_at: null,
+      merged_at: null,
+      mergeable: true,
+      merged_by: null,
+      base: { ref: 'main' },
+      head: { ref: 'feature-branch', sha: 'abc123def456' },
+      changed_files: 5,
+      additions: 100,
+      deletions: 20,
+    };
+
+    it('calls PATCH /repos/{repo}/pulls/{prNumber} and returns updated PR', async () => {
+      http.patch.mockResolvedValueOnce({ data: prDetail });
+
+      const client = new GitHubClient();
+      const result = await client.updatePullRequest('Org/Repo', 42, { title: 'Updated Title' });
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42', { title: 'Updated Title' });
+      expect(result.number).toBe(42);
+      expect(result.title).toBe('Updated Title');
+      expect(result.body).toBe('Updated body');
+      expect(result.state).toBe('open');
+      expect(result.htmlUrl).toBe('https://github.com/Org/Repo/pull/42');
+      expect(result.repo).toBe('Org/Repo');
+      expect(result.author).toBe('alice');
+      expect(result.createdAt).toBe('2025-01-01T00:00:00Z');
+      expect(result.updatedAt).toBe('2025-01-02T00:00:00Z');
+      expect(result.closedAt).toBeNull();
+      expect(result.mergedAt).toBeNull();
+      expect(result.mergeable).toBe(true);
+      expect(result.mergedBy).toBeNull();
+      expect(result.baseBranch).toBe('main');
+      expect(result.headBranch).toBe('feature-branch');
+      expect(result.headSha).toBe('abc123def456');
+      expect(result.changedFiles).toBe(5);
+      expect(result.additions).toBe(100);
+      expect(result.deletions).toBe(20);
+    });
+
+    it('closes a PR by setting state to "closed"', async () => {
+      const closedPr = {
+        ...prDetail,
+        state: 'closed',
+        title: 'Original Title',
+        body: 'Original body',
+        closed_at: '2025-01-03T00:00:00Z',
+      };
+      http.patch.mockResolvedValueOnce({ data: closedPr });
+
+      const client = new GitHubClient();
+      const result = await client.updatePullRequest('Org/Repo', 42, { state: 'closed' });
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42', { state: 'closed' });
+      expect(result.state).toBe('closed');
+      expect(result.closedAt).toBe('2025-01-03T00:00:00Z');
+    });
+
+    it('maps state to "merged" when closed with merged_at', async () => {
+      const mergedPr = {
+        ...prDetail,
+        state: 'closed',
+        merged_at: '2025-01-03T12:00:00Z',
+        merged_by: { login: 'bob' },
+      };
+      http.patch.mockResolvedValueOnce({ data: mergedPr });
+
+      const client = new GitHubClient();
+      const result = await client.updatePullRequest('Org/Repo', 42, { state: 'closed' });
+
+      expect(result.state).toBe('merged');
+      expect(result.mergedAt).toBe('2025-01-03T12:00:00Z');
+      expect(result.mergedBy).toBe('bob');
+    });
+
+    it('updates base branch', async () => {
+      const baseUpdated = {
+        ...prDetail,
+        base: { ref: 'develop' },
+      };
+      http.patch.mockResolvedValueOnce({ data: baseUpdated });
+
+      const client = new GitHubClient();
+      const result = await client.updatePullRequest('Org/Repo', 42, { base: 'develop' });
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42', { base: 'develop' });
+      expect(result.baseBranch).toBe('develop');
+    });
+
+    it('updates maintainerCanModify false', async () => {
+      http.patch.mockResolvedValueOnce({ data: prDetail });
+
+      const client = new GitHubClient();
+      await client.updatePullRequest('Org/Repo', 42, { maintainerCanModify: false });
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42', { maintainer_can_modify: false });
+    });
+
+    it('sends multiple fields at once', async () => {
+      http.patch.mockResolvedValueOnce({ data: prDetail });
+
+      const client = new GitHubClient();
+      await client.updatePullRequest('Org/Repo', 42, {
+        title: 'New Title',
+        body: 'New Body',
+        base: 'develop',
+      });
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42', {
+        title: 'New Title',
+        body: 'New Body',
+        base: 'develop',
+      });
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.updatePullRequest('invalid', 1, { title: 'x' })).rejects.toThrow(
+        'Invalid repo format',
+      );
+      expect(http.patch).not.toHaveBeenCalled();
+    });
+
+    it('throws when no update fields are provided', async () => {
+      const client = new GitHubClient();
+      await expect(client.updatePullRequest('Org/Repo', 42, {})).rejects.toThrow(
+        'At least one of title, body, state, base, or maintainerCanModify must be provided',
+      );
+      expect(http.patch).not.toHaveBeenCalled();
+    });
+
+    it('handles API error gracefully', async () => {
+      http.patch.mockRejectedValueOnce(new Error('Not Found'));
+
+      const client = new GitHubClient();
+      await expect(client.updatePullRequest('Org/Repo', 999, { title: 'x' })).rejects.toThrow('Not Found');
+    });
+
+    it('maps null user to "unknown" (deleted account)', async () => {
+      const ghostUser = { ...prDetail, user: null };
+      http.patch.mockResolvedValueOnce({ data: ghostUser });
+
+      const client = new GitHubClient();
+      const result = await client.updatePullRequest('Org/Repo', 42, { title: 'x' });
+
+      expect(result.author).toBe('unknown');
+    });
+  });
+
+  describe('createPrReviewComment', () => {
+  it('calls POST /repos/{repo}/pulls/{number}/comments and returns mapped comment', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 1,
+        path: 'src/file.ts',
+        line: 42,
+        body: 'Great comment',
+        commit_id: 'abc123',
+        side: 'RIGHT',
+        start_line: null,
+        start_side: null,
+        user: { login: 'alice' },
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-01T00:01:00Z',
+        html_url: 'https://github.com/Org/Repo/pull/42#discussion_r1',
+        in_reply_to_id: null,
+        original_line: null,
+        original_start_line: null,
+      },
+    });
+
+    const client = new GitHubClient();
+    const result = await client.createPrReviewComment('Org/Repo', 42, {
+      body: 'Great comment',
+      path: 'src/file.ts',
+      commitId: 'abc123',
+      line: 42,
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
+      body: 'Great comment',
+      commit_id: 'abc123',
+      path: 'src/file.ts',
+      line: 42,
+    });
+    expect(result.id).toBe(1);
+    expect(result.path).toBe('src/file.ts');
+    expect(result.line).toBe(42);
+    expect(result.body).toBe('Great comment');
+    expect(result.commitId).toBe('abc123');
+    expect(result.side).toBe('RIGHT');
+    expect(result.author).toBe('alice');
+  });
+
+  it('includes start_line and start_side when provided', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 2, path: 'src/file.ts', line: 50, body: 'Multi-line', commit_id: 'def456',
+        side: 'RIGHT', start_line: 45, start_side: 'RIGHT',
+        user: { login: 'bob' }, created_at: '', updated_at: '',
+        html_url: '', in_reply_to_id: null, original_line: null, original_start_line: null,
+      },
+    });
+
+    const client = new GitHubClient();
+    await client.createPrReviewComment('Org/Repo', 42, {
+      body: 'Multi-line',
+      path: 'src/file.ts',
+      commitId: 'def456',
+      line: 50,
+      startLine: 45,
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
+      body: 'Multi-line',
+      commit_id: 'def456',
+      path: 'src/file.ts',
+      line: 50,
+      start_line: 45,
+    });
+  });
+
+  it('includes side: LEFT when specified', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 3, path: 'src/file.ts', line: 10, body: 'Left side', commit_id: 'abc',
+        side: 'LEFT', start_line: null, start_side: null,
+        user: { login: 'carol' }, created_at: '', updated_at: '',
+        html_url: '', in_reply_to_id: null, original_line: null, original_start_line: null,
+      },
+    });
+
+    const client = new GitHubClient();
+    await client.createPrReviewComment('Org/Repo', 42, {
+      body: 'Left side',
+      path: 'src/file.ts',
+      commitId: 'abc',
+      line: 10,
+      side: 'LEFT',
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
+      body: 'Left side',
+      commit_id: 'abc',
+      path: 'src/file.ts',
+      line: 10,
+      side: 'LEFT',
+    });
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(
+      client.createPrReviewComment('invalid', 1, { body: 'x', path: 'f', commitId: 'a', line: 1 }),
+    ).rejects.toThrow('Invalid repo format');
+    expect(http.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('getPrReviewComments', () => {
+  it('returns mapped review comments from GET /repos/{repo}/pulls/{number}/comments', async () => {
+    http.get.mockResolvedValue({
+      data: [
+        {
+          id: 1, path: 'src/a.ts', line: 10, body: 'Nice', commit_id: 'abc',
+          side: 'RIGHT', start_line: null, start_side: null,
+          user: { login: 'alice' },
+          created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:01:00Z',
+          html_url: 'https://github.com/Org/Repo/pull/42#discussion_r1',
+          in_reply_to_id: null, original_line: null, original_start_line: null,
+        },
+        {
+          id: 2, path: 'src/b.ts', line: 20, body: 'Fix this', commit_id: 'def',
+          side: 'LEFT', start_line: 15, start_side: 'LEFT',
+          user: { login: 'bob' },
+          created_at: '2025-01-02T00:00:00Z', updated_at: '2025-01-02T00:01:00Z',
+          html_url: 'https://github.com/Org/Repo/pull/42#discussion_r2',
+          in_reply_to_id: 1, original_line: 10, original_start_line: null,
+        },
+      ],
+    });
+
+    const client = new GitHubClient();
+    const result = await client.getPrReviewComments('Org/Repo', 42);
+
+    expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
+      params: { per_page: 100, page: 1 },
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0].id).toBe(1);
+    expect(result[0].author).toBe('alice');
+    expect(result[0].side).toBe('RIGHT');
+    expect(result[1].id).toBe(2);
+    expect(result[1].author).toBe('bob');
+    expect(result[1].side).toBe('LEFT');
+    expect(result[1].startLine).toBe(15);
+    expect(result[1].startSide).toBe('LEFT');
+    expect(result[1].inReplyToId).toBe(1);
+    expect(result[1].originalLine).toBe(10);
+  });
+
+  it('passes perPage and page params', async () => {
+    http.get.mockResolvedValue({ data: [] });
+
+    const client = new GitHubClient();
+    await client.getPrReviewComments('Org/Repo', 42, { perPage: 50, page: 2 });
+
+    expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
+      params: { per_page: 50, page: 2 },
+    });
+  });
+
+  it('returns empty array for no comments', async () => {
+    http.get.mockResolvedValue({ data: [] });
+
+    const client = new GitHubClient();
+    const result = await client.getPrReviewComments('Org/Repo', 42);
+    expect(result).toEqual([]);
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(client.getPrReviewComments('invalid', 1)).rejects.toThrow('Invalid repo format');
+  });
+
+  it('maps null user to "unknown"', async () => {
+    http.get.mockResolvedValue({
+      data: [
+        {
+          id: 1, path: 'f.ts', line: 1, body: '', commit_id: 'a',
+          side: 'RIGHT', start_line: null, start_side: null,
+          user: null,
+          created_at: '', updated_at: '',
+          html_url: '', in_reply_to_id: null, original_line: null, original_start_line: null,
+        },
+      ],
+    });
+
+    const client = new GitHubClient();
+    const result = await client.getPrReviewComments('Org/Repo', 42);
+    expect(result[0].author).toBe('unknown');
+  });
+});
+
+describe('updatePrReviewComment', () => {
+  it('calls PATCH /repos/{repo}/pulls/comments/{id} and returns mapped comment', async () => {
+    http.patch.mockResolvedValue({
+      data: {
+        id: 1, path: 'src/file.ts', line: 42, body: 'Updated comment', commit_id: 'abc',
+        side: 'RIGHT', start_line: null, start_side: null,
+        user: { login: 'alice' },
+        created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-02T00:00:00Z',
+        html_url: 'https://github.com/Org/Repo/pull/42#discussion_r1',
+        in_reply_to_id: null, original_line: null, original_start_line: null,
+      },
+    });
+
+    const client = new GitHubClient();
+    const result = await client.updatePrReviewComment('Org/Repo', 1, 'Updated comment');
+
+    expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/pulls/comments/1', { body: 'Updated comment' });
+    expect(result.body).toBe('Updated comment');
+    expect(result.id).toBe(1);
+    expect(result.updatedAt).toBe('2025-01-02T00:00:00Z');
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(client.updatePrReviewComment('invalid', 1, 'x')).rejects.toThrow('Invalid repo format');
+    expect(http.patch).not.toHaveBeenCalled();
+  });
+});
+
+describe('deletePrReviewComment', () => {
+  it('calls DELETE /repos/{repo}/pulls/comments/{id} and returns void', async () => {
+    http.delete.mockResolvedValue({ status: 204 });
+
+    const client = new GitHubClient();
+    await client.deletePrReviewComment('Org/Repo', 1);
+
+    expect(http.delete).toHaveBeenCalledWith('/repos/Org/Repo/pulls/comments/1');
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(client.deletePrReviewComment('invalid', 1)).rejects.toThrow('Invalid repo format');
+    expect(http.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('submitPrReview', () => {
+  it('posts to /repos/{repo}/pulls/{number}/reviews and returns submitted review', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 100,
+        state: 'APPROVED',
+        body: 'Looks good!',
+        commit_id: 'abc123',
+        html_url: 'https://github.com/Org/Repo/pull/42#pullrequestreview-100',
+      },
+    });
+
+    const client = new GitHubClient();
+    const result = await client.submitPrReview('Org/Repo', 42, {
+      event: 'APPROVE',
+      body: 'Looks good!',
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+      event: 'APPROVE',
+      body: 'Looks good!',
+    });
+    expect(result.id).toBe(100);
+    expect(result.state).toBe('APPROVED');
+    expect(result.body).toBe('Looks good!');
+    expect(result.commitId).toBe('abc123');
+  });
+
+  it('includes comments array when provided', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 101, state: 'COMMENT', body: 'Review with comments', commit_id: 'def456',
+        html_url: '',
+      },
+    });
+
+    const client = new GitHubClient();
+    await client.submitPrReview('Org/Repo', 42, {
+      event: 'COMMENT',
+      body: 'Review with comments',
+      comments: [
+        { path: 'src/a.ts', body: 'Fix this', line: 10, commitId: 'def456' },
+        { path: 'src/b.ts', body: 'And this', line: 20, commitId: 'def456', startLine: 18, side: 'LEFT' },
+      ],
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+      event: 'COMMENT',
+      body: 'Review with comments',
+      comments: [
+        { path: 'src/a.ts', body: 'Fix this', line: 10, commit_id: 'def456' },
+        { path: 'src/b.ts', body: 'And this', line: 20, commit_id: 'def456', start_line: 18, side: 'LEFT' },
+      ],
+    });
+  });
+
+  it('includes commitId when provided', async () => {
+    http.post.mockResolvedValue({
+      data: { id: 102, state: 'APPROVED', body: null, commit_id: 'fixed123', html_url: '' },
+    });
+
+    const client = new GitHubClient();
+    await client.submitPrReview('Org/Repo', 42, {
+      event: 'APPROVE',
+      commitId: 'fixed123',
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+      event: 'APPROVE',
+      commit_id: 'fixed123',
+    });
+  });
+
+  it('sends minimal valid body (event only)', async () => {
+    http.post.mockResolvedValue({
+      data: { id: 103, state: 'COMMENT', body: null, commit_id: '', html_url: '' },
+    });
+
+    const client = new GitHubClient();
+    await client.submitPrReview('Org/Repo', 42, { event: 'COMMENT' });
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+      event: 'COMMENT',
+    });
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(client.submitPrReview('invalid', 1, { event: 'COMMENT' })).rejects.toThrow('Invalid repo format');
+    expect(http.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('getReviewStatus regression', () => {
     it('returns APPROVED when a review is approved', async () => {
       http.get.mockResolvedValueOnce({ data: [{ state: 'APPROVED' }] });
 

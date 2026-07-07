@@ -12,7 +12,7 @@ export type {
   JiraComment,
   IssueLinkType,
 } from './jira/jira-client.js';
-export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions } from './github/github-client.js';
+export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions, PrReviewComment, CreateReviewCommentInput, PrReviewSubmitted, PrReviewEvent, SubmitPrReviewInput } from './github/github-client.js';
 export type {
   FigmaUser,
   FigmaFileResponse,

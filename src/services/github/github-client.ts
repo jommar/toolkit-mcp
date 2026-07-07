@@ -73,6 +73,52 @@ export interface PullRequestReview {
   commitId: string;
 }
 
+export interface PrReviewComment {
+  id: number;
+  path: string;
+  line: number;
+  startLine: number | null;
+  body: string;
+  commitId: string;
+  side: 'LEFT' | 'RIGHT';
+  startSide: 'LEFT' | 'RIGHT' | null;
+  author: string;
+  createdAt: string;
+  updatedAt: string;
+  htmlUrl: string;
+  inReplyToId: number | null;
+  originalLine: number | null;
+  originalStartLine: number | null;
+}
+
+export interface CreateReviewCommentInput {
+  path: string;
+  body: string;
+  commitId?: string;
+  line: number;
+  startLine?: number;
+  side?: 'LEFT' | 'RIGHT';
+  startSide?: 'LEFT' | 'RIGHT';
+  inReplyTo?: number;
+}
+
+export interface PrReviewSubmitted {
+  id: number;
+  state: string;
+  body: string | null;
+  commitId: string;
+  htmlUrl: string;
+}
+
+export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+
+export interface SubmitPrReviewInput {
+  body?: string;
+  event: PrReviewEvent;
+  comments?: CreateReviewCommentInput[];
+  commitId?: string;
+}
+
 export interface CheckRun {
   name: string;
   status: 'queued' | 'in_progress' | 'completed';
@@ -710,6 +756,62 @@ export class GitHubClient {
     };
   }
 
+  async updatePullRequest(
+    repo: string,
+    prNumber: number,
+    updates: {
+      title?: string;
+      body?: string;
+      state?: 'open' | 'closed';
+      base?: string;
+      maintainerCanModify?: boolean;
+    },
+  ): Promise<PullRequestDetail> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const hasUpdate =
+      updates.title !== undefined ||
+      updates.body !== undefined ||
+      updates.state !== undefined ||
+      updates.base !== undefined ||
+      updates.maintainerCanModify !== undefined;
+    if (!hasUpdate) {
+      throw new Error('At least one of title, body, state, base, or maintainerCanModify must be provided');
+    }
+    const body: Record<string, unknown> = {};
+    if (updates.title !== undefined) body.title = updates.title;
+    if (updates.body !== undefined) body.body = updates.body;
+    if (updates.state !== undefined) body.state = updates.state;
+    if (updates.base !== undefined) body.base = updates.base;
+    if (updates.maintainerCanModify !== undefined) body.maintainer_can_modify = updates.maintainerCanModify;
+
+    const { data } = await this.http.patch<any>(`/repos/${repo}/pulls/${prNumber}`, body);
+    const state: PullRequestDetail['state'] =
+      data.state === 'closed' && data.merged_at ? 'merged' : data.state;
+    return {
+      number: data.number,
+      title: data.title,
+      body: data.body ?? null,
+      state,
+      htmlUrl: data.html_url,
+      repo,
+      author: data.user?.login ?? 'unknown',
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+      closedAt: data.closed_at ?? null,
+      mergedAt: data.merged_at ?? null,
+      mergeable: data.mergeable ?? null,
+      mergedBy: data.merged_by?.login ?? null,
+      baseBranch: data.base?.ref ?? '',
+      headBranch: data.head?.ref ?? '',
+      headSha: data.head?.sha ?? '',
+      changedFiles: data.changed_files ?? 0,
+      additions: data.additions ?? 0,
+      deletions: data.deletions ?? 0,
+    };
+  }
+
   async searchPullRequestsByQuery(opts: PrSearchOptions): Promise<PrSearchResult[]> {
     if (!opts.query && !opts.author && !opts.repo) {
       throw new Error('At least one of query, author, or repo must be provided');
@@ -737,6 +839,107 @@ export class GitHubClient {
     return this.parseItems(data.items ?? []);
   }
 
+  async createPrReviewComment(
+    repo: string,
+    prNumber: number,
+    input: CreateReviewCommentInput,
+  ): Promise<PrReviewComment> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const body: Record<string, unknown> = {
+      body: input.body,
+      commit_id: input.commitId,
+      path: input.path,
+      line: input.line,
+    };
+    if (input.startLine !== undefined) {
+      body.start_line = input.startLine;
+    }
+    if (input.side !== undefined) {
+      body.side = input.side;
+    }
+    if (input.startSide !== undefined) {
+      body.start_side = input.startSide;
+    }
+    if (input.inReplyTo !== undefined) {
+      body.in_reply_to = input.inReplyTo;
+    }
+    const { data } = await this.http.post<any>(`/repos/${repo}/pulls/${prNumber}/comments`, body);
+    return mapToPrReviewComment(data);
+  }
+
+  async getPrReviewComments(
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; page?: number },
+  ): Promise<PrReviewComment[]> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/comments`, {
+      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
+    });
+    return data.map(mapToPrReviewComment);
+  }
+
+  async updatePrReviewComment(
+    repo: string,
+    commentId: number,
+    body: string,
+  ): Promise<PrReviewComment> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const { data } = await this.http.patch<any>(`/repos/${repo}/pulls/comments/${commentId}`, { body });
+    return mapToPrReviewComment(data);
+  }
+
+  async deletePrReviewComment(repo: string, commentId: number): Promise<void> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    await this.http.delete(`/repos/${repo}/pulls/comments/${commentId}`);
+  }
+
+  async submitPrReview(
+    repo: string,
+    prNumber: number,
+    input: SubmitPrReviewInput,
+  ): Promise<PrReviewSubmitted> {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const body: Record<string, unknown> = {
+      event: input.event,
+    };
+    if (input.body !== undefined) {
+      body.body = input.body;
+    }
+    if (input.commitId !== undefined) {
+      body.commit_id = input.commitId;
+    }
+    if (input.comments !== undefined && input.comments.length > 0) {
+      body.comments = input.comments.map((c) => ({
+        path: c.path,
+        body: c.body,
+        line: c.line,
+        ...(c.commitId !== undefined ? { commit_id: c.commitId } : {}),
+        ...(c.startLine !== undefined ? { start_line: c.startLine } : {}),
+        ...(c.side !== undefined ? { side: c.side } : {}),
+        ...(c.startSide !== undefined ? { start_side: c.startSide } : {}),
+      }));
+    }
+    const { data } = await this.http.post<any>(`/repos/${repo}/pulls/${prNumber}/reviews`, body);
+    return {
+      id: data.id,
+      state: data.state,
+      body: data.body ?? null,
+      commitId: data.commit_id,
+      htmlUrl: data.html_url,
+    };
+  }
+
   private async getReviewStatus(repo: string, prNumber: number): Promise<PrInfo['reviewStatus']> {
     const reviews = await this.getPullRequestReviews(repo, prNumber);
     // Determine status: APPROVED beats everything, CHANGES_REQUESTED beats COMMENTED
@@ -761,6 +964,26 @@ export class GitHubClient {
       return true;
     });
   }
+}
+
+function mapToPrReviewComment(data: any): PrReviewComment {
+  return {
+    id: data.id,
+    path: data.path,
+    line: data.line,
+    startLine: data.start_line ?? null,
+    body: data.body,
+    commitId: data.commit_id,
+    side: data.side ?? 'RIGHT',
+    startSide: data.start_side ?? null,
+    author: data.user?.login ?? 'unknown',
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+    htmlUrl: data.html_url,
+    inReplyToId: data.in_reply_to_id ?? null,
+    originalLine: data.original_line ?? null,
+    originalStartLine: data.original_start_line ?? null,
+  };
 }
 
 /** Turn a GitHub axios error into a concise readable message. */

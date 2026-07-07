@@ -21,6 +21,18 @@ import {
   githubGetPrChecksSchema,
   githubSearchPrsHandler,
   githubSearchPrsSchema,
+  githubUpdatePrHandler,
+  githubUpdatePrSchema,
+  githubCreatePrReviewCommentHandler,
+  githubCreatePrReviewCommentSchema,
+  githubGetPrReviewCommentsHandler,
+  githubGetPrReviewCommentsSchema,
+  githubUpdatePrReviewCommentHandler,
+  githubUpdatePrReviewCommentSchema,
+  githubDeletePrReviewCommentHandler,
+  githubDeletePrReviewCommentSchema,
+  githubSubmitPrReviewHandler,
+  githubSubmitPrReviewSchema,
   githubToolDescriptors,
 } from './module.js';
 
@@ -74,6 +86,30 @@ export class GitHubModule implements IntegrationModule<{ github: GitHubClient }>
       github_search_prs: async (args) => {
         const parsed = githubSearchPrsSchema.parse(args);
         return await githubSearchPrsHandler(clients)(parsed);
+      },
+      github_update_pr: async (args) => {
+        const parsed = githubUpdatePrSchema.parse(args);
+        return await githubUpdatePrHandler(clients)(parsed);
+      },
+      github_create_pr_review_comment: async (args) => {
+        const parsed = githubCreatePrReviewCommentSchema.parse(args);
+        return await githubCreatePrReviewCommentHandler(clients)(parsed);
+      },
+      github_get_pr_review_comments: async (args) => {
+        const parsed = githubGetPrReviewCommentsSchema.parse(args);
+        return await githubGetPrReviewCommentsHandler(clients)(parsed);
+      },
+      github_update_pr_review_comment: async (args) => {
+        const parsed = githubUpdatePrReviewCommentSchema.parse(args);
+        return await githubUpdatePrReviewCommentHandler(clients)(parsed);
+      },
+      github_delete_pr_review_comment: async (args) => {
+        const parsed = githubDeletePrReviewCommentSchema.parse(args);
+        return await githubDeletePrReviewCommentHandler(clients)(parsed);
+      },
+      github_submit_pr_review: async (args) => {
+        const parsed = githubSubmitPrReviewSchema.parse(args);
+        return await githubSubmitPrReviewHandler(clients)(parsed);
       },
     };
   }

@@ -18,7 +18,7 @@ An MCP server that exposes developer toolchain operations (Jira issue management
 │         │                             │               │
 │  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
 │  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │
-│  │  8 tools     │    │  8 tools           │   │  8 tools           │   │
+│  │  8 tools     │    │  11 tools          │   │  8 tools           │   │
 │  │  3 resources │    │  1 resource        │   │                    │   │
 │  │  2 prompts   │    │                    │   │                    │   │
 │  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   │
@@ -56,7 +56,7 @@ All variables are optional — tools only register if their required env vars ar
 | Variable | Integration | Required for |
 |---|---|---|
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools, resources, and prompts |
-| `GH_TOKEN` | GitHub | All 7 GitHub tools and `github://prs/{issueKey}` resource |
+| `GH_TOKEN` | GitHub | All 11 GitHub tools and `github://prs/{issueKey}` resource |
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
@@ -69,7 +69,7 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 
 ## Tools
 
-24 tools total (23 conditional + 1 built-in always registered).
+28 tools total (27 conditional + 1 built-in always registered).
 
 ### Jira Tools (registered when `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` are set)
 
@@ -90,10 +90,14 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 |---|---|---|
 | `github_get_prs` | Find pull requests for one or more issue keys. Supports title/body search and optional branch-name matching. | `issueKey`, `keys`, `state`, `limit`, `cursor`, `searchBranches` |
 | `github_create_pr` | Create a pull request on GitHub. | `repo`, `title`, `head`, `base`, `body`, `draft` |
+| `github_add_pr_comment` | Add an issue-level comment to a pull request. | `repo`, `prNumber`, `body` |
+| `github_get_pr_comments` | List issue-level (conversation) comments on a pull request. | `repo`, `prNumber`, `limit`, `cursor` |
+| `github_update_pr_comment` | Update an existing issue-level comment on a pull request by comment ID. | `repo`, `commentId`, `body` |
 | `github_list_branches` | List branches for a repository. | `repo`, `limit`, `cursor` |
 | `github_get_pr_details` | Get full PR details (body, files changed, additions/deletions, mergeable state, base/head branches) by repo + PR number. | `repo`, `prNumber` |
 | `github_get_pr_reviews` | Get PR review comments and review thread summaries. | `repo`, `prNumber` |
 | `github_get_pr_checks` | Get PR status check / CI results (check-runs for the latest commit on the PR). | `repo`, `prNumber` |
+| `github_update_pr` | Update an existing pull request (title, body, state, base branch, or maintainer settings). | `repo`, `prNumber`, `title`, `body`, `state`, `base`, `maintainerCanModify` |
 | `github_search_prs` | Flexible PR search by author, repo, state, or free-text query. Provide at least one of `query`, `author`, or `repo`. | `query`, `author`, `repo`, `state`, `limit`, `cursor` |
 
 ### Figma Tools (registered when `FIGMA_TOKEN` is set)

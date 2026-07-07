@@ -10,6 +10,7 @@ function makeMockGitHub() {
   return {
     searchPrs: vi.fn(),
     findPrsForIssueKeys: vi.fn(),
+    updatePullRequest: vi.fn(),
   };
 }
 
@@ -58,9 +59,9 @@ describe('GitHubModule', () => {
       mockGitHub = makeMockGitHub();
     });
 
-    it('returns 10 handlers', () => {
+    it('returns 16 handlers', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
-      expect(Object.keys(handlers)).toHaveLength(10);
+      expect(Object.keys(handlers)).toHaveLength(16);
       expect(handlers).toHaveProperty('github_get_prs');
       expect(handlers).toHaveProperty('github_create_pr');
       expect(handlers).toHaveProperty('github_add_pr_comment');
@@ -71,6 +72,12 @@ describe('GitHubModule', () => {
       expect(handlers).toHaveProperty('github_get_pr_reviews');
       expect(handlers).toHaveProperty('github_get_pr_checks');
       expect(handlers).toHaveProperty('github_search_prs');
+      expect(handlers).toHaveProperty('github_update_pr');
+      expect(handlers).toHaveProperty('github_create_pr_review_comment');
+      expect(handlers).toHaveProperty('github_get_pr_review_comments');
+      expect(handlers).toHaveProperty('github_update_pr_review_comment');
+      expect(handlers).toHaveProperty('github_delete_pr_review_comment');
+      expect(handlers).toHaveProperty('github_submit_pr_review');
     });
 
     it('github_get_prs delegates to handler with parsed args', async () => {
@@ -94,9 +101,9 @@ describe('GitHubModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 10 tool descriptors', () => {
+    it('returns 16 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(10);
+      expect(descriptors).toHaveLength(16);
     });
 
     it('descriptors have name, description, and inputSchema', () => {
@@ -105,6 +112,7 @@ describe('GitHubModule', () => {
       expect(names).toContain('github_get_prs');
       expect(names).toContain('github_create_pr');
       expect(names).toContain('github_list_branches');
+      expect(names).toContain('github_update_pr');
       for (const d of descriptors) {
         expect(d.description).toBeTruthy();
         expect(d.inputSchema).toBeDefined();

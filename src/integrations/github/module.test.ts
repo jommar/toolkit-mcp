@@ -16,10 +16,19 @@ import {
   githubGetPrReviewsHandler,
   githubGetPrChecksHandler,
   githubSearchPrsHandler,
+  githubUpdatePrHandler,
   githubGetPrDetailsSchema,
   githubGetPrReviewsSchema,
   githubGetPrChecksSchema,
   githubSearchPrsSchema,
+  githubUpdatePrSchema,
+  githubCreatePrReviewCommentHandler,
+  githubGetPrReviewCommentsHandler,
+  githubUpdatePrReviewCommentHandler,
+  githubDeletePrReviewCommentHandler,
+  githubSubmitPrReviewHandler,
+  githubCreatePrReviewCommentSchema,
+  githubSubmitPrReviewSchema,
 } from './module.js';
 
 function makeMockGitHub() {
@@ -36,6 +45,12 @@ function makeMockGitHub() {
     getPullRequestReviews: vi.fn(),
     getPullRequestChecks: vi.fn(),
     searchPullRequestsByQuery: vi.fn(),
+    updatePullRequest: vi.fn(),
+    createPrReviewComment: vi.fn(),
+    getPrReviewComments: vi.fn(),
+    updatePrReviewComment: vi.fn(),
+    deletePrReviewComment: vi.fn(),
+    submitPrReview: vi.fn(),
   };
 }
 
@@ -603,5 +618,426 @@ describe('githubSearchPrsHandler', () => {
       perPage: 10,
       page: 2,
     });
+  });
+});
+
+describe('githubUpdatePrHandler', () => {
+  let mockGitHub: ReturnType<typeof makeMockGitHub>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls updatePullRequest with title update and returns result', async () => {
+    const detail: Record<string, unknown> = {
+      number: 42,
+      title: 'Updated Title',
+      body: 'Description',
+      state: 'open',
+      htmlUrl: 'https://github.com/Org/Repo/pull/42',
+      repo: 'Org/Repo',
+      author: 'alice',
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-02T00:00:00Z',
+      closedAt: null,
+      mergedAt: null,
+      mergeable: true,
+      mergedBy: null,
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: 'abc123',
+      changedFiles: 3,
+      additions: 10,
+      deletions: 2,
+    };
+    mockGitHub.updatePullRequest.mockResolvedValue(detail);
+
+    const handler = githubUpdatePrHandler({ github: mockGitHub as any });
+    const result = await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      title: 'Updated Title',
+    });
+
+    expect(mockGitHub.updatePullRequest).toHaveBeenCalledWith('Org/Repo', 42, {
+      title: 'Updated Title',
+      body: undefined,
+      state: undefined,
+      base: undefined,
+      maintainerCanModify: undefined,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(detail);
+    expect(parsed.title).toBe('Updated Title');
+  });
+
+  it('calls updatePullRequest with state "closed"', async () => {
+    const detail: Record<string, unknown> = {
+      number: 42,
+      title: 'Title',
+      body: null,
+      state: 'closed',
+      htmlUrl: 'https://github.com/Org/Repo/pull/42',
+      repo: 'Org/Repo',
+      author: 'bob',
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-02T00:00:00Z',
+      closedAt: '2025-01-03T00:00:00Z',
+      mergedAt: null,
+      mergeable: null,
+      mergedBy: null,
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: 'abc123',
+      changedFiles: 3,
+      additions: 10,
+      deletions: 2,
+    };
+    mockGitHub.updatePullRequest.mockResolvedValue(detail);
+
+    const handler = githubUpdatePrHandler({ github: mockGitHub as any });
+    const result = await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      state: 'closed',
+    });
+
+    expect(mockGitHub.updatePullRequest).toHaveBeenCalledWith('Org/Repo', 42, {
+      title: undefined,
+      body: undefined,
+      state: 'closed',
+      base: undefined,
+      maintainerCanModify: undefined,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.state).toBe('closed');
+  });
+
+  it('calls updatePullRequest with maintainerCanModify and body', async () => {
+    const detail: Record<string, unknown> = {
+      number: 42,
+      title: 'Title',
+      body: 'Updated body',
+      state: 'open',
+      htmlUrl: 'https://github.com/Org/Repo/pull/42',
+      repo: 'Org/Repo',
+      author: 'alice',
+      createdAt: '2025-01-01T00:00:00Z',
+      updatedAt: '2025-01-02T00:00:00Z',
+      closedAt: null,
+      mergedAt: null,
+      mergeable: true,
+      mergedBy: null,
+      baseBranch: 'main',
+      headBranch: 'feature',
+      headSha: 'abc123',
+      changedFiles: 3,
+      additions: 10,
+      deletions: 2,
+    };
+    mockGitHub.updatePullRequest.mockResolvedValue(detail);
+
+    const handler = githubUpdatePrHandler({ github: mockGitHub as any });
+    const result = await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      maintainerCanModify: true,
+      body: 'Updated body',
+    });
+
+    expect(mockGitHub.updatePullRequest).toHaveBeenCalledWith('Org/Repo', 42, {
+      title: undefined,
+      body: 'Updated body',
+      state: undefined,
+      base: undefined,
+      maintainerCanModify: true,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.body).toBe('Updated body');
+  });
+
+  it('rejects when no update fields are provided (schema validation)', () => {
+    expect(() =>
+      githubUpdatePrSchema.parse({ repo: 'Org/Repo', prNumber: 42 }),
+    ).toThrow('At least one of title, body, state, base, or maintainerCanModify');
+  });
+
+  it('rejects invalid repo format (schema validation)', () => {
+    expect(() =>
+      githubUpdatePrSchema.parse({ repo: 'invalid', prNumber: 42, title: 'New Title' }),
+    ).toThrow();
+  });
+});
+
+describe('githubCreatePrReviewCommentHandler', () => {
+  let mockGitHub: MockGitHub;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls createPrReviewComment with correct args and returns comment', async () => {
+    const comment = { id: 1, path: 'src/file.ts', line: 42, body: 'Nice', commitId: 'abc', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: '', inReplyToId: null, originalLine: null, originalStartLine: null };
+    mockGitHub.createPrReviewComment.mockResolvedValue(comment);
+
+    const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
+    const result = await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      path: 'src/file.ts',
+      body: 'Nice',
+      commitId: 'abc',
+      line: 42,
+      side: 'RIGHT',
+    });
+
+    expect(mockGitHub.createPrReviewComment).toHaveBeenCalledWith('Org/Repo', 42, {
+      body: 'Nice',
+      path: 'src/file.ts',
+      commitId: 'abc',
+      line: 42,
+      side: 'RIGHT',
+      startSide: undefined,
+      startLine: undefined,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(comment);
+  });
+
+  it('wraps body with suggestion block when suggestedReplacement is provided', async () => {
+    mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
+
+    const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
+    await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      path: 'src/file.ts',
+      body: 'Use let instead of const',
+      commitId: 'abc',
+      line: 10,
+      suggestedReplacement: 'let count = 0;',
+    });
+
+    const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
+    expect(calledArg.body).toContain('```suggestion');
+    expect(calledArg.body).toContain('let count = 0;');
+    expect(calledArg.body).toContain('Use let instead of const');
+  });
+
+  it('uses only suggestion block when body is empty and suggestedReplacement is provided', async () => {
+    mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
+
+    const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
+    await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      path: 'src/file.ts',
+      body: '',
+      commitId: 'abc',
+      line: 10,
+      suggestedReplacement: 'let count = 0;',
+    });
+
+    const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
+    expect(calledArg.body).toBe('```suggestion\nlet count = 0;\n```');
+  });
+
+  it('passes startLine to the client', async () => {
+    mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
+
+    const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
+    await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      path: 'src/file.ts',
+      body: 'Multi-line comment',
+      commitId: 'abc',
+      line: 50,
+      startLine: 45,
+    });
+
+    const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
+    expect(calledArg.startLine).toBe(45);
+  });
+
+  it('rejects when startLine >= line (Zod validation)', () => {
+    expect(() =>
+      githubCreatePrReviewCommentSchema.parse({
+        repo: 'Org/Repo',
+        prNumber: 42,
+        path: 'src/file.ts',
+        body: 'Bad range',
+        commitId: 'abc',
+        line: 10,
+        startLine: 20,
+      }),
+    ).toThrow('startLine must be less than line');
+  });
+
+  it('rejects when startSide is provided without startLine', () => {
+    expect(() =>
+      githubCreatePrReviewCommentSchema.parse({
+        repo: 'Org/Repo',
+        prNumber: 42,
+        path: 'src/file.ts',
+        body: 'No startLine',
+        commitId: 'abc',
+        line: 10,
+        startSide: 'LEFT',
+      }),
+    ).toThrow('startSide requires startLine');
+  });
+});
+
+describe('githubGetPrReviewCommentsHandler', () => {
+  let mockGitHub: MockGitHub;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('returns paginated PrReviewComment list', async () => {
+    const comments = [
+      { id: 1, path: 'a.ts', line: 10, body: 'Nice', commitId: 'a', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: '', inReplyToId: null, originalLine: null, originalStartLine: null },
+    ];
+    mockGitHub.getPrReviewComments.mockResolvedValue(comments);
+
+    const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+
+    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toEqual(comments);
+    expect(parsed.hasMore).toBe(false);
+  });
+
+  it('uses cursor as page number', async () => {
+    mockGitHub.getPrReviewComments.mockResolvedValue([]);
+
+    const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
+    await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '3' });
+
+    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 3 });
+  });
+
+  it('sets hasMore when result count equals limit', async () => {
+    const comments = Array.from({ length: 20 }, (_, i) => ({
+      id: i, path: 'f.ts', line: i, body: 'c', commitId: 'a', side: 'RIGHT' as const,
+      startLine: null, startSide: null, author: 'u', createdAt: '', updatedAt: '', htmlUrl: '',
+      inReplyToId: null, originalLine: null, originalStartLine: null,
+    }));
+    mockGitHub.getPrReviewComments.mockResolvedValue(comments);
+
+    const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.hasMore).toBe(true);
+    expect(parsed.nextPageToken).toBe('2');
+  });
+});
+
+describe('githubUpdatePrReviewCommentHandler', () => {
+  let mockGitHub: MockGitHub;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls updatePrReviewComment and returns updated comment', async () => {
+    const updated = { id: 1, path: 'f.ts', line: 10, body: 'Updated', commitId: 'a', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: '', inReplyToId: null, originalLine: null, originalStartLine: null };
+    mockGitHub.updatePrReviewComment.mockResolvedValue(updated);
+
+    const handler = githubUpdatePrReviewCommentHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', commentId: 1, body: 'Updated' });
+
+    expect(mockGitHub.updatePrReviewComment).toHaveBeenCalledWith('Org/Repo', 1, 'Updated');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(updated);
+  });
+});
+
+describe('githubDeletePrReviewCommentHandler', () => {
+  let mockGitHub: MockGitHub;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls deletePrReviewComment and returns success message', async () => {
+    mockGitHub.deletePrReviewComment.mockResolvedValue(undefined);
+
+    const handler = githubDeletePrReviewCommentHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', commentId: 1 });
+
+    expect(mockGitHub.deletePrReviewComment).toHaveBeenCalledWith('Org/Repo', 1);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.success).toBe(true);
+    expect(parsed.message).toBe('Review comment deleted');
+  });
+});
+
+describe('githubSubmitPrReviewHandler', () => {
+  let mockGitHub: MockGitHub;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+  });
+
+  it('calls submitPrReview with APPROVE and returns result', async () => {
+    const submitted = { id: 100, state: 'APPROVED', body: 'LGTM', commitId: 'abc', htmlUrl: '' };
+    mockGitHub.submitPrReview.mockResolvedValue(submitted);
+
+    const handler = githubSubmitPrReviewHandler({ github: mockGitHub as any });
+    const result = await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      event: 'APPROVE',
+      body: 'LGTM',
+    });
+
+    expect(mockGitHub.submitPrReview).toHaveBeenCalledWith('Org/Repo', 42, {
+      body: 'LGTM',
+      event: 'APPROVE',
+      comments: undefined,
+      commitId: undefined,
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(submitted);
+  });
+
+  it('passes comments array through', async () => {
+    mockGitHub.submitPrReview.mockResolvedValue({} as any);
+
+    const handler = githubSubmitPrReviewHandler({ github: mockGitHub as any });
+    await handler({
+      repo: 'Org/Repo',
+      prNumber: 42,
+      event: 'COMMENT',
+      comments: [{ path: 'src/a.ts', body: 'Fix this', line: 10 }],
+    });
+
+    expect(mockGitHub.submitPrReview).toHaveBeenCalledWith('Org/Repo', 42, {
+      body: undefined,
+      event: 'COMMENT',
+      comments: [{ path: 'src/a.ts', body: 'Fix this', line: 10 }],
+      commitId: undefined,
+    });
+  });
+
+  it('rejects invalid event enum', () => {
+    expect(() =>
+      githubSubmitPrReviewSchema.parse({
+        repo: 'Org/Repo',
+        prNumber: 42,
+        event: 'INVALID',
+      }),
+    ).toThrow();
   });
 });
