@@ -82,6 +82,7 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 | `jira_transition_issue` | Transition a Jira issue to a new status. | `key`, `transitionId` or `transitionName`, `comment` |
 | `jira_assign_issue` | Assign a Jira issue to a user or unassign it. | `key`, `assignee` (accountId, "me", or "none") |
 | `jira_add_comment` | Add a comment to a Jira issue. | `key`, `body` |
+| `jira_update_comment` | Update an existing comment on a Jira issue. | `key`, `commentId`, `body` |
 | `jira_link_issues` | Link two Jira issues together. | `inwardKey`, `outwardKey`, `type`, `comment` |
 
 ### GitHub Tools (registered when `GH_TOKEN` is set)

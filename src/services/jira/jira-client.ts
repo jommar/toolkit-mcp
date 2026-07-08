@@ -215,6 +215,15 @@ export class JiraClient {
     return data;
   }
 
+  /** Replace an existing comment's body (plain text, wrapped in Atlassian Document Format). */
+  async updateComment(key: string, commentId: string, body: string): Promise<{ id: string }> {
+    const { data } = await this.http.put<{ id: string }>(
+      `/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`,
+      { body: toAdf(body) },
+    );
+    return data;
+  }
+
   /** List the transitions available from the issue's current status. */
   async listTransitions(key: string): Promise<JiraTransition[]> {
     const { data } = await this.http.get<{ transitions: JiraTransition[] }>(

@@ -15,6 +15,7 @@ import {
   jiraTransitionIssueHandler,
   jiraAssignIssueHandler,
   jiraAddCommentHandler,
+  jiraUpdateCommentHandler,
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
 } from './module.js';
@@ -31,6 +32,7 @@ function makeMockJira() {
     assignIssue: vi.fn(),
     assignToMe: vi.fn(),
     addComment: vi.fn(),
+    updateComment: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     linkIssues: vi.fn(),
     getAttachmentContent: vi.fn(),
@@ -425,6 +427,26 @@ describe('jiraAddCommentHandler', () => {
     const result = await handler({ key: 'TRIPS-1', body: 'Thanks!' });
 
     expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'Thanks!');
+    expect(JSON.parse(result.content[0].text)).toEqual(comment);
+  });
+});
+
+describe('jiraUpdateCommentHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('updates a comment and returns it', async () => {
+    const comment = { id: '38560', body: 'Revised.' };
+    mockJira.updateComment.mockResolvedValue(comment);
+
+    const handler = jiraUpdateCommentHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-799', commentId: '38560', body: 'Revised.' });
+
+    expect(mockJira.updateComment).toHaveBeenCalledWith('TRIPS-799', '38560', 'Revised.');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 });

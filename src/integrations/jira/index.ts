@@ -8,6 +8,7 @@ import {
   jiraTransitionIssueHandler,
   jiraAssignIssueHandler,
   jiraAddCommentHandler,
+  jiraUpdateCommentHandler,
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
   jiraWhoamiSchema,
@@ -17,6 +18,7 @@ import {
   jiraTransitionIssueSchema,
   jiraAssignIssueSchema,
   jiraAddCommentSchema,
+  jiraUpdateCommentSchema,
   jiraLinkIssuesSchema,
   jiraGetAttachmentSchema,
   jiraCreateIssuePromptSchema,
@@ -80,6 +82,10 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
       jira_add_comment: async (args) => {
         const parsed = jiraAddCommentSchema.parse(args);
         return await jiraAddCommentHandler(clients)(parsed);
+      },
+      jira_update_comment: async (args) => {
+        const parsed = jiraUpdateCommentSchema.parse(args);
+        return await jiraUpdateCommentHandler(clients)(parsed);
       },
       jira_link_issues: async (args) => {
         const parsed = jiraLinkIssuesSchema.parse(args);

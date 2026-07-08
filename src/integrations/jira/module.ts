@@ -88,6 +88,12 @@ export const jiraAddCommentSchema = z.object({
   body: z.string().max(65536).describe('Comment body (plain text).'),
 });
 
+export const jiraUpdateCommentSchema = z.object({
+  key: z.string().max(20).describe('Issue key the comment belongs to.'),
+  commentId: z.string().max(30).describe('ID of the comment to update.'),
+  body: z.string().max(65536).describe('New comment body (plain text) — replaces the existing content.'),
+});
+
 export const jiraLinkIssuesSchema = z.object({
   inwardKey: z.string().max(20).describe('The inward ("from") issue key.'),
   outwardKey: z.string().max(20).describe('The outward ("to") issue key.'),
@@ -273,6 +279,12 @@ export const jiraAddCommentHandler: ToolHandler<z.infer<typeof jiraAddCommentSch
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 
+export const jiraUpdateCommentHandler: ToolHandler<z.infer<typeof jiraUpdateCommentSchema>> =
+  (_clients) => async (args) => {
+    const comment = await _clients.jira.updateComment(args.key, args.commentId, args.body);
+    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+  };
+
 export const jiraGetAttachmentHandler: ToolHandler<z.infer<typeof jiraGetAttachmentSchema>> =
   (_clients) => async (args) => {
     const result = await _clients.jira.getAttachmentContent(args.attachmentId);
@@ -388,6 +400,11 @@ export const jiraToolDescriptors = [
     name: 'jira_add_comment',
     description: 'Add a comment to a Jira issue.',
     inputSchema: zodToJsonSchema(jiraAddCommentSchema),
+  },
+  {
+    name: 'jira_update_comment',
+    description: 'Update an existing comment on a Jira issue.',
+    inputSchema: zodToJsonSchema(jiraUpdateCommentSchema),
   },
   {
     name: 'jira_link_issues',

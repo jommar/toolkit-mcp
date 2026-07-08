@@ -92,9 +92,9 @@ describe('JiraModule', () => {
       mockJira = makeMockJira();
     });
 
-    it('returns all 9 handlers', () => {
+    it('returns all 10 handlers', () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      expect(Object.keys(handlers)).toHaveLength(9);
+      expect(Object.keys(handlers)).toHaveLength(10);
       expect(handlers).toHaveProperty('jira_whoami');
       expect(handlers).toHaveProperty('jira_get_issues');
       expect(handlers).toHaveProperty('jira_create_issue');
@@ -102,6 +102,7 @@ describe('JiraModule', () => {
       expect(handlers).toHaveProperty('jira_transition_issue');
       expect(handlers).toHaveProperty('jira_assign_issue');
       expect(handlers).toHaveProperty('jira_add_comment');
+      expect(handlers).toHaveProperty('jira_update_comment');
       expect(handlers).toHaveProperty('jira_link_issues');
       expect(handlers).toHaveProperty('jira_get_attachment');
     });
@@ -138,9 +139,9 @@ describe('JiraModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 9 tool descriptors', () => {
+    it('returns 10 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(9);
+      expect(descriptors).toHaveLength(10);
     });
 
     it('each descriptor has name, description, and inputSchema', () => {
