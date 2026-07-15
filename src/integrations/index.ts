@@ -72,6 +72,7 @@ import { JiraModule } from './jira/index.js';
 import { GitHubModule } from './github/index.js';
 import { FigmaModule } from './figma/index.js';
 import { ConfluenceModule } from './confluence/index.js';
+import { JenkinsModule } from './jenkins/index.js';
 
 /**
  * Module registry — explicitly import and export all module implementations.
@@ -82,4 +83,5 @@ export const modules: IntegrationModule<any>[] = [
   new GitHubModule(),
   new FigmaModule(),
   new ConfluenceModule(),
+  new JenkinsModule(),
 ];

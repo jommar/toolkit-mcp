@@ -5,7 +5,7 @@ import { createHealthHandler } from "./mcp-health.js";
 
 describe("createHealthHandler", () => {
   it("returns health with all integrations active", async () => {
-    const handler = createHealthHandler(true, true, true, true);
+    const handler = createHealthHandler(true, true, true, true, true);
     const result = await handler({});
 
     expect(result.content).toHaveLength(1);
@@ -15,6 +15,13 @@ describe("createHealthHandler", () => {
     expect(body.integrations.github).toBe(true);
     expect(body.integrations.figma).toBe(true);
     expect(body.integrations.confluence).toBe(true);
+    expect(body.integrations.jenkins).toBe(true);
+  });
+
+  it("defaults jenkins to false when the flag is omitted", async () => {
+    const handler = createHealthHandler(true, true, true, true);
+    const body = JSON.parse((await handler({})).content[0].text);
+    expect(body.integrations.jenkins).toBe(false);
   });
 
   it("returns health with no integrations active", async () => {

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Jenkins integration** (read-only): 5 new MCP tools, registered only when `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` are set.
+  - `jenkins_get_jobs` — list jobs with current build status (paginated).
+  - `jenkins_get_builds` — recent build history for a job, newest first (paginated).
+  - `jenkins_get_build` — details for a single build (defaults to the last build).
+  - `jenkins_get_console` — build console log, paginated by line for token economy (defaults to the last build).
+  - `jenkins_healthcheck` — aggregate rollup of whether each job's last build succeeded; checks all visible jobs by default, or a `jobs` subset. In-progress builds don't fail the check; unknown job names are reported, not thrown.
+- **`JenkinsClient`** (`src/services/jenkins/jenkins-client.ts`) — minimal read-only client over the Jenkins REST API. HTTP Basic auth (`JENKINS_USER` / `JENKINS_TOKEN`, API token preferred), transient-failure retry with backoff, and `describeJenkinsError`. New service types: `JenkinsJob`, `JenkinsBuild`, `JenkinsBuildDetail`, `JenkinsConsolePage`.
 - **GitHub: update PR tool** (`github_update_pr`) — Update an existing pull request's title, body, state, base branch, or maintainer settings via `PATCH /repos/{owner}/{repo}/pulls/{number}`. Parameters: `repo`, `prNumber`, `title`, `body`, `state`, `base`, `maintainerCanModify`.
 - **`GitHubClient.updatePullRequest()`** — Calls `PATCH /repos/{owner}/{repo}/pulls/{number}` with a partial update object. Returns `PullRequestDetail`. Validates that at least one update field is provided.
 - **GitHub: inline PR review comments** (`github_create_pr_review_comment`, `github_get_pr_review_comments`, `github_update_pr_review_comment`, `github_delete_pr_review_comment`) — Line-specific diff comments on pull requests, with optional suggested changes via the `suggestedReplacement` parameter (rendered as GitHub suggestion code fences).

@@ -2,6 +2,7 @@ export { JiraClient, describeError } from './jira/jira-client.js';
 export { GitHubClient, describeGitHubError } from './github/github-client.js';
 export { FigmaClient } from './figma/figma-client.js';
 export { ConfluenceClient, describeConfluenceError, storageToText } from './confluence/confluence-client.js';
+export { JenkinsClient, describeJenkinsError } from './jenkins/jenkins-client.js';
 export type { JiraConfig, ConfluenceConfig } from './config.js';
 export { loadConfig, loadConfluenceConfig } from './config.js';
 export type {
@@ -30,5 +31,11 @@ export type {
   ConfluencePage,
   Paged,
 } from './confluence/confluence-client.js';
+export type {
+  JenkinsJob,
+  JenkinsBuild,
+  JenkinsBuildDetail,
+  JenkinsConsolePage,
+} from './jenkins/jenkins-client.js';
 export { DEV_FIELDS, toSlimIssue, toSlimComment, toSlimAttachment, adfToText } from './slim.js';
 export type { SlimIssue, SlimComment, SlimAttachment } from './slim.js';

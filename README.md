@@ -59,6 +59,7 @@ All variables are optional — tools only register if their required env vars ar
 | `GH_TOKEN` | GitHub | All 11 GitHub tools and `github://prs/{issueKey}` resource |
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
+| `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
 | `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
 | `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
@@ -69,7 +70,7 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 
 ## Tools
 
-28 tools total (27 conditional + 1 built-in always registered).
+Tools are grouped by integration; all are conditional except the built-in `mcp_get_health`, which is always registered.
 
 ### Jira Tools (registered when `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` are set)
 
@@ -113,6 +114,18 @@ Full `.env.example` in the project root. If no integration env vars are set, the
 | `figma_get_styles` | List colors, text styles, and effects. | `fileKey` |
 | `figma_get_variables` | List design tokens and variable collections. | `fileKey` |
 | `figma_get_versions` | List version history for a file. | `fileKey` |
+
+### Jenkins Tools (registered when `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` are set)
+
+Read-only. All list tools return the paginated response shape (`items`, `nextPageToken`, `hasMore`); pass the returned `nextPageToken` back as `cursor` for the next page.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `jenkins_get_jobs` | List Jenkins jobs with their current build status. | `limit`, `cursor` |
+| `jenkins_get_builds` | List recent builds for a job (newest first), paginated. | `job`, `limit`, `cursor` |
+| `jenkins_get_build` | Get details for a single build; omit `buildNumber` for the most recent. | `job`, `buildNumber` |
+| `jenkins_get_console` | Get a build console log, paginated by line; omit `buildNumber` for the most recent. | `job`, `buildNumber`, `limit`, `cursor` |
+| `jenkins_healthcheck` | Report whether the last build of each requested job succeeded; omit `jobs` to check all visible jobs. | `jobs` |
 
 ### Built-in (always registered)
 
@@ -173,6 +186,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 - **Jira module** — registered only if `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_TOKEN` are all set.
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Figma module** — registered only if `FIGMA_TOKEN` is set.
+- **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_TOKEN` are all set.
 - **Fallback** — if no env vars are set, the server starts with only `mcp_get_health`. No crashes.
 - The server logs active integrations at startup: `[mcp] Jira integration: active`.
 
@@ -180,7 +194,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 
 ## Testing
 
-219 tests across 12 test files using **vitest**:
+335 tests across 17 test files using **vitest**:
 
 ```bash
 npm run test                 # Run all tests

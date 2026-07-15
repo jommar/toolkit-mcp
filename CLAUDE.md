@@ -73,6 +73,7 @@ class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... 
 
 - **Jira module** — registered only if `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN` are all set.
 - **GitHub module** — registered only if `GH_TOKEN` is set.
+- **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` are all set (read-only tools).
 - **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations.
 - The server logs which integration sets are active at startup.
 
@@ -205,6 +206,7 @@ All optional — tools only register if their env vars are present:
 |----------|-------------|-------------|
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools |
 | `GH_TOKEN` | GitHub | All GitHub tools / PR search |
+| `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (read-only) |
 | `MCP_TRANSPORT` | Server | Transport mode (`stdio` default, `http`) |
 | `MCP_PORT` | Server | HTTP port (default `3000`) |
 | `MCP_LOG_LEVEL` | Server | `silent` | `info` | `debug` |

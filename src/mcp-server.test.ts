@@ -21,6 +21,9 @@ vi.hoisted(() => {
   delete process.env.JIRA_EMAIL;
   delete process.env.JIRA_TOKEN;
   delete process.env.GH_TOKEN;
+  delete process.env.JENKINS_URL;
+  delete process.env.JENKINS_USER;
+  delete process.env.JENKINS_TOKEN;
 });
 
 // Mock SDK transport so server.connect() doesn't actually connect
@@ -68,6 +71,7 @@ vi.mock('./services/index.js', () => ({
   JiraClient: class MockJiraClient {},
   GitHubClient: class MockGitHubClient {},
   FigmaClient: class MockFigmaClient {},
+  JenkinsClient: class MockJenkinsClient {},
 }));
 
 // Mock the config so loadMcpConfig returns a predictable value

@@ -5,18 +5,19 @@ vi.mock('../services/index.js', () => ({
   GitHubClient: class MockGitHubClient {},
   FigmaClient: class MockFigmaClient {},
   ConfluenceClient: class MockConfluenceClient {},
+  JenkinsClient: class MockJenkinsClient {},
 }));
 
 import { modules, IntegrationModule } from './index.js';
 
 describe('Module Registry', () => {
-  it('exports exactly 4 modules', () => {
-    expect(modules).toHaveLength(4);
+  it('exports exactly 5 modules', () => {
+    expect(modules).toHaveLength(5);
   });
 
   it('all modules have correct ids', () => {
     const ids = modules.map((m) => m.id).sort();
-    expect(ids).toEqual(['confluence', 'figma', 'github', 'jira']);
+    expect(ids).toEqual(['confluence', 'figma', 'github', 'jenkins', 'jira']);
   });
 
   it('each module implements IntegrationModule interface', () => {
@@ -44,6 +45,7 @@ describe('Module Registry', () => {
       if (mod.id === 'github') clients.github = {};
       if (mod.id === 'figma') clients.figma = {};
       if (mod.id === 'confluence') clients.confluence = {};
+      if (mod.id === 'jenkins') clients.jenkins = {};
 
       const handlers = mod.createToolHandlers(clients);
       expect(typeof handlers).toBe('object');
@@ -83,5 +85,11 @@ describe('Module Registry', () => {
     const confluenceMod = modules.find((m) => m.id === 'confluence')!;
     expect(confluenceMod.getResourceHandler).toBeUndefined();
     expect(confluenceMod.getPromptHandler).toBeUndefined();
+  });
+
+  it('JenkinsModule has no getResourceHandler or getPromptHandler', () => {
+    const jenkinsMod = modules.find((m) => m.id === 'jenkins')!;
+    expect(jenkinsMod.getResourceHandler).toBeUndefined();
+    expect(jenkinsMod.getPromptHandler).toBeUndefined();
   });
 });

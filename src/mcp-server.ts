@@ -8,7 +8,7 @@ import {
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient } from './services/index.js';
+import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient } from './services/index.js';
 import { z } from 'zod';
 import { loadMcpConfig } from './mcp-config.js';
 import { createHealthHandler } from './mcp-health.js';
@@ -34,11 +34,13 @@ export async function main(): Promise<void> {
     (process.env.CONFLUENCE_EMAIL || process.env.JIRA_EMAIL) &&
     (process.env.CONFLUENCE_TOKEN || process.env.JIRA_TOKEN)
   );
+  const jenkinsActive = !!(process.env.JENKINS_URL && process.env.JENKINS_USER && process.env.JENKINS_TOKEN);
 
   log(`Jira integration: ${jiraActive ? 'active' : 'inactive'}`);
   log(`GitHub integration: ${githubActive ? 'active' : 'inactive'}`);
   log(`Figma integration: ${figmaActive ? 'active' : 'inactive'}`);
   log(`Confluence integration: ${confluenceActive ? 'active' : 'inactive'}`);
+  log(`Jenkins integration: ${jenkinsActive ? 'active' : 'inactive'}`);
 
   // Create client instances for active integrations only
   const clients: Record<string, unknown> = {};
@@ -74,6 +76,14 @@ export async function main(): Promise<void> {
       log(`Failed to create ConfluenceClient: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  if (jenkinsActive) {
+    try {
+      clients.jenkins = new JenkinsClient();
+      log('JenkinsClient created successfully');
+    } catch (err) {
+      log(`Failed to create JenkinsClient: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Create server
   const server = new Server(
@@ -88,7 +98,13 @@ export async function main(): Promise<void> {
   const promptHandlers: Array<(name: string, args: Record<string, unknown> | undefined) => Promise<any>> = [];
 
   // Always register built-in health tool
-  const healthHandler = createHealthHandler(!!clients.jira, !!clients.github, !!clients.figma, !!clients.confluence);
+  const healthHandler = createHealthHandler(
+    !!clients.jira,
+    !!clients.github,
+    !!clients.figma,
+    !!clients.confluence,
+    !!clients.jenkins,
+  );
   allHandlers['mcp_get_health'] = healthHandler;
   allDescriptors.push({
     name: 'mcp_get_health',
