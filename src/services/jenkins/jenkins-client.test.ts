@@ -58,6 +58,37 @@ describe('JenkinsClient', () => {
     });
   });
 
+  describe('ping', () => {
+    it('returns true when Jenkins responds, using a short timeout and no retries', async () => {
+      http.get.mockResolvedValue({ data: { nodeName: '' } });
+      const client = new JenkinsClient();
+      await expect(client.ping()).resolves.toBe(true);
+
+      const [url, opts] = http.get.mock.calls[0];
+      expect(url).toBe('/api/json');
+      expect(opts.timeout).toBe(3000);
+      expect(opts.__noRetry).toBe(true);
+    });
+
+    it('returns true when the server is up but auth fails (401)', async () => {
+      http.get.mockRejectedValue({ isAxiosError: true, response: { status: 401 }, message: 'unauthorized' });
+      const client = new JenkinsClient();
+      await expect(client.ping()).resolves.toBe(true);
+    });
+
+    it('returns false when the host is unreachable (no response)', async () => {
+      http.get.mockRejectedValue({ isAxiosError: true, code: 'ECONNABORTED', message: 'timeout' });
+      const client = new JenkinsClient();
+      await expect(client.ping()).resolves.toBe(false);
+    });
+
+    it('returns false on a non-axios error', async () => {
+      http.get.mockRejectedValue(new Error('boom'));
+      const client = new JenkinsClient();
+      await expect(client.ping()).resolves.toBe(false);
+    });
+  });
+
   describe('getJobs', () => {
     it('maps ball colors to friendly status and paginates', async () => {
       http.get.mockResolvedValue({

@@ -78,8 +78,13 @@ export async function main(): Promise<void> {
   }
   if (jenkinsActive) {
     try {
-      clients.jenkins = new JenkinsClient();
-      log('JenkinsClient created successfully');
+      const jenkins = new JenkinsClient();
+      if (await jenkins.ping()) {
+        clients.jenkins = jenkins;
+        log('JenkinsClient created successfully');
+      } else {
+        log('Jenkins unreachable — skipping Jenkins tools (server down or blocked)');
+      }
     } catch (err) {
       log(`Failed to create JenkinsClient: ${err instanceof Error ? err.message : String(err)}`);
     }

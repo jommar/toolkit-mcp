@@ -1,6 +1,8 @@
-import axios, { AxiosInstance, isAxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, isAxiosError } from 'axios';
 
 const MAX_RETRIES = 3;
+/** Liveness-probe timeout — short so an unreachable Jenkins fails fast at bootstrap. */
+const PING_TIMEOUT_MS = 3_000;
 /** Job names: segments of alphanumerics, space, dot, underscore, hyphen; `/` separates folders. */
 const JOB_NAME_PATTERN = /^[A-Za-z0-9 ._-]+(?:\/[A-Za-z0-9 ._-]+)*$/;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,7 +99,7 @@ export class JenkinsClient {
       const status: number | undefined = error.response?.status;
       const retryable =
         status === 429 || (status !== undefined && status >= 500 && status < 600) || error.code === 'ECONNABORTED';
-      if (!config || !retryable) throw error;
+      if (!config || !retryable || config.__noRetry) throw error;
 
       config.__retryCount = (config.__retryCount ?? 0) + 1;
       if (config.__retryCount > MAX_RETRIES) throw error;
@@ -133,6 +135,25 @@ export class JenkinsClient {
       throw new Error(`Invalid build number: ${buildNumber}.`);
     }
     return String(buildNumber);
+  }
+
+  /**
+   * Fast liveness probe used to gate tool registration at bootstrap: short timeout, no retries,
+   * never throws. Returns true whenever Jenkins responds at all — a 401/403 means the server is
+   * up but the credentials are off, which the per-call error messages already surface. Only a
+   * genuine network failure (no response) reports unreachable.
+   */
+  async ping(timeoutMs = PING_TIMEOUT_MS): Promise<boolean> {
+    try {
+      await this.http.get('/api/json', {
+        params: { tree: 'nodeName' },
+        timeout: timeoutMs,
+        __noRetry: true,
+      } as AxiosRequestConfig & { __noRetry?: boolean });
+      return true;
+    } catch (err) {
+      return isAxiosError(err) && !!err.response;
+    }
   }
 
   /**
