@@ -7,6 +7,8 @@ import {
   confluenceGetPageSchema,
   confluenceListSpacesHandler,
   confluenceListSpacesSchema,
+  confluenceWhoamiHandler,
+  confluenceWhoamiSchema,
   confluenceToolDescriptors,
 } from './module.js';
 
@@ -34,6 +36,10 @@ export class ConfluenceModule implements IntegrationModule<{ confluence: Conflue
       confluence_list_spaces: async (args) => {
         const parsed = confluenceListSpacesSchema.parse(args);
         return await confluenceListSpacesHandler(clients)(parsed);
+      },
+      confluence_whoami: async (args) => {
+        const parsed = confluenceWhoamiSchema.parse(args);
+        return await confluenceWhoamiHandler(clients)(parsed);
       },
     };
   }

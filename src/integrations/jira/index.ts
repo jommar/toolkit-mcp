@@ -1,4 +1,4 @@
-import { JiraClient } from '../../services/index.js';
+import { JiraClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
 import { IntegrationModule, ToolHandlerFn, ToolDescriptor } from '../index.js';
 import {
   jiraWhoamiHandler,
@@ -11,6 +11,11 @@ import {
   jiraUpdateCommentHandler,
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
+  jiraGetCommentsHandler,
+  jiraListTransitionsHandler,
+  jiraListIssueLinkTypesHandler,
+  jiraSearchUsersHandler,
+  jiraDeleteCommentHandler,
   jiraWhoamiSchema,
   jiraGetIssuesSchema,
   jiraCreateIssueSchema,
@@ -21,33 +26,22 @@ import {
   jiraUpdateCommentSchema,
   jiraLinkIssuesSchema,
   jiraGetAttachmentSchema,
+  jiraGetCommentsSchema,
+  jiraListTransitionsSchema,
+  jiraListIssueLinkTypesSchema,
+  jiraSearchUsersSchema,
+  jiraDeleteCommentSchema,
   jiraCreateIssuePromptSchema,
   jiraTriageIssuePromptSchema,
   jiraToolDescriptors,
 } from './module.js';
 
-/** Restricted JQL keywords that are not allowed in resource URI queries. */
-const RESTRICTED_JQL_KEYWORDS = [
-  /delete/i,
-  /update/i,
-  /create/i,
-  /insert/i,
-  /drop/i,
-  /alter/i,
-  /exec/i,
-  /admin/i,
-];
-
-function validateJql(jql: string): void {
-  for (const pattern of RESTRICTED_JQL_KEYWORDS) {
-    if (pattern.test(jql)) {
-      throw new Error(`JQL contains restricted keyword: "${pattern.source}"`);
-    }
-  }
-}
-
 export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
   readonly id = 'jira';
+
+  getResourcePrefix(): string {
+    return 'jira://';
+  }
 
   needsEnv(): boolean {
     return !!(process.env.JIRA_BASE_URL && process.env.JIRA_EMAIL && process.env.JIRA_TOKEN);
@@ -95,6 +89,26 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
         const parsed = jiraGetAttachmentSchema.parse(args);
         return await jiraGetAttachmentHandler(clients)(parsed);
       },
+      jira_get_comments: async (args) => {
+        const parsed = jiraGetCommentsSchema.parse(args);
+        return await jiraGetCommentsHandler(clients)(parsed);
+      },
+      jira_list_transitions: async (args) => {
+        const parsed = jiraListTransitionsSchema.parse(args);
+        return await jiraListTransitionsHandler(clients)(parsed);
+      },
+      jira_list_issue_link_types: async (args) => {
+        const parsed = jiraListIssueLinkTypesSchema.parse(args);
+        return await jiraListIssueLinkTypesHandler(clients)(parsed);
+      },
+      jira_search_users: async (args) => {
+        const parsed = jiraSearchUsersSchema.parse(args);
+        return await jiraSearchUsersHandler(clients)(parsed);
+      },
+      jira_delete_comment: async (args) => {
+        const parsed = jiraDeleteCommentSchema.parse(args);
+        return await jiraDeleteCommentHandler(clients)(parsed);
+      },
     };
   }
 
@@ -107,6 +121,9 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
       if (uri.startsWith('jira://issue/')) {
         const key = uri.slice('jira://issue/'.length);
         if (!key) throw new Error('Missing issue key');
+        if (!ISSUE_KEY_PATTERN.test(key)) {
+          throw new Error(`Invalid issue key format: "${key}"`);
+        }
         const issue = await clients.jira.getIssueSlim(key);
         return {
           contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(issue) }],
@@ -116,7 +133,6 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
       if (uri.startsWith('jira://search/')) {
         const jql = decodeURIComponent(uri.slice('jira://search/'.length));
         if (!jql) throw new Error('Missing JQL query');
-        validateJql(jql);
         const issues = await clients.jira.searchSlim(jql, { maxResults: 20 });
         return {
           contents: [{ uri, mimeType: 'application/json', text: JSON.stringify(issues) }],

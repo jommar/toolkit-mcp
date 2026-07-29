@@ -17,6 +17,8 @@ import {
   figmaGetVariablesSchema,
   figmaGetVersionsHandler,
   figmaGetVersionsSchema,
+  figmaPostCommentHandler,
+  figmaPostCommentSchema,
   figmaToolDescriptors,
 } from './module.js';
 
@@ -60,6 +62,10 @@ export class FigmaModule implements IntegrationModule<{ figma: FigmaClient }> {
       figma_get_versions: async (args) => {
         const parsed = figmaGetVersionsSchema.parse(args);
         return await figmaGetVersionsHandler(clients)(parsed);
+      },
+      figma_post_comment: async (args) => {
+        const parsed = figmaPostCommentSchema.parse(args);
+        return await figmaPostCommentHandler(clients)(parsed);
       },
     };
   }

@@ -6,6 +6,7 @@ vi.mock('../services/index.js', () => ({
   FigmaClient: class MockFigmaClient {},
   ConfluenceClient: class MockConfluenceClient {},
   JenkinsClient: class MockJenkinsClient {},
+  ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
 import { modules, IntegrationModule } from './index.js';

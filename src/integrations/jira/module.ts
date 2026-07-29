@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JiraClient, toSlimIssue } from '../../services/index.js';
+import { JiraClient, toSlimIssue, DEV_FIELDS } from '../../services/index.js';
 import type { SlimIssue, SearchResult, JiraIssue } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
@@ -113,6 +113,27 @@ export const jiraGetAttachmentSchema = z.object({
     .describe('Issue key for context (e.g., "TRIPS-1260").'),
 });
 
+export const jiraGetCommentsSchema = z.object({
+  key: z.string().max(20).describe('Issue key to fetch comments for.'),
+  limit: z.number().optional().default(50).describe('Maximum items per page (default 50).'),
+  cursor: z.string().optional().describe('Opaque pagination token from a previous response.'),
+});
+
+export const jiraListTransitionsSchema = z.object({
+  key: z.string().max(20).describe('Issue key to list transitions for.'),
+});
+
+export const jiraListIssueLinkTypesSchema = z.object({}).describe('Empty — no parameters required.');
+
+export const jiraSearchUsersSchema = z.object({
+  query: z.string().max(256).describe('Query string to search users by display name or email.'),
+});
+
+export const jiraDeleteCommentSchema = z.object({
+  key: z.string().max(20).describe('Issue key the comment belongs to.'),
+  commentId: z.string().max(30).describe('ID of the comment to delete.'),
+});
+
 // ---------------------------------------------------------------------------
 // Inferred types for prompt schemas
 // ---------------------------------------------------------------------------
@@ -158,18 +179,12 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
     const { key, jql, limit, cursor, fields } = args;
 
     if (key) {
-      if (fields) {
-        const issue = await _clients.jira.getIssue(key, fields);
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(paginated([issue])),
-            },
-          ],
-        };
-      }
-      const issue = await _clients.jira.getIssueSlim(key);
+      // Always slim. If custom fields are requested, merge with DEV_FIELDS.
+      const issueFields = fields ? [...new Set([...DEV_FIELDS, ...fields])] : undefined;
+      const raw = issueFields
+        ? await _clients.jira.getIssue(key, issueFields)
+        : await _clients.jira.getIssue(key, [...DEV_FIELDS]);
+      const issue = toSlimIssue(raw);
       return {
         content: [
           {
@@ -181,12 +196,13 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
     }
 
     if (jql) {
+      const searchFields = fields ? [...new Set([...DEV_FIELDS, ...fields])] : undefined;
       const searchOpts: { maxResults: number; nextPageToken?: string; fields?: string[] } = {
         maxResults: limit,
         nextPageToken: cursor,
       };
-      if (fields) {
-        searchOpts.fields = fields;
+      if (searchFields) {
+        searchOpts.fields = searchFields;
       }
       const result: SearchResult = await _clients.jira.search(jql, searchOpts);
       const items: SlimIssue[] = result.issues.map(toSlimIssue);
@@ -194,7 +210,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
         content: [
           {
             type: 'text',
-            text: JSON.stringify(paginated(items, result.nextPageToken)),
+            text: JSON.stringify(paginated(items, result.isLast ? undefined : result.nextPageToken)),
           },
         ],
       };
@@ -269,8 +285,20 @@ export const jiraAssignIssueHandler: ToolHandler<z.infer<typeof jiraAssignIssueS
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, key, assignee: null }) }] };
     }
 
-    await _clients.jira.assignIssue(key, assignee!);
-    return { content: [{ type: 'text', text: JSON.stringify({ success: true, key, assignee }) }] };
+    // Search for user by display name or email
+    const users = await _clients.jira.searchUsers(assignee!);
+    if (users.length === 0) {
+      throw new McpError(ErrorCode.InvalidParams, `No user found matching "${assignee}"`);
+    }
+    if (users.length > 1) {
+      const options = users.map((u) => `${u.displayName} (${u.emailAddress || u.accountId})`).join(', ');
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Multiple users match "${assignee}": ${options}. Please disambiguate.`,
+      );
+    }
+    await _clients.jira.assignIssue(key, users[0].accountId);
+    return { content: [{ type: 'text', text: JSON.stringify({ success: true, key, assignee: users[0].displayName }) }] };
   };
 
 export const jiraAddCommentHandler: ToolHandler<z.infer<typeof jiraAddCommentSchema>> =
@@ -325,6 +353,41 @@ export const jiraGetAttachmentHandler: ToolHandler<z.infer<typeof jiraGetAttachm
         },
       ],
     };
+  };
+
+export const jiraGetCommentsHandler: ToolHandler<z.infer<typeof jiraGetCommentsSchema>> =
+  (_clients) => async (args) => {
+    const all = await _clients.jira.getComments(args.key);
+    // offset-based pagination: cursor is an offset string
+    const offset = args.cursor ? parseInt(args.cursor, 10) : 0;
+    const limit = args.limit ?? 50;
+    const items = all.slice(offset, offset + limit);
+    const nextOffset = offset + limit < all.length ? String(offset + limit) : undefined;
+    return { content: [{ type: 'text', text: JSON.stringify(paginated(items, nextOffset)) }] };
+  };
+
+export const jiraListTransitionsHandler: ToolHandler<z.infer<typeof jiraListTransitionsSchema>> =
+  (_clients) => async (args) => {
+    const transitions = await _clients.jira.listTransitions(args.key);
+    return { content: [{ type: 'text', text: JSON.stringify(transitions) }] };
+  };
+
+export const jiraListIssueLinkTypesHandler: ToolHandler<z.infer<typeof jiraListIssueLinkTypesSchema>> =
+  (_clients) => async (_args) => {
+    const linkTypes = await _clients.jira.listIssueLinkTypes();
+    return { content: [{ type: 'text', text: JSON.stringify(linkTypes) }] };
+  };
+
+export const jiraSearchUsersHandler: ToolHandler<z.infer<typeof jiraSearchUsersSchema>> =
+  (_clients) => async (args) => {
+    const users = await _clients.jira.searchUsers(args.query);
+    return { content: [{ type: 'text', text: JSON.stringify(users) }] };
+  };
+
+export const jiraDeleteCommentHandler: ToolHandler<z.infer<typeof jiraDeleteCommentSchema>> =
+  (_clients) => async (args) => {
+    await _clients.jira.deleteComment(args.key, args.commentId);
+    return { content: [{ type: 'text', text: JSON.stringify({ success: true, key: args.key, commentId: args.commentId }) }] };
   };
 
 export const jiraLinkIssuesHandler: ToolHandler<z.infer<typeof jiraLinkIssuesSchema>> =
@@ -415,5 +478,30 @@ export const jiraToolDescriptors = [
     name: 'jira_get_attachment',
     description: 'Download a Jira attachment by ID and return it as base64 + data URI.',
     inputSchema: zodToJsonSchema(jiraGetAttachmentSchema),
+  },
+  {
+    name: 'jira_get_comments',
+    description: 'Get comments on a Jira issue.',
+    inputSchema: zodToJsonSchema(jiraGetCommentsSchema),
+  },
+  {
+    name: 'jira_list_transitions',
+    description: 'List available transitions for a Jira issue.',
+    inputSchema: zodToJsonSchema(jiraListTransitionsSchema),
+  },
+  {
+    name: 'jira_list_issue_link_types',
+    description: 'List available issue link types.',
+    inputSchema: zodToJsonSchema(jiraListIssueLinkTypesSchema),
+  },
+  {
+    name: 'jira_search_users',
+    description: 'Search for Jira users by display name or email.',
+    inputSchema: zodToJsonSchema(jiraSearchUsersSchema),
+  },
+  {
+    name: 'jira_delete_comment',
+    description: 'Delete a comment on a Jira issue.',
+    inputSchema: zodToJsonSchema(jiraDeleteCommentSchema),
   },
 ];

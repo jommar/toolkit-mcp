@@ -5,6 +5,7 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 vi.mock('../../services/index.js', () => ({
   JiraClient: class MockJiraClient {},
   toSlimIssue: vi.fn((issue: any) => issue),
+  DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
 }));
 
 import {
@@ -18,13 +19,20 @@ import {
   jiraUpdateCommentHandler,
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
+  jiraGetCommentsHandler,
+  jiraListTransitionsHandler,
+  jiraListIssueLinkTypesHandler,
+  jiraSearchUsersHandler,
+  jiraDeleteCommentHandler,
 } from './module.js';
 
 function makeMockJira() {
   return {
     whoami: vi.fn(),
+    getIssue: vi.fn(),
     getIssueSlim: vi.fn(),
     search: vi.fn(),
+    searchUsers: vi.fn(),
     createIssue: vi.fn(),
     updateIssue: vi.fn(),
     listTransitions: vi.fn(),
@@ -33,6 +41,8 @@ function makeMockJira() {
     assignToMe: vi.fn(),
     addComment: vi.fn(),
     updateComment: vi.fn(),
+    deleteComment: vi.fn(),
+    getComments: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     linkIssues: vi.fn(),
     getAttachmentContent: vi.fn(),
@@ -69,16 +79,18 @@ describe('jiraGetIssuesHandler', () => {
     mockJira = makeMockJira();
   });
 
-  it('fetches a single issue by key', async () => {
-    const slimIssue = { key: 'TRIPS-1', summary: 'Test' };
-    mockJira.getIssueSlim.mockResolvedValue(slimIssue);
+  it('fetches a single issue by key, always slimmed', async () => {
+    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Test' } };
+    mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TRIPS-1' });
 
-    expect(mockJira.getIssueSlim).toHaveBeenCalledWith('TRIPS-1');
+    // Now calls getIssue + toSlimIssue rather than getIssueSlim
+    expect(mockJira.getIssue).toHaveBeenCalledWith('TRIPS-1', expect.any(Array));
+    expect(mockJira.getIssueSlim).not.toHaveBeenCalled();
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.items).toEqual([slimIssue]);
+    expect(parsed.items).toEqual([rawIssue]);
     expect(parsed.hasMore).toBe(false);
   });
 
@@ -96,6 +108,7 @@ describe('jiraGetIssuesHandler', () => {
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
     const result = await handler({ jql: 'project = TRIPS', limit: 20 });
 
+    // Handler does not pass fields by default in JQL path (Jira default fields suffice)
     expect(mockJira.search).toHaveBeenCalledWith('project = TRIPS', {
       maxResults: 20,
       nextPageToken: undefined,
@@ -125,12 +138,13 @@ describe('jiraGetIssuesHandler', () => {
   });
 
   it('gives key priority over jql when both provided', async () => {
-    mockJira.getIssueSlim.mockResolvedValue({ key: 'TRIPS-1', summary: 'Priority' });
+    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Priority' } };
+    mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TRIPS-1', jql: 'project = OTHER' });
 
-    expect(mockJira.getIssueSlim).toHaveBeenCalledWith('TRIPS-1');
+    expect(mockJira.getIssue).toHaveBeenCalledWith('TRIPS-1', expect.any(Array));
     expect(mockJira.search).not.toHaveBeenCalled();
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(1);
@@ -393,21 +407,46 @@ describe('jiraAssignIssueHandler', () => {
     });
   });
 
-  it('assigns to a specific accountId', async () => {
+  it('assigns to a specific user by display name', async () => {
+    mockJira.searchUsers.mockResolvedValue([
+      { accountId: 'abc-123', displayName: 'John Doe', emailAddress: 'john@example.com' },
+    ]);
     mockJira.assignIssue.mockResolvedValue(undefined);
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
     const result = await handler({
       key: 'TRIPS-1',
-      assignee: 'abc-123-def',
+      assignee: 'John Doe',
     });
 
-    expect(mockJira.assignIssue).toHaveBeenCalledWith('TRIPS-1', 'abc-123-def');
+    expect(mockJira.searchUsers).toHaveBeenCalledWith('John Doe');
+    expect(mockJira.assignIssue).toHaveBeenCalledWith('TRIPS-1', 'abc-123');
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
       key: 'TRIPS-1',
-      assignee: 'abc-123-def',
+      assignee: 'John Doe',
     });
+  });
+
+  it('throws when user search returns no results', async () => {
+    mockJira.searchUsers.mockResolvedValue([]);
+
+    const handler = jiraAssignIssueHandler({ jira: mockJira as any });
+    await expect(
+      handler({ key: 'TRIPS-1', assignee: 'Unknown User' }),
+    ).rejects.toThrow('No user found matching "Unknown User"');
+  });
+
+  it('throws when user search returns multiple results', async () => {
+    mockJira.searchUsers.mockResolvedValue([
+      { accountId: 'a1', displayName: 'John Doe' },
+      { accountId: 'a2', displayName: 'John Doe' },
+    ]);
+
+    const handler = jiraAssignIssueHandler({ jira: mockJira as any });
+    await expect(
+      handler({ key: 'TRIPS-1', assignee: 'John Doe' }),
+    ).rejects.toThrow('Multiple users match');
   });
 });
 
@@ -547,6 +586,172 @@ describe('jiraLinkIssuesHandler', () => {
         type: 'InvalidType',
       }),
     ).rejects.toThrow('Link type "InvalidType" not found. Available: Blocks');
+  });
+});
+
+describe('jiraGetCommentsHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('returns paginated comments with default limit', async () => {
+    const comments = Array.from({ length: 10 }, (_, i) => ({
+      id: String(i + 1),
+      author: { displayName: `User ${i + 1}` },
+      body: { type: 'doc', content: [] },
+      created: '2025-01-01T00:00:00Z',
+      updated: '2025-01-01T00:00:00Z',
+    }));
+    mockJira.getComments.mockResolvedValue(comments);
+
+    const handler = jiraGetCommentsHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1' });
+
+    expect(mockJira.getComments).toHaveBeenCalledWith('TRIPS-1');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toHaveLength(10);
+    expect(parsed.hasMore).toBe(false);
+  });
+
+  it('respects limit parameter', async () => {
+    const comments = Array.from({ length: 100 }, (_, i) => ({
+      id: String(i + 1),
+    }));
+    mockJira.getComments.mockResolvedValue(comments);
+
+    const handler = jiraGetCommentsHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', limit: 10 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toHaveLength(10);
+    expect(parsed.hasMore).toBe(true);
+    expect(parsed.nextPageToken).toBe('10');
+  });
+
+  it('uses cursor for offset-based pagination', async () => {
+    const comments = Array.from({ length: 100 }, (_, i) => ({
+      id: String(i + 1),
+    }));
+    mockJira.getComments.mockResolvedValue(comments);
+
+    const handler = jiraGetCommentsHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', limit: 10, cursor: '20' });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toHaveLength(10);
+    expect(parsed.items[0].id).toBe('21');
+    expect(parsed.hasMore).toBe(true);
+    expect(parsed.nextPageToken).toBe('30');
+  });
+
+  it('hasMore is false for last page', async () => {
+    const comments = Array.from({ length: 5 }, (_, i) => ({ id: String(i + 1) }));
+    mockJira.getComments.mockResolvedValue(comments);
+
+    const handler = jiraGetCommentsHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', limit: 10 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items).toHaveLength(5);
+    expect(parsed.hasMore).toBe(false);
+    expect(parsed.nextPageToken).toBeUndefined();
+  });
+});
+
+describe('jiraListTransitionsHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('lists transitions for an issue', async () => {
+    const transitions = [
+      { id: '41', name: 'In Progress' },
+      { id: '31', name: 'Done' },
+    ];
+    mockJira.listTransitions.mockResolvedValue(transitions);
+
+    const handler = jiraListTransitionsHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1' });
+
+    expect(mockJira.listTransitions).toHaveBeenCalledWith('TRIPS-1');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(transitions);
+  });
+});
+
+describe('jiraListIssueLinkTypesHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('lists issue link types', async () => {
+    const linkTypes = [
+      { id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+      { id: '2', name: 'Relates', inward: 'relates to', outward: 'relates to' },
+    ];
+    mockJira.listIssueLinkTypes.mockResolvedValue(linkTypes);
+
+    const handler = jiraListIssueLinkTypesHandler({ jira: mockJira as any });
+    const result = await handler({});
+
+    expect(mockJira.listIssueLinkTypes).toHaveBeenCalled();
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(linkTypes);
+  });
+});
+
+describe('jiraSearchUsersHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('searches users by query', async () => {
+    const users = [
+      { accountId: 'abc', displayName: 'John Doe', emailAddress: 'john@example.com' },
+    ];
+    mockJira.searchUsers.mockResolvedValue(users);
+
+    const handler = jiraSearchUsersHandler({ jira: mockJira as any });
+    const result = await handler({ query: 'John' });
+
+    expect(mockJira.searchUsers).toHaveBeenCalledWith('John');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(users);
+  });
+});
+
+describe('jiraDeleteCommentHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('deletes a comment and returns success', async () => {
+    mockJira.deleteComment.mockResolvedValue(undefined);
+
+    const handler = jiraDeleteCommentHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', commentId: '12345' });
+
+    expect(mockJira.deleteComment).toHaveBeenCalledWith('TRIPS-1', '12345');
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      success: true,
+      key: 'TRIPS-1',
+      commentId: '12345',
+    });
   });
 });
 

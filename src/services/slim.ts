@@ -23,6 +23,7 @@ export const DEV_FIELDS = [
 ] as const;
 
 export interface SlimComment {
+  id: string;
   author: string | null;
   created: string | null;
   body: string | null;
@@ -82,6 +83,7 @@ export function toSlimIssue(issue: JiraIssue): SlimIssue {
 /** Flatten a raw Jira comment into the compact shape (author/created/text body). */
 export function toSlimComment(c: any): SlimComment {
   return {
+    id: c?.id ?? '',
     author: c?.author?.displayName ?? null,
     created: c?.created ?? null,
     body: adfToText(c?.body),

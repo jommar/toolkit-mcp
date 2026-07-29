@@ -5,24 +5,51 @@ All notable changes to the toolkit-mcp project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-07-30
 
 ### Added
 
-- **Jenkins integration** (read-only): 5 new MCP tools, registered only when `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` are set.
-  - `jenkins_get_jobs` — list jobs with current build status (paginated).
-  - `jenkins_get_builds` — recent build history for a job, newest first (paginated).
-  - `jenkins_get_build` — details for a single build (defaults to the last build).
-  - `jenkins_get_console` — build console log, paginated by line for token economy (defaults to the last build).
-  - `jenkins_healthcheck` — aggregate rollup of whether each job's last build succeeded; checks all visible jobs by default, or a `jobs` subset. In-progress builds don't fail the check; unknown job names are reported, not thrown.
-- **`JenkinsClient`** (`src/services/jenkins/jenkins-client.ts`) — minimal read-only client over the Jenkins REST API. HTTP Basic auth (`JENKINS_USER` / `JENKINS_TOKEN`, API token preferred), transient-failure retry with backoff, and `describeJenkinsError`. New service types: `JenkinsJob`, `JenkinsBuild`, `JenkinsBuildDetail`, `JenkinsConsolePage`.
-- **GitHub: update PR tool** (`github_update_pr`) — Update an existing pull request's title, body, state, base branch, or maintainer settings via `PATCH /repos/{owner}/{repo}/pulls/{number}`. Parameters: `repo`, `prNumber`, `title`, `body`, `state`, `base`, `maintainerCanModify`.
-- **`GitHubClient.updatePullRequest()`** — Calls `PATCH /repos/{owner}/{repo}/pulls/{number}` with a partial update object. Returns `PullRequestDetail`. Validates that at least one update field is provided.
-- **GitHub: inline PR review comments** (`github_create_pr_review_comment`, `github_get_pr_review_comments`, `github_update_pr_review_comment`, `github_delete_pr_review_comment`) — Line-specific diff comments on pull requests, with optional suggested changes via the `suggestedReplacement` parameter (rendered as GitHub suggestion code fences).
-- **GitHub: formal PR review submission** (`github_submit_pr_review`) — Submit a formal PR review with `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` events, optionally including inline comments and a summary body.
-- **New service types:** `PrReviewComment`, `CreateReviewCommentInput`, `PrReviewSubmitted`, `PrReviewEvent`, `SubmitPrReviewInput`.
-- **`GitHubClient` methods:** `createPrReviewComment()`, `getPrReviewComments()`, `updatePrReviewComment()`, `deletePrReviewComment()`, `submitPrReview()`.
-- **Architecture plan:** `docs/plans/04-pr-review-capabilities.md`.
+- **GitHub: diff reading tools** (`github_get_pr_files`, `github_get_pr_commits`, `github_get_file_contents`) — Review PRs via MCP with no local worktree. Per-file patches with truncation, decoded file contents with size guard, commit list with SHAs and messages.
+- **GitHub: review lifecycle** — Full PR management surface:
+  - `github_get_pr_review_threads`, `github_resolve_review_thread`, `github_unresolve_review_thread` — GraphQL-powered review thread tracking (query + resolve/unresolve mutations). Eliminates agent repeating comments on resolved threads.
+  - `github_merge_pr` — Merges a PR with merge method and optional SHA guard. Surfaces 405/409 clearly.
+  - `github_request_pr_reviewers` — Add/remove individual and team reviewers.
+  - `github_update_pr_labels`, `github_update_pr_assignees` — Replace labels and assignees on a PR.
+  - `github_dismiss_pr_review` — Dismiss a stale review blocking merge.
+  - `github_delete_pr_issue_comment` — Delete an issue-level PR comment.
+- **GitHub: search filter expansion** — `github_search_prs` now supports `label`, `reviewRequested`, and `base` filters.
+- **GitHub: PullRequestDetail expansion** — `requestedReviewers`, `requestedTeams`, `labels`, `assignees` now included in PR details.
+- **Jira: exposed capabilities** — `jira_get_comments`, `jira_list_transitions`, `jira_list_issue_link_types`, `jira_search_users`, `jira_delete_comment` (previously unreachable client methods).
+- **Confluence: `confluence_whoami`** — verify credentials.
+- **Figma: expansion** — `depth`, `ids`, `geometry`, `version` params on `figma_get_file`; `figma_post_comment` for design feedback loop.
+- **`SlimComment.id`** — comment ID now available (fixes `jira_update_comment`).
+- **Shared retry helper** (`src/services/http-retry.ts`) — deduplicated from 4 near-identical copies. Fixed: 403 with `retry-after` honoured, socket errors retried, write methods only retried on errors with no response.
+- **Test coverage** — New test files: `jira-client.test.ts`, `figma-client.test.ts`, `slim.test.ts`, `config.test.ts`, `helpers.test.ts`. Test count: 362 → 581.
+
+### Fixed
+
+- **C2: `zodToJsonSchema` unwraps all `ZodEffects` layers** — multi-refine schemas (e.g. `githubCreatePrReviewCommentSchema`) now advertise their full parameter sets. Added invariant test across all module descriptors.
+- **C1: `searchBranches: true`** — fixed `/pulls` response parsing (was reading absent fields).
+- **C3: `github_get_prs` cursor** — cursors now honoured; results past `limit` are reachable.
+- **C4: `dotenv` config** — `override: true` dropped; host-supplied credentials always win.
+- **H2: pagination `hasMore`** — all list handlers use `limit + 1` probe instead of `length >= limit` (phantom page on exactly-full last page).
+- **H3: `searchPrs` limit** — passes `limit` as `maxResults` instead of fanning out review-status requests for all matched PRs.
+- **H4: repo validation** — per-segment `.`/`..` rejection added to `assertRepo` (defence-in-depth).
+- **H5: Confluence envelope** — responses mapped to `{items, nextPageToken?, hasMore}`.
+- **H6: `jira_get_issues` shape** — always returns `SlimIssue` regardless of `fields` param.
+- **H7: Jira pagination** — `isLast` honoured alongside `nextPageToken`.
+- **H8: JQL blocklist** — false-positive-blocking validateJql removed.
+- **H9: branch search cap** — counter decremented before each request; `continue` not `break`; per-repo budget.
+- **M1-M10: misc robustness** — branch refs cache TTL, attachment size guard, fetchAllPages truncation signal, Jenkins healthcheck single-fetch, cursor NaN rejection, Figma timeout/retry/truncation, error-reporting adoption, resource handler URI-scheme dispatch, env-var validation.
+- **S1-S5: config/safety** — Jira token removed from McpConfig, `MCP_TRANSPORT` validation, `GH_REPOS` constructor read, Figma error truncation, Jira resource URI validation.
+- **D1/D2 deduplication** — `assertRepo()`, `repoField` Zod schema, `mapPullRequestDetail()`, shared `installRetry()`, shared issue-key pattern.
+
+### Changed
+
+- `github_create_pr_review_comment` now correctly advertises all parameters (including `inReplyTo`) via MCP descriptors.
+- Confluence `baseUrl` normalization in `loadConfluenceConfig` is now tested.
+- Resource handlers dispatched by URI scheme instead of try-all loop.
+- `PullRequestDetail` returned by `getPullRequest` and `updatePullRequest` are shape-identical.
 
 ## [0.2.0] — 2026-06-29
 

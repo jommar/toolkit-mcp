@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildCql,
   cqlQuote,
@@ -7,6 +7,7 @@ import {
   confluenceListSpacesSchema,
   confluenceSearchHandler,
   confluenceGetPageHandler,
+  confluenceWhoamiHandler,
   confluenceToolDescriptors,
 } from './module.js';
 
@@ -77,10 +78,37 @@ describe('handlers', () => {
   });
 });
 
+describe('confluenceWhoamiHandler', () => {
+  let mockConfluence: { whoami: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfluence = { whoami: vi.fn() };
+  });
+
+  it('returns the authenticated user', async () => {
+    const user = { accountId: 'abc', displayName: 'Test User', email: 'test@example.com' };
+    mockConfluence.whoami.mockResolvedValue(user);
+
+    const handler = confluenceWhoamiHandler({ confluence: mockConfluence as any });
+    const result = await handler({});
+
+    expect(mockConfluence.whoami).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(result.content[0].text)).toEqual(user);
+  });
+
+  it('wraps client errors as McpError', async () => {
+    mockConfluence.whoami.mockRejectedValue(new Error('API error'));
+
+    const handler = confluenceWhoamiHandler({ confluence: mockConfluence as any });
+    await expect(handler({})).rejects.toThrow('API error');
+  });
+});
+
 describe('confluenceToolDescriptors', () => {
-  it('exposes exactly the three read tools with object input schemas', () => {
+  it('exposes exactly the four tools with object input schemas', () => {
     const names = confluenceToolDescriptors.map((d) => d.name).sort();
-    expect(names).toEqual(['confluence_get_page', 'confluence_list_spaces', 'confluence_search']);
+    expect(names).toEqual(['confluence_get_page', 'confluence_list_spaces', 'confluence_search', 'confluence_whoami']);
     for (const d of confluenceToolDescriptors) {
       expect(d.inputSchema).toMatchObject({ type: 'object' });
       expect(typeof d.description).toBe('string');

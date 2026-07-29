@@ -14,9 +14,11 @@ import {
   figmaGetStylesHandler,
   figmaGetVariablesHandler,
   figmaGetVersionsHandler,
+  figmaPostCommentHandler,
   figmaGetFileSchema,
   figmaGetImagesSchema,
   figmaGetNodesSchema,
+  figmaPostCommentSchema,
 } from "./module.js";
 
 function makeMockFigma() {
@@ -29,6 +31,7 @@ function makeMockFigma() {
     getStyles: vi.fn(),
     getVariables: vi.fn(),
     getVersions: vi.fn(),
+    postComment: vi.fn(),
   };
 }
 
@@ -76,12 +79,12 @@ describe("figmaGetFileHandler", () => {
     mockFigma = makeMockFigma();
   });
 
-  it("calls getFile with the fileKey and returns the result", async () => {
+  it("calls getFile with the fileKey and passes no optional params by default", async () => {
     const file = {
       name: "Test File",
       lastModified: "2025-01-01T00:00:00Z",
       version: "123",
-      document: {},
+      document: { children: [], id: "0:0" },
       schemaVersion: 0,
     };
     mockFigma.getFile.mockResolvedValue(file);
@@ -89,9 +92,40 @@ describe("figmaGetFileHandler", () => {
     const handler = figmaGetFileHandler({ figma: mockFigma as any });
     const result = await handler({ fileKey: "ABC123def456" });
 
-    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123def456");
+    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123def456", {});
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(file);
+    // Without depth, document should be slimmed
+    expect(parsed.document).toEqual({
+      truncated: true,
+      message: "Use depth or ids to narrow the response",
+    });
+  });
+
+  it("passes optional depth/ids/geometry/version params to getFile", async () => {
+    const file = { name: "Test", lastModified: "", version: "1", document: { children: [] }, schemaVersion: 0 };
+    mockFigma.getFile.mockResolvedValue(file);
+
+    const handler = figmaGetFileHandler({ figma: mockFigma as any });
+    await handler({ fileKey: "ABC123", depth: 2, ids: "1:2", geometry: "paths", version: "v123" });
+
+    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", {
+      depth: 2,
+      ids: "1:2",
+      geometry: "paths",
+      version: "v123",
+    });
+  });
+
+  it("preserves document when depth is set", async () => {
+    const doc = { children: [{ id: "1:2", name: "Frame" }] };
+    const file = { name: "Test", lastModified: "", version: "1", document: doc, schemaVersion: 0 };
+    mockFigma.getFile.mockResolvedValue(file);
+
+    const handler = figmaGetFileHandler({ figma: mockFigma as any });
+    const result = await handler({ fileKey: "ABC123", depth: 2 });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.document).toEqual(doc);
   });
 
   it("rejects empty fileKey via schema validation", async () => {
@@ -323,6 +357,56 @@ describe("figmaGetVariablesHandler", () => {
     const handler = figmaGetVariablesHandler({ figma: mockFigma as any });
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("API error");
+  });
+});
+
+describe("figmaPostCommentHandler", () => {
+  let mockFigma: MockFigma;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFigma = makeMockFigma();
+  });
+
+  it("posts a comment and returns the created comment", async () => {
+    const created = {
+      id: "c1",
+      message: "Great work!",
+      file_key: "ABC123",
+      user: { id: "u1", handle: "alice", img_url: "" },
+      created_at: "2025-01-01T00:00:00Z",
+    };
+    mockFigma.postComment.mockResolvedValue(created);
+
+    const handler = figmaPostCommentHandler({ figma: mockFigma as any });
+    const result = await handler({ fileKey: "ABC123", message: "Great work!" });
+
+    expect(mockFigma.postComment).toHaveBeenCalledWith("ABC123", "Great work!", undefined);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual(created);
+  });
+
+  it("passes parentId for threaded replies", async () => {
+    mockFigma.postComment.mockResolvedValue({ id: "reply1", message: "Thanks!" } as any);
+
+    const handler = figmaPostCommentHandler({ figma: mockFigma as any });
+    await handler({ fileKey: "ABC123", message: "Thanks!", parentId: "c1" });
+
+    expect(mockFigma.postComment).toHaveBeenCalledWith("ABC123", "Thanks!", "c1");
+  });
+
+  it("rejects empty message", async () => {
+    expect(() =>
+      figmaPostCommentSchema.parse({ fileKey: "ABC123", message: "" }),
+    ).toThrow();
+  });
+
+  it("wraps client errors as McpError", async () => {
+    mockFigma.postComment.mockRejectedValue(new Error("API error"));
+
+    const handler = figmaPostCommentHandler({ figma: mockFigma as any });
+    await expect(handler({ fileKey: "ABC123", message: "Hi" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123", message: "Hi" })).rejects.toThrow("API error");
   });
 });
 

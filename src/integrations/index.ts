@@ -57,6 +57,13 @@ export interface IntegrationModule<C extends Record<string, unknown> = Record<st
   }>;
 
   /**
+   * URI scheme prefix that this module's resource handler can handle.
+   * Used for dispatch routing so only the correct handler is tried for a given URI.
+   * Example: "jira://" or "github://"
+   */
+  getResourcePrefix?(): string;
+
+  /**
    * Optional: return a prompt handler that accepts prompt name and args
    * and returns GetPromptResult-compatible content.
    */

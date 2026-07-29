@@ -1,11 +1,10 @@
 import axios, { AxiosInstance, AxiosRequestConfig, isAxiosError } from 'axios';
+import { installRetry } from '../http-retry.js';
 
-const MAX_RETRIES = 3;
 /** Liveness-probe timeout — short so an unreachable Jenkins fails fast at bootstrap. */
 const PING_TIMEOUT_MS = 3_000;
 /** Job names: segments of alphanumerics, space, dot, underscore, hyphen; `/` separates folders. */
 const JOB_NAME_PATTERN = /^[A-Za-z0-9 ._-]+(?:\/[A-Za-z0-9 ._-]+)*$/;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
 /** Jenkins ball colors → friendly status. `_anime` suffix means a build is in progress. */
@@ -89,29 +88,7 @@ export class JenkinsClient {
       auth: { username, password: token },
       timeout: 30_000,
     });
-    this.installRetry();
-  }
-
-  /** Retry transient failures (429 / 5xx / timeouts) with backoff — mirrors the other clients. */
-  private installRetry(): void {
-    this.http.interceptors.response.use(undefined, async (error) => {
-      const config: any = error.config;
-      const status: number | undefined = error.response?.status;
-      const retryable =
-        status === 429 || (status !== undefined && status >= 500 && status < 600) || error.code === 'ECONNABORTED';
-      if (!config || !retryable || config.__noRetry) throw error;
-
-      config.__retryCount = (config.__retryCount ?? 0) + 1;
-      if (config.__retryCount > MAX_RETRIES) throw error;
-
-      const retryAfter = Number(error.response?.headers?.['retry-after']);
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : Math.min(500 * 2 ** (config.__retryCount - 1), 8000);
-      await sleep(delayMs);
-      return this.http(config);
-    });
+    installRetry(this.http, { skipOnCondition: (config: any) => config.__noRetry });
   }
 
   /** Turn a "folder/job" name into a Jenkins `/job/<a>/job/<b>` path with encoded segments. */

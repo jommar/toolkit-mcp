@@ -12,6 +12,7 @@ vi.mock('axios', async () => {
       AxiosError: real.AxiosError,
       isAxiosError: real.isAxiosError,
     },
+    isAxiosError: real.isAxiosError,
   };
 });
 
@@ -310,6 +311,8 @@ describe('GitHubClient', () => {
       const result = await client.findPrsForIssueKeys(manyKeys);
 
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('5 key(s) skipped'));
+      // Warning no longer references CLI vocabulary
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('--with-prs'));
       // With 20 keys split into chunks of 4, we expect 5 parallel queries
       expect(http.get).toHaveBeenCalledTimes(5);
       const allQueries = http.get.mock.calls.map((call: any) => call[1].params.q as string).join(' ');
@@ -507,6 +510,36 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('fetchAllPages', () => {
+    it('returns hasMore=false when fewer pages than maxPages', async () => {
+      // Single page, no Link header → no next page
+      http.get.mockResolvedValueOnce({
+        data: { total_count: 2, items: [{ number: 1 }, { number: 2 }] },
+        headers: {},
+      });
+
+      const client = new GitHubClient();
+      const result = await (client as any).fetchAllPages('/test', { per_page: 100 }, 5);
+      expect(result.items).toHaveLength(2);
+      expect(result.hasMore).toBe(false);
+      expect(result.linkHeader).toBeUndefined();
+    });
+
+    it('returns hasMore=true when more pages remain but capped by maxPages', async () => {
+      // Mock a response with a next Link header
+      http.get.mockResolvedValueOnce({
+        data: { total_count: 200, items: Array.from({ length: 100 }, (_, i) => ({ number: i })) },
+        headers: { link: '<https://api.github.com/test?page=2>; rel="next"' },
+      });
+
+      const client = new GitHubClient();
+      const result = await (client as any).fetchAllPages('/test', { per_page: 100 }, 1);
+      expect(result.items).toHaveLength(100);
+      expect(result.hasMore).toBe(true);
+      expect(result.linkHeader).toBe('<https://api.github.com/test?page=2>; rel="next"');
+    });
+  });
+
   describe('createPullRequest', () => {
     it('calls POST /repos/{repo}/pulls and returns created PR', async () => {
       http.get.mockResolvedValue({ data: { total_count: 0, items: [] } });
@@ -578,6 +611,124 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('getPrComments', () => {
+    it('calls GET /repos/{repo}/issues/{prNumber}/comments and returns mapped comments', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          {
+            id: 555,
+            html_url: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+            body: 'Looks good',
+            user: { login: 'alice' },
+            created_at: '2025-01-01T00:00:00Z',
+          },
+          {
+            id: 556,
+            html_url: 'https://github.com/Org/Repo/pull/42#issuecomment-556',
+            body: 'Needs fix',
+            user: { login: 'bob' },
+            created_at: '2025-01-02T00:00:00Z',
+          },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrComments('Org/Repo', 42);
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/comments', {
+        params: { per_page: 100, page: 1 },
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        id: 555,
+        htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+        body: 'Looks good',
+        user: 'alice',
+        createdAt: '2025-01-01T00:00:00Z',
+      });
+      expect(result[1]).toEqual({
+        id: 556,
+        htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-556',
+        body: 'Needs fix',
+        user: 'bob',
+        createdAt: '2025-01-02T00:00:00Z',
+      });
+    });
+
+    it('returns empty array when no comments', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      const result = await client.getPrComments('Org/Repo', 42);
+
+      expect(result).toEqual([]);
+    });
+
+    it('passes pagination options', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      await client.getPrComments('Org/Repo', 42, { perPage: 50, page: 2 });
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/comments', {
+        params: { per_page: 50, page: 2 },
+      });
+    });
+
+    it('maps null user to "unknown"', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, html_url: '', body: '', user: null, created_at: '' },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrComments('Org/Repo', 42);
+
+      expect(result[0].user).toBe('unknown');
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.getPrComments('invalid', 1)).rejects.toThrow('Invalid repo format');
+      expect(http.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updatePrComment', () => {
+    it('calls PATCH /repos/{repo}/issues/comments/{id} and returns updated comment', async () => {
+      http.patch.mockResolvedValueOnce({
+        data: {
+          id: 555,
+          html_url: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+          body: 'Updated body',
+          user: { login: 'alice' },
+          created_at: '2025-01-01T00:00:00Z',
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.updatePrComment('Org/Repo', 555, 'Updated body');
+
+      expect(http.patch).toHaveBeenCalledWith('/repos/Org/Repo/issues/comments/555', {
+        body: 'Updated body',
+      });
+      expect(result).toEqual({
+        id: 555,
+        htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555',
+        body: 'Updated body',
+        user: 'alice',
+        createdAt: '2025-01-01T00:00:00Z',
+      });
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.updatePrComment('invalid', 1, 'x')).rejects.toThrow('Invalid repo format');
+      expect(http.patch).not.toHaveBeenCalled();
+    });
+  });
+
   describe('listBranches', () => {
     it('calls GET /repos/{repo}/branches and returns parsed branches', async () => {
       http.get.mockResolvedValue({
@@ -615,14 +766,13 @@ describe('GitHubClient', () => {
       });
       http.get.mockResolvedValueOnce({ data: [] });
       // Mock pulls response for matching branch
+      // Note: /pulls endpoint has merged_at at the top level, not inside pull_request
       http.get.mockResolvedValueOnce({
         data: [
           {
             number: 101,
             title: 'Feature for TRIPS-42',
             state: 'open',
-            pull_request: {},
-            repository_url: 'https://api.github.com/repos/TransActComm/TravelTracker',
             user: { login: 'dev' },
             created_at: '2025-01-01T00:00:00Z',
             html_url: 'https://github.com/TransActComm/TravelTracker/pull/101',
@@ -660,6 +810,39 @@ describe('GitHubClient', () => {
       const client = new GitHubClient();
       const result = await client.searchPrsByBranchName('TRIPS-999');
       expect(result.size).toBe(0);
+    });
+
+    it('maps state to "merged" when /pulls response has top-level merged_at', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { ref: 'refs/heads/feature/TRIPS-77-merged' },
+        ],
+      });
+      http.get.mockResolvedValueOnce({ data: [] });
+      // /pulls response with merged_at at top level (not inside pull_request)
+      http.get.mockResolvedValueOnce({
+        data: [
+          {
+            number: 77,
+            title: 'Merged PR for TRIPS-77',
+            state: 'closed',
+            merged_at: '2025-06-01T12:00:00Z',
+            user: { login: 'merger' },
+            created_at: '2025-05-01T00:00:00Z',
+            html_url: 'https://github.com/TransActComm/TravelTracker/pull/77',
+          },
+        ],
+      });
+      http.get.mockResolvedValueOnce({ data: [] });
+      http.get.mockResolvedValueOnce({ data: [] });
+      http.get.mockResolvedValueOnce({ data: [{ state: 'APPROVED' }] });
+
+      const client = new GitHubClient();
+      const result = await client.searchPrsByBranchName('TRIPS-77');
+      expect(result.has('TRIPS-77')).toBe(true);
+      expect(result.get('TRIPS-77')).toHaveLength(1);
+      expect(result.get('TRIPS-77')![0].state).toBe('merged');
+      expect(result.get('TRIPS-77')![0].reviewStatus).toBe('APPROVED');
     });
   });
 
@@ -710,6 +893,46 @@ describe('GitHubClient', () => {
       expect(result.changedFiles).toBe(5);
       expect(result.additions).toBe(100);
       expect(result.deletions).toBe(20);
+      // New read-side fields
+      expect(result.requestedReviewers).toEqual([]);
+      expect(result.requestedTeams).toEqual([]);
+      expect(result.labels).toEqual([]);
+      expect(result.assignees).toEqual([]);
+    });
+
+    it('maps new PullRequestDetail read-side fields', async () => {
+      const prDetail = {
+        number: 42,
+        title: 'Fix the thing',
+        body: null,
+        state: 'open',
+        html_url: 'https://github.com/Org/Repo/pull/42',
+        user: { login: 'alice' },
+        created_at: '2025-01-01T00:00:00Z',
+        updated_at: '2025-01-02T00:00:00Z',
+        closed_at: null,
+        merged_at: null,
+        mergeable: true,
+        merged_by: null,
+        base: { ref: 'main' },
+        head: { ref: 'feature', sha: 'abc' },
+        changed_files: 1,
+        additions: 10,
+        deletions: 1,
+        requested_reviewers: [{ login: 'alice' }, { login: 'bob' }],
+        requested_teams: [{ slug: 'team-a' }],
+        labels: [{ name: 'bug' }, { name: 'frontend' }],
+        assignees: [{ login: 'alice' }],
+      };
+      http.get.mockResolvedValueOnce({ data: prDetail });
+
+      const client = new GitHubClient();
+      const result = await client.getPullRequest('Org/Repo', 42);
+
+      expect(result.requestedReviewers).toEqual(['alice', 'bob']);
+      expect(result.requestedTeams).toEqual(['team-a']);
+      expect(result.labels).toEqual(['bug', 'frontend']);
+      expect(result.assignees).toEqual(['alice']);
     });
 
     it('maps state to "merged" when closed with merged_at', async () => {
@@ -798,6 +1021,246 @@ describe('GitHubClient', () => {
     it('throws for invalid repo format', async () => {
       const client = new GitHubClient();
       await expect(client.getPullRequest('invalid', 1)).rejects.toThrow('Invalid repo format');
+    });
+  });
+
+  describe('getPrFiles', () => {
+    it('returns files for a pull request', async () => {
+      const apiFiles = [
+        { filename: 'src/a.ts', status: 'modified', additions: 10, deletions: 5, changes: 15, patch: '@@ -1 +1 @@\n- old code\n+ new code', previous_filename: null },
+        { filename: 'src/b.ts', status: 'added', additions: 20, deletions: 0, changes: 20, patch: '@@ -0,0 +1 @@\n+ new file', previous_filename: null },
+      ];
+      http.get.mockResolvedValueOnce({ data: apiFiles });
+
+      const client = new GitHubClient();
+      const result = await client.getPrFiles('Org/Repo', 42);
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/files', {
+        params: { per_page: 100, page: 1 },
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0].filename).toBe('src/a.ts');
+      expect(result[0].status).toBe('modified');
+      expect(result[0].additions).toBe(10);
+      expect(result[0].deletions).toBe(5);
+      expect(result[0].changes).toBe(15);
+      expect(result[0].patch).toBe('@@ -1 +1 @@\n- old code\n+ new code');
+      expect(result[1].filename).toBe('src/b.ts');
+      expect(result[1].status).toBe('added');
+    });
+
+    it('returns previous_filename when present', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { filename: 'src/moved.ts', status: 'renamed', additions: 0, deletions: 0, changes: 0, patch: null, previous_filename: 'src/old.ts' },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrFiles('Org/Repo', 42);
+
+      expect(result[0].previous_filename).toBe('src/old.ts');
+    });
+
+    it('truncates patch when it exceeds 2000 characters', async () => {
+      const longPatch = 'x'.repeat(2500);
+      http.get.mockResolvedValueOnce({
+        data: [
+          { filename: 'f.ts', status: 'modified', additions: 1, deletions: 1, changes: 2, patch: longPatch },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrFiles('Org/Repo', 42);
+
+      expect(result[0].patch).toHaveLength(2000);
+      expect(result[0].truncated).toBe(true);
+    });
+
+    it('does not truncate short patches', async () => {
+      const shortPatch = 'x'.repeat(100);
+      http.get.mockResolvedValueOnce({
+        data: [
+          { filename: 'f.ts', status: 'modified', additions: 1, deletions: 1, changes: 2, patch: shortPatch },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrFiles('Org/Repo', 42);
+
+      expect(result[0].patch).toHaveLength(100);
+      expect(result[0].truncated).toBeUndefined();
+    });
+
+    it('handles missing patch', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { filename: 'f.ts', status: 'modified', additions: 1, deletions: 1, changes: 2 },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrFiles('Org/Repo', 42);
+
+      expect(result[0].patch).toBeUndefined();
+      expect(result[0].truncated).toBeUndefined();
+    });
+
+    it('accepts pagination options', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      await client.getPrFiles('Org/Repo', 42, { perPage: 50, page: 2 });
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/files', {
+        params: { per_page: 50, page: 2 },
+      });
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.getPrFiles('invalid', 1)).rejects.toThrow('Invalid repo format');
+    });
+  });
+
+  describe('getPrCommits', () => {
+    it('returns commits for a pull request', async () => {
+      const apiCommits = [
+        {
+          sha: 'abc123',
+          commit: { message: 'Fix the bug', author: { name: 'Alice', email: 'alice@example.com', date: '2025-01-01T00:00:00Z' } },
+          author: { login: 'alice' },
+        },
+        {
+          sha: 'def456',
+          commit: { message: 'Add feature', author: { name: 'Bob', email: 'bob@example.com', date: '2025-01-02T00:00:00Z' } },
+          author: { login: 'bob' },
+        },
+      ];
+      http.get.mockResolvedValueOnce({ data: apiCommits });
+
+      const client = new GitHubClient();
+      const result = await client.getPrCommits('Org/Repo', 42);
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/commits', {
+        params: { per_page: 100, page: 1 },
+      });
+      expect(result).toHaveLength(2);
+      expect(result[0].sha).toBe('abc123');
+      expect(result[0].commit.message).toBe('Fix the bug');
+      expect(result[0].commit.author.name).toBe('Alice');
+      expect(result[0].commit.author.email).toBe('alice@example.com');
+      expect(result[0].commit.author.date).toBe('2025-01-01T00:00:00Z');
+      expect(result[0].author.login).toBe('alice');
+    });
+
+    it('handles empty commit list', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      const result = await client.getPrCommits('Org/Repo', 42);
+
+      expect(result).toEqual([]);
+    });
+
+    it('handles null author gracefully', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          {
+            sha: 'abc',
+            commit: { message: 'Fix', author: null },
+            author: null,
+          },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPrCommits('Org/Repo', 42);
+
+      expect(result[0].sha).toBe('abc');
+      expect(result[0].commit.author.name).toBe('');
+      expect(result[0].author.login).toBe('');
+    });
+
+    it('accepts pagination options', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      await client.getPrCommits('Org/Repo', 42, { perPage: 10, page: 3 });
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/commits', {
+        params: { per_page: 10, page: 3 },
+      });
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.getPrCommits('invalid', 1)).rejects.toThrow('Invalid repo format');
+    });
+  });
+
+  describe('getFileContents', () => {
+    it('returns decoded file contents', async () => {
+      const rawContent = Buffer.from('console.log("hello");').toString('base64');
+      http.get.mockResolvedValueOnce({
+        data: {
+          path: 'src/file.ts',
+          content: rawContent,
+          encoding: 'base64',
+          size: 24,
+          sha: 'abc123def',
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getFileContents('Org/Repo', 'src/file.ts');
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/contents/src/file.ts', {
+        params: {},
+      });
+      expect(result.path).toBe('src/file.ts');
+      expect(result.content).toBe('console.log("hello");');
+      expect(result.encoding).toBe('base64');
+      expect(result.size).toBe(24);
+      expect(result.sha).toBe('abc123def');
+      expect(result.truncated).toBe(false);
+    });
+
+    it('passes ref when provided', async () => {
+      http.get.mockResolvedValueOnce({
+        data: { path: 'f.ts', content: 'Y29uc29sZS5sb2coImhlbGxvIik7', encoding: 'base64', size: 24, sha: 'abc' },
+      });
+
+      const client = new GitHubClient();
+      await client.getFileContents('Org/Repo', 'f.ts', 'main');
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/contents/f.ts', {
+        params: { ref: 'main' },
+      });
+    });
+
+    it('returns truncated when file exceeds 100KB', async () => {
+      http.get.mockResolvedValueOnce({
+        data: {
+          path: 'big-file.ts',
+          content: '',
+          encoding: 'base64',
+          size: 200_000,
+          sha: 'abc123',
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getFileContents('Org/Repo', 'big-file.ts');
+
+      expect(result.truncated).toBe(true);
+      expect(result.content).toBe('');
+      expect(result.message).toContain('100KB');
+    });
+
+    it('throws for invalid repo format', async () => {
+      const client = new GitHubClient();
+      await expect(client.getFileContents('invalid', 'f.ts')).rejects.toThrow('Invalid repo format');
     });
   });
 
@@ -1046,9 +1509,55 @@ describe('GitHubClient', () => {
       });
     });
 
+    it('sends label filter in query', async () => {
+      http.get.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+
+      const client = new GitHubClient();
+      await client.searchPullRequestsByQuery({ label: 'bug' });
+
+      expect(http.get).toHaveBeenCalledWith('/search/issues', {
+        params: expect.objectContaining({
+          q: expect.stringContaining('label:bug'),
+        }),
+      });
+    });
+
+    it('sends reviewRequested filter in query', async () => {
+      http.get.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+
+      const client = new GitHubClient();
+      await client.searchPullRequestsByQuery({ reviewRequested: 'alice' });
+
+      expect(http.get).toHaveBeenCalledWith('/search/issues', {
+        params: expect.objectContaining({
+          q: expect.stringContaining('review-requested:alice'),
+        }),
+      });
+    });
+
+    it('sends base filter in query', async () => {
+      http.get.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+
+      const client = new GitHubClient();
+      await client.searchPullRequestsByQuery({ base: 'main' });
+
+      expect(http.get).toHaveBeenCalledWith('/search/issues', {
+        params: expect.objectContaining({
+          q: expect.stringContaining('base:main'),
+        }),
+      });
+    });
+
     it('throws when no filter is provided', async () => {
       const client = new GitHubClient();
       await expect(client.searchPullRequestsByQuery({})).rejects.toThrow('At least one');
+    });
+
+    it('accepts label as the only filter', async () => {
+      http.get.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
+
+      const client = new GitHubClient();
+      await expect(client.searchPullRequestsByQuery({ label: 'bug' })).resolves.toEqual([]);
     });
   });
 
@@ -1317,6 +1826,112 @@ describe('GitHubClient', () => {
       client.createPrReviewComment('invalid', 1, { body: 'x', path: 'f', commitId: 'a', line: 1 }),
     ).rejects.toThrow('Invalid repo format');
     expect(http.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('replyToPrReviewComment', () => {
+  it('posts to the replies endpoint with only a body', async () => {
+    http.post.mockResolvedValue({
+      data: {
+        id: 9, path: 'src/file.ts', line: 42, body: 'Agreed', commit_id: 'abc',
+        side: 'RIGHT', start_line: null, start_side: null,
+        user: { login: 'bob' }, created_at: '', updated_at: '',
+        html_url: 'https://github.com/Org/Repo/pull/42#discussion_r9',
+        in_reply_to_id: 5, original_line: null, original_start_line: null,
+      },
+    });
+
+    const client = new GitHubClient();
+    const result = await client.replyToPrReviewComment('Org/Repo', 42, 5, 'Agreed');
+
+    expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments/5/replies', {
+      body: 'Agreed',
+    });
+    expect(result.id).toBe(9);
+    expect(result.inReplyToId).toBe(5);
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(
+      client.replyToPrReviewComment('invalid', 1, 5, 'x'),
+    ).rejects.toThrow('Invalid repo format');
+    expect(http.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('setPullRequestDraft', () => {
+  const prDetail = {
+    number: 42,
+    node_id: 'PR_node123',
+    title: 'Title',
+    body: null,
+    state: 'open',
+    draft: false,
+    html_url: 'https://github.com/Org/Repo/pull/42',
+    user: { login: 'alice' },
+    created_at: '', updated_at: '', closed_at: null, merged_at: null,
+    mergeable: true, merged_by: null,
+    base: { ref: 'main' }, head: { ref: 'feature', sha: 'abc' },
+    changed_files: 1, additions: 1, deletions: 0,
+  };
+
+  it('converts to draft via the GraphQL mutation and returns refreshed details', async () => {
+    http.get
+      .mockResolvedValueOnce({ data: prDetail })
+      .mockResolvedValueOnce({ data: { ...prDetail, draft: true } });
+    http.post.mockResolvedValue({ data: { data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } } });
+
+    const client = new GitHubClient();
+    const result = await client.setPullRequestDraft('Org/Repo', 42, true);
+
+    expect(http.post).toHaveBeenCalledWith('/graphql', {
+      query: expect.stringContaining('convertPullRequestToDraft'),
+      variables: { id: 'PR_node123' },
+    });
+    expect(result.draft).toBe(true);
+  });
+
+  it('marks ready for review when draft is false', async () => {
+    http.get
+      .mockResolvedValueOnce({ data: { ...prDetail, draft: true } })
+      .mockResolvedValueOnce({ data: prDetail });
+    http.post.mockResolvedValue({ data: { data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } } });
+
+    const client = new GitHubClient();
+    const result = await client.setPullRequestDraft('Org/Repo', 42, false);
+
+    expect(http.post).toHaveBeenCalledWith('/graphql', {
+      query: expect.stringContaining('markPullRequestReadyForReview'),
+      variables: { id: 'PR_node123' },
+    });
+    expect(result.draft).toBe(false);
+  });
+
+  it('throws when GraphQL returns errors', async () => {
+    http.get.mockResolvedValueOnce({ data: prDetail });
+    http.post.mockResolvedValue({ data: { errors: [{ message: 'Resource not accessible' }] } });
+
+    const client = new GitHubClient();
+    await expect(client.setPullRequestDraft('Org/Repo', 42, true)).rejects.toThrow(
+      'GitHub GraphQL error: Resource not accessible',
+    );
+  });
+
+  it('throws when the PR has no node id', async () => {
+    http.get.mockResolvedValueOnce({ data: { ...prDetail, node_id: undefined } });
+
+    const client = new GitHubClient();
+    await expect(client.setPullRequestDraft('Org/Repo', 42, true)).rejects.toThrow(
+      'Could not resolve node id for Org/Repo#42',
+    );
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
+  it('throws for invalid repo format', async () => {
+    const client = new GitHubClient();
+    await expect(client.setPullRequestDraft('invalid', 42, true)).rejects.toThrow('Invalid repo format');
+    expect(http.get).not.toHaveBeenCalled();
   });
 });
 
@@ -1601,6 +2216,231 @@ describe('getReviewStatus regression', () => {
       const client = new GitHubClient();
       const result = await (client as any).getReviewStatus('Org/Repo', 42);
       expect(result).toBe('CHANGES_REQUESTED');
+    });
+  });
+
+  describe('graphql helper', () => {
+    it('setPullRequestDraft succeeds via graphql (regression)', async () => {
+      // Mock the REST call for node_id resolution
+      http.get.mockResolvedValueOnce({ data: { node_id: 'PR_node1' } });
+      // Mock the GraphQL POST
+      http.post.mockResolvedValueOnce({ data: { data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } } });
+      // Mock the follow-up getPullRequest call
+      http.get.mockResolvedValueOnce({ data: {
+        number: 42, title: 'PR', body: null, state: 'open',
+        html_url: '', user: { login: 'u' },
+        created_at: '', updated_at: '', closed_at: null, merged_at: null,
+        mergeable: null, merged_by: null,
+        base: { ref: 'main' }, head: { ref: 'f', sha: 's' },
+        changed_files: 1, additions: 1, deletions: 0,
+      } });
+
+      const client = new GitHubClient();
+      const result = await client.setPullRequestDraft('Org/Repo', 42, true);
+
+      expect(http.post).toHaveBeenCalledWith('/graphql', {
+        query: expect.stringContaining('convertPullRequestToDraft'),
+        variables: { id: 'PR_node1' },
+      });
+      expect(result.number).toBe(42);
+    });
+
+    it('throws on graphql errors array', async () => {
+      http.get.mockResolvedValueOnce({ data: { node_id: 'PR_node1' } });
+      http.post.mockResolvedValueOnce({ data: { errors: [{ message: 'Resource not accessible' }] } });
+
+      const client = new GitHubClient();
+      await expect(client.setPullRequestDraft('Org/Repo', 42, true)).rejects.toThrow('GitHub GraphQL error');
+    });
+  });
+
+  describe('deletePrComment', () => {
+    it('sends DELETE to the issues comments endpoint', async () => {
+      http.delete.mockResolvedValueOnce({ data: {} });
+
+      const client = new GitHubClient();
+      await client.deletePrComment('Org/Repo', 123);
+
+      expect(http.delete).toHaveBeenCalledWith('/repos/Org/Repo/issues/comments/123');
+    });
+
+    it('throws for invalid repo', async () => {
+      const client = new GitHubClient();
+      await expect(client.deletePrComment('invalid', 1)).rejects.toThrow('Invalid repo format');
+    });
+  });
+
+  describe('mergePr', () => {
+    it('sends PUT to the merge endpoint with default method', async () => {
+      http.put.mockResolvedValueOnce({ data: { merged: true, message: 'Pull Request successfully merged', sha: 'abc' } });
+
+      const client = new GitHubClient();
+      const result = await client.mergePr('Org/Repo', 42);
+
+      expect(http.put).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/merge', { merge_method: 'merge' });
+      expect(result.merged).toBe(true);
+      expect(result.sha).toBe('abc');
+    });
+
+    it('passes mergeMethod and sha', async () => {
+      http.put.mockResolvedValueOnce({ data: { merged: true, message: 'Squashed', sha: 'def' } });
+
+      const client = new GitHubClient();
+      await client.mergePr('Org/Repo', 42, { mergeMethod: 'squash', sha: 'def' });
+
+      expect(http.put).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/merge', { merge_method: 'squash', sha: 'def' });
+    });
+
+    it('throws 405 clearly', async () => {
+      const axiosError = new Error('Request failed');
+      (axiosError as any).isAxiosError = true;
+      (axiosError as any).response = { status: 405, data: { message: 'Pull request is not mergeable' } };
+
+      http.put.mockRejectedValueOnce(axiosError);
+
+      const client = new GitHubClient();
+      await expect(client.mergePr('Org/Repo', 42)).rejects.toThrow('not mergeable');
+    });
+
+    it('throws 409 clearly', async () => {
+      const axiosError = new Error('Conflict');
+      (axiosError as any).isAxiosError = true;
+      (axiosError as any).response = { status: 409, data: { message: 'SHA does not match' } };
+
+      http.put.mockRejectedValueOnce(axiosError);
+
+      const client = new GitHubClient();
+      await expect(client.mergePr('Org/Repo', 42)).rejects.toThrow('SHA mismatch');
+    });
+  });
+
+  describe('requestReviewers / removeReviewers', () => {
+    it('sends POST to requested_reviewers', async () => {
+      http.post.mockResolvedValueOnce({ data: { requested_reviewers: [{ login: 'alice' }], requested_teams: [] } });
+
+      const client = new GitHubClient();
+      const result = await client.requestReviewers('Org/Repo', 42, ['alice']);
+
+      expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/requested_reviewers', { reviewers: ['alice'] });
+      expect(result.requestedReviewers).toEqual(['alice']);
+    });
+
+    it('sends DELETE to requested_reviewers', async () => {
+      http.delete.mockResolvedValueOnce({ data: { requested_reviewers: [], requested_teams: [] } });
+
+      const client = new GitHubClient();
+      const result = await client.removeReviewers('Org/Repo', 42, ['alice']);
+
+      expect(http.delete).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/requested_reviewers', {
+        data: { reviewers: ['alice'] },
+      });
+      expect(result.requestedReviewers).toEqual([]);
+    });
+  });
+
+  describe('updateLabels', () => {
+    it('sends PUT to issues labels endpoint', async () => {
+      http.put.mockResolvedValueOnce({ data: [{ name: 'bug' }, { name: 'frontend' }] });
+
+      const client = new GitHubClient();
+      const result = await client.updateLabels('Org/Repo', 42, ['bug', 'frontend']);
+
+      expect(http.put).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/labels', { labels: ['bug', 'frontend'] });
+      expect(result).toEqual(['bug', 'frontend']);
+    });
+  });
+
+  describe('updateAssignees', () => {
+    it('sends POST to issues assignees endpoint', async () => {
+      http.post.mockResolvedValueOnce({ data: { assignees: [{ login: 'alice' }] } });
+
+      const client = new GitHubClient();
+      const result = await client.updateAssignees('Org/Repo', 42, ['alice']);
+
+      expect(http.post).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/assignees', { assignees: ['alice'] });
+      expect(result).toEqual(['alice']);
+    });
+  });
+
+  describe('dismissPrReview', () => {
+    it('sends PUT to dismissals endpoint', async () => {
+      http.put.mockResolvedValueOnce({ data: {} });
+
+      const client = new GitHubClient();
+      const result = await client.dismissPrReview('Org/Repo', 42, 123, 'Addressed in follow-up');
+
+      expect(http.put).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews/123/dismissals', {
+        message: 'Addressed in follow-up',
+      });
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('getReviewThreads', () => {
+    it('paginates through GraphQL review threads', async () => {
+      http.post.mockResolvedValueOnce({
+        data: {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    { id: 't1', isResolved: false, isOutdated: false, path: 'a.ts', line: 10, originalLine: null },
+                  ],
+                  pageInfo: { endCursor: null, hasNextPage: false },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const client = new GitHubClient();
+      const threads = await client.getReviewThreads('Org/Repo', 42);
+
+      expect(http.post).toHaveBeenCalledWith('/graphql', {
+        query: expect.stringContaining('reviewThreads'),
+        variables: { owner: 'Org', name: 'Repo', prNumber: 42, cursor: null },
+      });
+      expect(threads).toHaveLength(1);
+      expect(threads[0].id).toBe('t1');
+      expect(threads[0].isResolved).toBe(false);
+    });
+  });
+
+  describe('resolveReviewThread / unresolveReviewThread', () => {
+    it('resolves a thread via GraphQL mutation', async () => {
+      http.post.mockResolvedValueOnce({
+        data: {
+          data: {
+            resolveReviewThread: { thread: { isResolved: true } },
+          },
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.resolveReviewThread('Org/Repo', 'thread1');
+
+      expect(http.post).toHaveBeenCalledWith('/graphql', {
+        query: expect.stringContaining('resolveReviewThread'),
+        variables: { threadId: 'thread1' },
+      });
+      expect(result.isResolved).toBe(true);
+    });
+
+    it('unresolves a thread via GraphQL mutation', async () => {
+      http.post.mockResolvedValueOnce({
+        data: {
+          data: {
+            unresolveReviewThread: { thread: { isResolved: false } },
+          },
+        },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.unresolveReviewThread('Org/Repo', 'thread1');
+
+      expect(result.isResolved).toBe(false);
     });
   });
 });

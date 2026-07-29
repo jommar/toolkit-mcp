@@ -16,6 +16,7 @@ function makeMockFigma() {
     getStyles: vi.fn(),
     getVariables: vi.fn(),
     getVersions: vi.fn(),
+    postComment: vi.fn(),
   };
 }
 
@@ -63,9 +64,9 @@ describe("FigmaModule", () => {
       mockFigma = makeMockFigma();
     });
 
-    it("returns 8 handlers with expected names", () => {
+    it("returns 9 handlers with expected names", () => {
       const handlers = mod.createToolHandlers({ figma: mockFigma as any });
-      expect(Object.keys(handlers)).toHaveLength(8);
+      expect(Object.keys(handlers)).toHaveLength(9);
       expect(handlers).toHaveProperty("figma_get_me");
       expect(handlers).toHaveProperty("figma_get_file");
       expect(handlers).toHaveProperty("figma_get_nodes");
@@ -74,6 +75,7 @@ describe("FigmaModule", () => {
       expect(handlers).toHaveProperty("figma_get_styles");
       expect(handlers).toHaveProperty("figma_get_variables");
       expect(handlers).toHaveProperty("figma_get_versions");
+      expect(handlers).toHaveProperty("figma_post_comment");
     });
 
     it("figma_get_me delegates to handler with parsed args", async () => {
@@ -97,16 +99,21 @@ describe("FigmaModule", () => {
         name: "Test",
         lastModified: "",
         version: "1",
-        document: {},
+        document: { children: [] },
         schemaVersion: 0,
       });
 
       const handlers = mod.createToolHandlers({ figma: mockFigma as any });
       const result = await handlers.figma_get_file({ fileKey: "ABC123" });
 
-      expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123");
+      expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", {});
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.name).toBe("Test");
+      // Without depth, document is slimmed
+      expect(parsed.document).toEqual({
+        truncated: true,
+        message: "Use depth or ids to narrow the response",
+      });
     });
 
     it("figma_get_nodes delegates to handler with parsed args", async () => {
@@ -214,9 +221,9 @@ describe("FigmaModule", () => {
   });
 
   describe("getToolDescriptors", () => {
-    it("returns 8 tool descriptors", () => {
+    it("returns 9 tool descriptors", () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(8);
+      expect(descriptors).toHaveLength(9);
     });
 
     it("descriptors have name, description, and inputSchema", () => {
@@ -230,6 +237,7 @@ describe("FigmaModule", () => {
       expect(names).toContain("figma_get_styles");
       expect(names).toContain("figma_get_variables");
       expect(names).toContain("figma_get_versions");
+      expect(names).toContain("figma_post_comment");
       for (const d of descriptors) {
         expect(d.description).toBeTruthy();
         expect(d.inputSchema).toBeDefined();

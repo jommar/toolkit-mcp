@@ -72,6 +72,7 @@ vi.mock('./services/index.js', () => ({
   GitHubClient: class MockGitHubClient {},
   FigmaClient: class MockFigmaClient {},
   JenkinsClient: class MockJenkinsClient {},
+  ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
 // Mock the config so loadMcpConfig returns a predictable value
@@ -80,7 +81,6 @@ vi.mock('./mcp-config.js', () => ({
     transport: 'stdio' as const,
     port: 3000,
     logLevel: 'silent' as const,
-    jira: null,
   })),
 }));
 

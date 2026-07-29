@@ -1,9 +1,7 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
 import { JiraConfig, loadConfig } from '../config.js';
 import { DEV_FIELDS, SlimIssue, toSlimIssue, toSlimComment } from '../slim.js';
-
-const MAX_RETRIES = 3;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { installRetry } from '../http-retry.js';
 
 export interface JiraUser {
   accountId: string;
@@ -59,34 +57,7 @@ export class JiraClient {
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       timeout: 30_000,
     });
-    this.installRetry();
-  }
-
-  /**
-   * Retry transient failures: 429 (rate limit — honor Retry-After) and 5xx / timeouts,
-   * with exponential backoff. Non-idempotent writes are retried too, but only on errors
-   * where the request did not apply (429/timeout/5xx before processing), which is the
-   * standard Jira-client tradeoff.
-   */
-  private installRetry(): void {
-    this.http.interceptors.response.use(undefined, async (error) => {
-      const config: any = error.config;
-      const status: number | undefined = error.response?.status;
-      const retryable =
-        status === 429 || (status !== undefined && status >= 500 && status < 600) || error.code === 'ECONNABORTED';
-      if (!config || !retryable) throw error;
-
-      config.__retryCount = (config.__retryCount ?? 0) + 1;
-      if (config.__retryCount > MAX_RETRIES) throw error;
-
-      const retryAfter = Number(error.response?.headers?.['retry-after']);
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : Math.min(500 * 2 ** (config.__retryCount - 1), 8000);
-      await sleep(delayMs);
-      return this.http(config);
-    });
+    installRetry(this.http);
   }
 
   /** Current authenticated user — the simplest way to verify credentials. */
@@ -224,6 +195,11 @@ export class JiraClient {
     return data;
   }
 
+  /** Delete a comment by issue key and comment id. Returns nothing on success (204). */
+  async deleteComment(key: string, commentId: string): Promise<void> {
+    await this.http.delete(`/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`);
+  }
+
   /** List the transitions available from the issue's current status. */
   async listTransitions(key: string): Promise<JiraTransition[]> {
     const { data } = await this.http.get<{ transitions: JiraTransition[] }>(
@@ -257,6 +233,14 @@ export class JiraClient {
     const me = await this.whoami();
     await this.assignIssue(key, me.accountId);
     return me;
+  }
+
+  /** Search for users by display name or email (uses GET /rest/api/3/user/search). */
+  async searchUsers(query: string): Promise<JiraUser[]> {
+    const { data } = await this.http.get<JiraUser[]>('/user/search', {
+      params: { query },
+    });
+    return data;
   }
 
   /** List the available issue link types (name + inward/outward labels). */

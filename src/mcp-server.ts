@@ -8,12 +8,13 @@ import {
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { isAxiosError } from 'axios';
 import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient } from './services/index.js';
 import { z } from 'zod';
 import { loadMcpConfig } from './mcp-config.js';
 import { createHealthHandler } from './mcp-health.js';
 import { modules } from './integrations/index.js';
-import type { ToolHandlerFn, ToolDescriptor } from './integrations/index.js';
+import type { ToolHandlerFn, ToolDescriptor, IntegrationModule } from './integrations/index.js';
 
 export async function main(): Promise<void> {
   const config = loadMcpConfig();
@@ -92,14 +93,14 @@ export async function main(): Promise<void> {
 
   // Create server
   const server = new Server(
-    { name: 'toolkit-mcp', version: '0.1.0' },
+    { name: 'toolkit-mcp', version: '0.3.0' },
     { capabilities: { tools: {}, resources: {}, prompts: {} } },
   );
 
   // Collect handlers and descriptors from all eligible modules
   const allHandlers: Record<string, ToolHandlerFn> = {};
   const allDescriptors: ToolDescriptor[] = [];
-  const resourceHandlers: Array<(uri: string) => Promise<any>> = [];
+  const resourceHandlers: Array<{ prefix: string; handler: (uri: string) => Promise<any> }> = [];
   const promptHandlers: Array<(name: string, args: Record<string, unknown> | undefined) => Promise<any>> = [];
 
   // Always register built-in health tool
@@ -136,7 +137,8 @@ export async function main(): Promise<void> {
 
       if (mod.getResourceHandler) {
         const rh = mod.getResourceHandler(clients);
-        resourceHandlers.push(rh);
+        const prefix = mod.getResourcePrefix?.() ?? '';
+        resourceHandlers.push({ prefix, handler: rh });
       }
 
       if (mod.getPromptHandler) {
@@ -152,6 +154,25 @@ export async function main(): Promise<void> {
 
   log(`Registered ${Object.keys(allHandlers).length} tools, ${resourceHandlers.length} resource groups, ${promptHandlers.length} prompt groups`);
 
+  /** Convert an error to a descriptive McpError with status detail for axios errors. */
+  function toMcpError(err: unknown): McpError {
+    if (err instanceof McpError) return err;
+    if (err instanceof z.ZodError) {
+      return new McpError(ErrorCode.InvalidParams, `Validation error: ${err.message}`);
+    }
+    if (isAxiosError(err)) {
+      const status = err.response?.status;
+      const data = err.response?.data as Record<string, unknown> | undefined;
+      // Extract a human-readable detail from the response body
+      let detail = err.message;
+      if (data && typeof data === 'object') {
+        detail = (data as any).message || (data as any).errorMessages?.join('; ') || (data as any).error || detail;
+      }
+      return new McpError(ErrorCode.InternalError, `API error${status ? ` (${status})` : ''}: ${detail}`);
+    }
+    return new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+  }
+
   // -----------------------------------------------------------------------
   // Central dispatch for tools
   // -----------------------------------------------------------------------
@@ -164,14 +185,7 @@ export async function main(): Promise<void> {
     try {
       return await handler((args as Record<string, unknown>) ?? {});
     } catch (err) {
-      if (err instanceof McpError) throw err;
-      if (err instanceof z.ZodError) {
-        throw new McpError(ErrorCode.InvalidParams, `Validation error: ${err.message}`);
-      }
-      throw new McpError(
-        ErrorCode.InternalError,
-        err instanceof Error ? err.message : String(err),
-      );
+      throw toMcpError(err);
     }
   });
 
@@ -183,22 +197,25 @@ export async function main(): Promise<void> {
   }));
 
   // -----------------------------------------------------------------------
-  // Central dispatch for resources
+  // Central dispatch for resources — dispatch by URI scheme
   // -----------------------------------------------------------------------
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const uri = request.params.uri;
-    let lastError: Error | undefined;
     for (const rh of resourceHandlers) {
-      try {
-        return await rh(uri);
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        // Continue to next handler
+      if (uri.startsWith(rh.prefix)) {
+        try {
+          return await rh.handler(uri);
+        } catch (err) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
     }
     throw new McpError(
       ErrorCode.InvalidParams,
-      lastError?.message ?? `Unknown resource: ${uri}`,
+      `Unknown resource: ${uri}`,
     );
   });
 

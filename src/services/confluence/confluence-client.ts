@@ -1,9 +1,7 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
 import he from 'he';
 import { ConfluenceConfig, loadConfluenceConfig } from '../config.js';
-
-const MAX_RETRIES = 3;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { installRetry } from '../http-retry.js';
 
 export interface ConfluenceUser {
   accountId: string;
@@ -73,29 +71,7 @@ export class ConfluenceClient {
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       timeout: 30_000,
     });
-    this.installRetry();
-  }
-
-  /** Retry transient failures: 429 (honor Retry-After) and 5xx / timeouts, with backoff. */
-  private installRetry(): void {
-    this.http.interceptors.response.use(undefined, async (error) => {
-      const config: any = error.config;
-      const status: number | undefined = error.response?.status;
-      const retryable =
-        status === 429 || (status !== undefined && status >= 500 && status < 600) || error.code === 'ECONNABORTED';
-      if (!config || !retryable) throw error;
-
-      config.__retryCount = (config.__retryCount ?? 0) + 1;
-      if (config.__retryCount > MAX_RETRIES) throw error;
-
-      const retryAfter = Number(error.response?.headers?.['retry-after']);
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : Math.min(500 * 2 ** (config.__retryCount - 1), 8000);
-      await sleep(delayMs);
-      return this.http(config);
-    });
+    installRetry(this.http);
   }
 
   private absoluteUrl(webui?: string): string | undefined {

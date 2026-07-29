@@ -2,6 +2,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 vi.mock('../../services/index.js', () => ({
   GitHubClient: class MockGitHubClient {},
+  ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
 import { GitHubModule } from './index.js';
@@ -59,9 +60,9 @@ describe('GitHubModule', () => {
       mockGitHub = makeMockGitHub();
     });
 
-    it('returns 16 handlers', () => {
+    it('returns 28 handlers', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
-      expect(Object.keys(handlers)).toHaveLength(16);
+      expect(Object.keys(handlers)).toHaveLength(28);
       expect(handlers).toHaveProperty('github_get_prs');
       expect(handlers).toHaveProperty('github_create_pr');
       expect(handlers).toHaveProperty('github_add_pr_comment');
@@ -78,6 +79,18 @@ describe('GitHubModule', () => {
       expect(handlers).toHaveProperty('github_update_pr_review_comment');
       expect(handlers).toHaveProperty('github_delete_pr_review_comment');
       expect(handlers).toHaveProperty('github_submit_pr_review');
+      expect(handlers).toHaveProperty('github_get_pr_files');
+      expect(handlers).toHaveProperty('github_get_pr_commits');
+      expect(handlers).toHaveProperty('github_get_file_contents');
+      expect(handlers).toHaveProperty('github_get_pr_review_threads');
+      expect(handlers).toHaveProperty('github_resolve_review_thread');
+      expect(handlers).toHaveProperty('github_unresolve_review_thread');
+      expect(handlers).toHaveProperty('github_delete_pr_issue_comment');
+      expect(handlers).toHaveProperty('github_merge_pr');
+      expect(handlers).toHaveProperty('github_request_pr_reviewers');
+      expect(handlers).toHaveProperty('github_update_pr_labels');
+      expect(handlers).toHaveProperty('github_update_pr_assignees');
+      expect(handlers).toHaveProperty('github_dismiss_pr_review');
     });
 
     it('github_get_prs delegates to handler with parsed args', async () => {
@@ -86,7 +99,7 @@ describe('GitHubModule', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
       const result = await handlers.github_get_prs({ issueKey: 'TRIPS-1' });
 
-      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1', undefined, 'open');
+      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1', 20, 'open');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items).toHaveLength(1);
     });
@@ -101,9 +114,9 @@ describe('GitHubModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 16 tool descriptors', () => {
+    it('returns 28 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(16);
+      expect(descriptors).toHaveLength(28);
     });
 
     it('descriptors have name, description, and inputSchema', () => {

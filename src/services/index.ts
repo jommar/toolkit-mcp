@@ -1,5 +1,5 @@
 export { JiraClient, describeError } from './jira/jira-client.js';
-export { GitHubClient, describeGitHubError } from './github/github-client.js';
+export { GitHubClient, ISSUE_KEY_PATTERN, describeGitHubError } from './github/github-client.js';
 export { FigmaClient } from './figma/figma-client.js';
 export { ConfluenceClient, describeConfluenceError, storageToText } from './confluence/confluence-client.js';
 export { JenkinsClient, describeJenkinsError } from './jenkins/jenkins-client.js';
@@ -13,7 +13,7 @@ export type {
   JiraComment,
   IssueLinkType,
 } from './jira/jira-client.js';
-export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions, PrReviewComment, CreateReviewCommentInput, PrReviewSubmitted, PrReviewEvent, SubmitPrReviewInput } from './github/github-client.js';
+export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions, PrReviewComment, CreateReviewCommentInput, PrReviewSubmitted, PrReviewEvent, SubmitPrReviewInput, ReviewThread, MergeResult } from './github/github-client.js';
 export type {
   FigmaUser,
   FigmaFileResponse,

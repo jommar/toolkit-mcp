@@ -13,6 +13,10 @@ export const figmaGetMeSchema = z.object({});
 
 export const figmaGetFileSchema = z.object({
   fileKey: z.string().min(1).max(50).describe(fileKeyDescription),
+  depth: z.number().min(1).max(100).optional().describe('Depth of the document tree to return (e.g., 1 for top-level children only).'),
+  ids: z.string().min(1).max(500).optional().describe('Comma-separated node IDs to include (e.g., "1:2,3:4").'),
+  geometry: z.string().min(1).max(50).optional().describe('Geometry type to return (e.g., "paths").'),
+  version: z.string().min(1).max(50).optional().describe('Version ID to retrieve (from getVersions).'),
 });
 
 export const figmaGetNodesSchema = z.object({
@@ -57,6 +61,12 @@ export const figmaGetVersionsSchema = z.object({
   fileKey: z.string().min(1).max(50).describe(fileKeyDescription),
 });
 
+export const figmaPostCommentSchema = z.object({
+  fileKey: z.string().min(1).max(50).describe(fileKeyDescription),
+  message: z.string().min(1).max(10000).describe('Comment message text.'),
+  parentId: z.string().optional().describe('Parent comment ID for threading replies.'),
+});
+
 // ---------------------------------------------------------------------------
 // Handler Factories
 // ---------------------------------------------------------------------------
@@ -87,7 +97,19 @@ export const figmaGetMeHandler: ToolHandler<z.infer<typeof figmaGetMeSchema>> =
 export const figmaGetFileHandler: ToolHandler<z.infer<typeof figmaGetFileSchema>> =
   (clients) => async (args) => {
     return wrapError(async () => {
-      const result = await clients.figma.getFile(args.fileKey);
+      const result = await clients.figma.getFile(args.fileKey, {
+        depth: args.depth,
+        ids: args.ids,
+        geometry: args.geometry,
+        version: args.version,
+      });
+      // Slim node-tree: when depth is not set, drop document to avoid blowing context
+      if (!args.depth && result.document && typeof result.document === 'object' && !('_truncated' in result.document)) {
+        (result as unknown as Record<string, unknown>).document = {
+          truncated: true,
+          message: 'Use depth or ids to narrow the response',
+        };
+      }
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     });
   };
@@ -140,6 +162,14 @@ export const figmaGetVersionsHandler: ToolHandler<z.infer<typeof figmaGetVersion
     });
   };
 
+export const figmaPostCommentHandler: ToolHandler<z.infer<typeof figmaPostCommentSchema>> =
+  (clients) => async (args) => {
+    return wrapError(async () => {
+      const result = await clients.figma.postComment(args.fileKey, args.message, args.parentId);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    });
+  };
+
 // ---------------------------------------------------------------------------
 // Tool Descriptors
 // ---------------------------------------------------------------------------
@@ -184,5 +214,10 @@ export const figmaToolDescriptors = [
     name: 'figma_get_versions',
     description: 'Get version history of a Figma file.',
     inputSchema: zodToJsonSchema(figmaGetVersionsSchema),
+  },
+  {
+    name: 'figma_post_comment',
+    description: 'Post a comment on a Figma file.',
+    inputSchema: zodToJsonSchema(figmaPostCommentSchema),
   },
 ];

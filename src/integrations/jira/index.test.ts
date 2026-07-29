@@ -5,6 +5,8 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 vi.mock('../../services/index.js', () => ({
   JiraClient: class MockJiraClient {},
   toSlimIssue: vi.fn((issue: any) => issue),
+  DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
+  ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
 import { JiraModule } from './index.js';
@@ -12,6 +14,7 @@ import { JiraModule } from './index.js';
 function makeMockJira() {
   return {
     whoami: vi.fn(),
+    getIssue: vi.fn(),
     getIssueSlim: vi.fn(),
     search: vi.fn(),
     createIssue: vi.fn(),
@@ -21,7 +24,11 @@ function makeMockJira() {
     transitionIssue: vi.fn(),
     assignIssue: vi.fn(),
     assignToMe: vi.fn(),
+    searchUsers: vi.fn(),
     addComment: vi.fn(),
+    updateComment: vi.fn(),
+    deleteComment: vi.fn(),
+    getComments: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     linkIssues: vi.fn(),
   };
@@ -92,9 +99,9 @@ describe('JiraModule', () => {
       mockJira = makeMockJira();
     });
 
-    it('returns all 10 handlers', () => {
+    it('returns all 15 handlers', () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      expect(Object.keys(handlers)).toHaveLength(10);
+      expect(Object.keys(handlers)).toHaveLength(15);
       expect(handlers).toHaveProperty('jira_whoami');
       expect(handlers).toHaveProperty('jira_get_issues');
       expect(handlers).toHaveProperty('jira_create_issue');
@@ -105,6 +112,11 @@ describe('JiraModule', () => {
       expect(handlers).toHaveProperty('jira_update_comment');
       expect(handlers).toHaveProperty('jira_link_issues');
       expect(handlers).toHaveProperty('jira_get_attachment');
+      expect(handlers).toHaveProperty('jira_get_comments');
+      expect(handlers).toHaveProperty('jira_list_transitions');
+      expect(handlers).toHaveProperty('jira_list_issue_link_types');
+      expect(handlers).toHaveProperty('jira_search_users');
+      expect(handlers).toHaveProperty('jira_delete_comment');
     });
 
     it('jira_whoami calls whoami on the client', async () => {
@@ -139,9 +151,9 @@ describe('JiraModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 10 tool descriptors', () => {
+    it('returns 15 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(10);
+      expect(descriptors).toHaveLength(15);
     });
 
     it('each descriptor has name, description, and inputSchema', () => {

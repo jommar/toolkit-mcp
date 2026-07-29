@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ConfluenceClient, describeConfluenceError } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { zodToJsonSchema } from '../helpers.js';
+import { paginated, zodToJsonSchema } from '../helpers.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -12,7 +12,7 @@ export const confluenceSearchSchema = z
       .string()
       .max(1000)
       .optional()
-      .describe('Free-text search, matched as CQL `text ~ "..."`. Ignored when `cql` is given.'),
+      .describe('Free-text search, matched as CQL `text ~ "..."`. Ignored when `cql` is given. Returns slim results (id, title, space, excerpt, url).'),
     cql: z
       .string()
       .max(4096)
@@ -33,7 +33,7 @@ export const confluenceGetPageSchema = z
       .boolean()
       .optional()
       .default(false)
-      .describe('Also return raw storage-format XHTML (default false — body is plain text).'),
+      .describe('Also return raw storage-format XHTML (default false — body is plain text). Returns metadata plus body as plain text.'),
   })
   .refine((d) => !!(d.id || (d.space && d.title)), { message: 'Provide either id, or both space and title' });
 
@@ -43,6 +43,8 @@ export const confluenceListSpacesSchema = z.object({
   limit: z.number().min(1).max(100).optional().default(25).describe('Max results (default 25).'),
   start: z.number().min(0).optional().default(0).describe('Offset for pagination (default 0).'),
 });
+
+export const confluenceWhoamiSchema = z.object({}).describe('Empty — no parameters required.');
 
 // ---------------------------------------------------------------------------
 // CQL helpers
@@ -78,7 +80,12 @@ export const confluenceSearchHandler: ToolHandler<z.infer<typeof confluenceSearc
     try {
       const cql = buildCql(args);
       const result = await clients.confluence.search(cql, { limit: args.limit, start: args.start });
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      // Map Confluence's {results, start, limit, size} envelope to {items, nextPageToken, hasMore}
+      const body = {
+        ...paginated(result.results, result.hasMore ? String(result.start + result.limit) : undefined),
+        totalSize: result.totalSize,
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     } catch (err) {
       toMcp(err);
     }
@@ -112,7 +119,21 @@ export const confluenceListSpacesHandler: ToolHandler<z.infer<typeof confluenceL
         limit: args.limit,
         start: args.start,
       });
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      // Map Confluence's Paged envelope to {items, nextPageToken, hasMore}
+      const body = {
+        ...paginated(result.results, result.hasMore ? String(result.start + result.limit) : undefined),
+      };
+      return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+    } catch (err) {
+      toMcp(err);
+    }
+  };
+
+export const confluenceWhoamiHandler: ToolHandler<z.infer<typeof confluenceWhoamiSchema>> =
+  (clients) => async (_args) => {
+    try {
+      const user = await clients.confluence.whoami();
+      return { content: [{ type: 'text', text: JSON.stringify(user) }] };
     } catch (err) {
       toMcp(err);
     }
@@ -123,18 +144,23 @@ export const confluenceToolDescriptors = [
   {
     name: 'confluence_search',
     description:
-      'Search Confluence content via free text or raw CQL. Returns slim results (id, title, space, excerpt, url).',
+      'Search Confluence content via free text or raw CQL.',
     inputSchema: zodToJsonSchema(confluenceSearchSchema),
   },
   {
     name: 'confluence_get_page',
     description:
-      'Fetch a Confluence page by ID, or by space + exact title. Returns metadata plus body as plain text.',
+      'Fetch a Confluence page by ID, or by space + exact title.',
     inputSchema: zodToJsonSchema(confluenceGetPageSchema),
   },
   {
     name: 'confluence_list_spaces',
     description: 'List Confluence spaces (key, name, type, url) for discovery.',
     inputSchema: zodToJsonSchema(confluenceListSpacesSchema),
+  },
+  {
+    name: 'confluence_whoami',
+    description: 'Return the authenticated Confluence user profile.',
+    inputSchema: zodToJsonSchema(confluenceWhoamiSchema),
   },
 ];

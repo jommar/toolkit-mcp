@@ -19,11 +19,14 @@ const cursorField = z
   .optional()
   .describe('Opaque pagination token from a previous response.');
 
-/** Parse the opaque cursor back into a numeric line/item offset. */
+/** Parse the opaque cursor back into a numeric line/item offset. Rejects non-positive-integer cursors. */
 function offsetFromCursor(cursor?: string): number {
   if (!cursor) return 0;
   const n = parseInt(cursor, 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
+  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
+    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a positive integer.`);
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,23 +135,11 @@ export const jenkinsGetConsoleHandler: ToolHandler<z.infer<typeof jenkinsGetCons
     }
   };
 
-/** Fetch every visible job, following pagination so a healthcheck never silently caps its scope. */
-async function fetchAllJobs(jenkins: JenkinsClient) {
-  const all: Awaited<ReturnType<JenkinsClient['getJobs']>>['items'] = [];
-  let offset = 0;
-  for (;;) {
-    const { items, hasMore, nextOffset } = await jenkins.getJobs({ offset, limit: 100 });
-    all.push(...items);
-    if (!hasMore || nextOffset == null) break;
-    offset = nextOffset;
-  }
-  return all;
-}
-
 export const jenkinsHealthcheckHandler: ToolHandler<z.infer<typeof jenkinsHealthcheckSchema>> =
   (clients) => async (args) => {
     try {
-      const all = await fetchAllJobs(clients.jenkins);
+      // Fetch all visible jobs in one call — getJobs derives total from server response, no loop needed
+      const { items: all } = await clients.jenkins.getJobs({ offset: 0, limit: 100 });
       const byName = new Map(all.map((j) => [j.name, j]));
       const targets = [...new Set(args.jobs?.length ? args.jobs : all.map((j) => j.name))];
 

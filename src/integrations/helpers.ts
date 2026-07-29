@@ -18,24 +18,30 @@ export function paginated<T>(items: T[], nextPageToken?: string): PaginatedRespo
 // ---------------------------------------------------------------------------
 
 function jsonSchemaTypeForZod(zodType: z.ZodTypeAny): Record<string, unknown> {
-  if (zodType instanceof z.ZodString) return { type: 'string' };
-  if (zodType instanceof z.ZodNumber) return { type: 'number' };
-  if (zodType instanceof z.ZodBoolean) return { type: 'boolean' };
-  if (zodType instanceof z.ZodArray) return { type: 'array' };
-  if (zodType instanceof z.ZodObject || zodType instanceof z.ZodRecord) return { type: 'object' };
-  if (zodType instanceof z.ZodEnum) {
+  let inner = zodType;
+  while (inner instanceof z.ZodOptional || inner instanceof z.ZodNullable) inner = inner.unwrap();
+  while (inner instanceof z.ZodEffects) inner = inner.innerType();
+  if (inner instanceof z.ZodString) return { type: 'string' };
+  if (inner instanceof z.ZodNumber) return { type: 'number' };
+  if (inner instanceof z.ZodBoolean) return { type: 'boolean' };
+  if (inner instanceof z.ZodArray) {
+    const itemSchema = jsonSchemaTypeForZod(inner.element);
+    return { type: 'array', items: itemSchema };
+  }
+  if (inner instanceof z.ZodObject || inner instanceof z.ZodRecord) return { type: 'object' };
+  if (inner instanceof z.ZodEnum) {
     return {
       type: 'string',
-      enum: zodType._def.values,
+      enum: inner._def.values,
     };
   }
-  // Fallback for nullable, union, intersection, etc.
   return { type: 'string' };
 }
 
 export function zodToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  // Unwrap ZodEffects (e.g., from .refine()) to get the inner object
-  const obj = schema instanceof z.ZodEffects ? schema.innerType() : schema;
+  let obj: z.ZodTypeAny = schema;
+  while (obj instanceof z.ZodEffects) obj = obj.innerType();
+  if (obj instanceof z.ZodOptional || obj instanceof z.ZodNullable) obj = obj.unwrap();
   if (!(obj instanceof z.ZodObject)) {
     return { type: 'object', properties: {} };
   }

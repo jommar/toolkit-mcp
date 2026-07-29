@@ -1,12 +1,11 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
+import { installRetry } from '../http-retry.js';
 
-const MAX_RETRIES = 3;
 const MAX_BRANCH_SEARCH_CALLS = 20;
 /** Regex for validating repo "owner/name" format. */
 const REPO_PATTERN = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 /** Regex for validating Jira issue keys (e.g. TRIPS-1234). */
-const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i;
 
 export interface PrInfo {
   number: number;
@@ -47,6 +46,7 @@ export interface PullRequestDetail {
   title: string;
   body: string | null;
   state: 'open' | 'closed' | 'merged';
+  draft: boolean;
   htmlUrl: string;
   repo: string;
   author: string;
@@ -62,6 +62,10 @@ export interface PullRequestDetail {
   changedFiles: number;
   additions: number;
   deletions: number;
+  requestedReviewers: string[];
+  requestedTeams: string[];
+  labels: string[];
+  assignees: string[];
 }
 
 export interface PullRequestReview {
@@ -133,6 +137,32 @@ export interface PullRequestChecks {
   checkRuns: CheckRun[];
 }
 
+export interface PrFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  previous_filename?: string;
+  truncated?: boolean;
+}
+
+export interface ReviewThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  line?: number;
+  originalLine?: number;
+}
+
+export interface MergeResult {
+  merged: boolean;
+  message: string;
+  sha: string;
+}
+
 export interface PrSearchOptions {
   query?: string;
   author?: string;
@@ -140,14 +170,10 @@ export interface PrSearchOptions {
   state?: 'open' | 'closed' | 'all';
   perPage?: number;
   page?: number;
+  label?: string;
+  reviewRequested?: string;
+  base?: string;
 }
-
-function getGhRepos(): string[] {
-  const env = process.env.GH_REPOS?.trim();
-  if (env) return env.split(',').map((s) => s.trim()).filter(Boolean);
-  return ['TransActComm/TravelTracker', 'TransActComm/Portage-backend', 'TransActComm/Portage-frontend'];
-}
-const GH_REPOS = getGhRepos();
 
 /**
  * Minimal client over the GitHub REST API for finding PRs related to Jira issues.
@@ -155,6 +181,7 @@ const GH_REPOS = getGhRepos();
  */
 export class GitHubClient {
   private readonly http: AxiosInstance;
+  private readonly ghRepos: string[];
 
   constructor() {
     const token = process.env.GH_TOKEN?.trim();
@@ -163,6 +190,10 @@ export class GitHubClient {
         'GH_TOKEN env var is required. Create one at https://github.com/settings/tokens and add it to .env',
       );
     }
+
+    // GH_REPOS evaluated at construction time, not module load time
+    const env = process.env.GH_REPOS?.trim();
+    this.ghRepos = env ? env.split(',').map((s) => s.trim()).filter(Boolean) : ['TransActComm/TravelTracker', 'TransActComm/Portage-backend', 'TransActComm/Portage-frontend'];
 
     this.http = axios.create({
       baseURL: 'https://api.github.com',
@@ -177,32 +208,61 @@ export class GitHubClient {
           .join('&');
       },
     });
-    this.installRetry();
+    installRetry(this.http);
   }
 
-  /**
-   * Retry transient failures: 429 (rate limit — honor Retry-After) and 5xx / timeouts,
-   * with exponential backoff. Matches JiraClient retry pattern exactly.
-   */
-  private installRetry(): void {
-    this.http.interceptors.response.use(undefined, async (error) => {
-      const config: any = error.config;
-      const status: number | undefined = error.response?.status;
-      const retryable =
-        status === 429 || (status !== undefined && status >= 500 && status < 600) || error.code === 'ECONNABORTED';
-      if (!config || !retryable) throw error;
+  private assertRepo(repo: string): void {
+    if (!REPO_PATTERN.test(repo)) {
+      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+    }
+    const segments = repo.split('/');
+    for (const seg of segments) {
+      if (seg === '.' || seg === '..') {
+        throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
+      }
+    }
+  }
 
-      config.__retryCount = (config.__retryCount ?? 0) + 1;
-      if (config.__retryCount > MAX_RETRIES) throw error;
+  private deriveState(state: string, mergedAt: unknown): PullRequestDetail['state'] {
+    return (state === 'closed' && mergedAt ? 'merged' : state) as PullRequestDetail['state'];
+  }
 
-      const retryAfter = Number(error.response?.headers?.['retry-after']);
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : Math.min(500 * 2 ** (config.__retryCount - 1), 8000);
-      await sleep(delayMs);
-      return this.http(config);
-    });
+  private mapPullRequestDetail(data: any, repo: string): PullRequestDetail {
+    return {
+      number: data.number,
+      title: data.title,
+      body: data.body ?? null,
+      state: this.deriveState(data.state, data.merged_at),
+      draft: data.draft ?? false,
+      htmlUrl: data.html_url,
+      repo,
+      author: data.user?.login ?? 'unknown',
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+      closedAt: data.closed_at ?? null,
+      mergedAt: data.merged_at ?? null,
+      mergeable: data.mergeable ?? null,
+      mergedBy: data.merged_by?.login ?? null,
+      baseBranch: data.base?.ref ?? '',
+      headBranch: data.head?.ref ?? '',
+      headSha: data.head?.sha ?? '',
+      changedFiles: data.changed_files ?? 0,
+      additions: data.additions ?? 0,
+      deletions: data.deletions ?? 0,
+      requestedReviewers: data.requested_reviewers?.map((r: any) => r.login) ?? [],
+      requestedTeams: data.requested_teams?.map((t: any) => t.slug) ?? [],
+      labels: data.labels?.map((l: any) => l.name) ?? [],
+      assignees: data.assignees?.map((a: any) => a.login) ?? [],
+    };
+  }
+
+  private async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+    const { data } = await this.http.post<any>('/graphql', { query, variables });
+    if (Array.isArray(data?.errors) && data.errors.length > 0) {
+      const messages = data.errors.map((e: any) => e.message).join('; ');
+      throw new Error(`GitHub GraphQL error: ${messages}`);
+    }
+    return data.data as T;
   }
 
   /**
@@ -222,7 +282,7 @@ export class GitHubClient {
     }
     const _state = prState ?? 'open';
     const settled = await Promise.allSettled(
-      GH_REPOS.map(async (repo) => {
+      this.ghRepos.map(async (repo) => {
         try {
           const stateFilter = _state === 'all' ? '' : `state:${_state}`;
           const q = ['type:pr', stateFilter, `repo:${repo}`, issueKey].filter(Boolean).join(' ');
@@ -284,7 +344,7 @@ export class GitHubClient {
   ): Promise<Map<string, PrSearchResult[]>> {
     const allKeys = keys.slice(0, 20);
     if (keys.length > 20) {
-      console.error(`Warning: --with-prs supports up to 20 keys; ${keys.length - 20} key(s) skipped.`);
+      console.error(`Warning: supports up to 20 keys; ${keys.length - 20} key(s) skipped.`);
     }
 
     if (allKeys.length === 0) return new Map();
@@ -398,8 +458,23 @@ export class GitHubClient {
     return items.map((item) => ({
       number: item.number,
       title: item.title,
-      state: item.state === 'closed' && item.pull_request?.merged_at ? 'merged' : item.state,
+      state: this.deriveState(item.state, item.pull_request?.merged_at),
       repo: this.extractRepo(item.repository_url),
+      author: item.user?.login ?? 'unknown',
+      createdAt: item.created_at,
+      htmlUrl: item.html_url,
+      reviewStatus: 'REVIEW_REQUIRED',
+    }));
+  }
+
+  /** Parse pull request items from the `/pulls` endpoint (which lacks repository_url
+   *  and has merged_at at top level, not inside pull_request). */
+  private parsePulls(items: any[], repo: string): PrSearchResult[] {
+    return items.map((item) => ({
+      number: item.number,
+      title: item.title,
+      state: this.deriveState(item.state, item.merged_at),
+      repo,
       author: item.user?.login ?? 'unknown',
       createdAt: item.created_at,
       htmlUrl: item.html_url,
@@ -421,25 +496,24 @@ export class GitHubClient {
     url: string,
     params: Record<string, unknown>,
     maxPages: number = 5,
-  ): Promise<{ items: T[]; linkHeader?: string }> {
+  ): Promise<{ items: T[]; linkHeader?: string; hasMore: boolean }> {
     const allItems: T[] = [];
     let nextUrl: string | undefined = url;
-    let currentParams = { ...params };
     let pages = 0;
+    let lastLinkHeader: string | undefined;
 
     while (nextUrl && pages < maxPages) {
       const response = await this.http.get<{ total_count?: number; items: T[] }>(nextUrl, {
-        params: nextUrl === url ? currentParams : undefined, // params only on first request
+        params: nextUrl === url ? params : undefined, // params only on first request
       });
       allItems.push(...(response.data.items ?? []));
       pages++;
 
-      // Parse Link header for next page
-      const linkHeader = response.headers?.['link'] as string | undefined;
-      nextUrl = this.parseNextLink(linkHeader);
+      lastLinkHeader = response.headers?.['link'] as string | undefined;
+      nextUrl = this.parseNextLink(lastLinkHeader);
     }
 
-    return { items: allItems };
+    return { items: allItems, linkHeader: lastLinkHeader, hasMore: !!nextUrl };
   }
 
   /**
@@ -465,9 +539,7 @@ export class GitHubClient {
     draft?: boolean;
     maintainerCanModify?: boolean;
   }): Promise<PrCreated> {
-    if (!REPO_PATTERN.test(input.repo)) {
-      throw new Error(`Invalid repo format: "${input.repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(input.repo);
     const { data } = await this.http.post<any>(`/repos/${input.repo}/pulls`, {
       title: input.title,
       head: input.head,
@@ -489,9 +561,7 @@ export class GitHubClient {
    * is the issue number.
    */
   async addPrComment(input: { repo: string; prNumber: number; body: string }): Promise<PrComment> {
-    if (!REPO_PATTERN.test(input.repo)) {
-      throw new Error(`Invalid repo format: "${input.repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(input.repo);
     const { data } = await this.http.post<any>(`/repos/${input.repo}/issues/${input.prNumber}/comments`, {
       body: input.body,
     });
@@ -513,9 +583,7 @@ export class GitHubClient {
     prNumber: number,
     opts?: { perPage?: number; page?: number },
   ): Promise<PrComment[]> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.get<any[]>(`/repos/${repo}/issues/${prNumber}/comments`, {
       params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
     });
@@ -532,9 +600,7 @@ export class GitHubClient {
    * Update an existing issue-level comment on a pull request by comment ID.
    */
   async updatePrComment(repo: string, commentId: number, body: string): Promise<PrComment> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.patch<any>(`/repos/${repo}/issues/comments/${commentId}`, {
       body,
     });
@@ -554,9 +620,7 @@ export class GitHubClient {
     repo: string,
     opts?: { perPage?: number; page?: number },
   ): Promise<BranchInfo[]> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.get<any[]>(`/repos/${repo}/branches`, {
       params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
     });
@@ -589,11 +653,8 @@ export class GitHubClient {
     const results = new Map<string, PrSearchResult[]>();
     let apiCallsMade = 0;
 
-    for (const repo of GH_REPOS) {
-      if (!REPO_PATTERN.test(repo)) {
-        console.error(`Warning: invalid repo format "${repo}" — skipping`);
-        continue;
-      }
+    for (const repo of this.ghRepos) {
+        this.assertRepo(repo);
 
       try {
         // Fetch git refs (from cache if available)
@@ -643,7 +704,7 @@ export class GitHubClient {
             });
             apiCallsMade++;
 
-            return prResponse.data.map((pr: any) => this.parseItems([pr])[0]);
+            return prResponse.data.map((pr: any) => this.parsePulls([pr], repo)[0]);
           }),
         );
 
@@ -682,39 +743,104 @@ export class GitHubClient {
   }
 
   async getPullRequest(repo: string, prNumber: number): Promise<PullRequestDetail> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.get<any>(`/repos/${repo}/pulls/${prNumber}`);
-    const state: PullRequestDetail['state'] =
-      data.state === 'closed' && data.merged_at ? 'merged' : data.state;
+    return this.mapPullRequestDetail(data, repo);
+  }
+
+  async getPrFiles(
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; page?: number },
+  ): Promise<PrFile[]> {
+    this.assertRepo(repo);
+    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/files`, {
+      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
+    });
+    return data.map((f: any) => {
+      const file: PrFile = {
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+      };
+      if (f.patch) {
+        file.patch = f.patch.length > 2000 ? f.patch.slice(0, 2000) : f.patch;
+        if (f.patch.length > 2000) {
+          file.truncated = true;
+        }
+      }
+      if (f.previous_filename) {
+        file.previous_filename = f.previous_filename;
+      }
+      return file;
+    });
+  }
+
+  async getPrCommits(
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; page?: number },
+  ): Promise<any[]> {
+    this.assertRepo(repo);
+    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/commits`, {
+      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
+    });
+    return data.map((c: any) => ({
+      sha: c.sha,
+      commit: {
+        message: c.commit?.message ?? '',
+        author: {
+          name: c.commit?.author?.name ?? '',
+          email: c.commit?.author?.email ?? '',
+          date: c.commit?.author?.date ?? '',
+        },
+      },
+      author: {
+        login: c.author?.login ?? '',
+      },
+    }));
+  }
+
+  async getFileContents(repo: string, path: string, ref?: string): Promise<{
+    path: string;
+    content: string;
+    encoding: string;
+    size: number;
+    sha?: string;
+    truncated: boolean;
+    message?: string;
+  }> {
+    this.assertRepo(repo);
+    const params: Record<string, string> = {};
+    if (ref) params.ref = ref;
+    const { data } = await this.http.get<any>(`/repos/${repo}/contents/${path}`, { params });
+
+    if (data.size > 100_000) {
+      return {
+        path: data.path,
+        content: '',
+        encoding: data.encoding,
+        size: data.size,
+        sha: data.sha,
+        truncated: true,
+        message: `File is ${data.size} bytes, exceeds the 100KB size limit. Request a specific ref or path instead.`,
+      };
+    }
+
     return {
-      number: data.number,
-      title: data.title,
-      body: data.body ?? null,
-      state,
-      htmlUrl: data.html_url,
-      repo,
-      author: data.user?.login ?? 'unknown',
-      createdAt: data.created_at,
-      updatedAt: data.updated_at,
-      closedAt: data.closed_at ?? null,
-      mergedAt: data.merged_at ?? null,
-      mergeable: data.mergeable ?? null,
-      mergedBy: data.merged_by?.login ?? null,
-      baseBranch: data.base?.ref ?? '',
-      headBranch: data.head?.ref ?? '',
-      headSha: data.head?.sha ?? '',
-      changedFiles: data.changed_files ?? 0,
-      additions: data.additions ?? 0,
-      deletions: data.deletions ?? 0,
+      path: data.path,
+      content: Buffer.from(data.content, 'base64').toString('utf-8'),
+      encoding: data.encoding,
+      size: data.size,
+      sha: data.sha,
+      truncated: false,
     };
   }
 
   async getPullRequestReviews(repo: string, prNumber: number): Promise<PullRequestReview[]> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/reviews`);
     return data.map((review: any) => ({
       id: review.id,
@@ -727,6 +853,7 @@ export class GitHubClient {
   }
 
   async getPullRequestChecks(repo: string, prNumber: number): Promise<PullRequestChecks> {
+    this.assertRepo(repo);
     const prDetail = await this.getPullRequest(repo, prNumber);
     const allCheckRuns: any[] = [];
     let nextUrl: string | undefined = `/repos/${repo}/commits/${prDetail.headSha}/check-runs`;
@@ -767,9 +894,7 @@ export class GitHubClient {
       maintainerCanModify?: boolean;
     },
   ): Promise<PullRequestDetail> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const hasUpdate =
       updates.title !== undefined ||
       updates.body !== undefined ||
@@ -787,38 +912,202 @@ export class GitHubClient {
     if (updates.maintainerCanModify !== undefined) body.maintainer_can_modify = updates.maintainerCanModify;
 
     const { data } = await this.http.patch<any>(`/repos/${repo}/pulls/${prNumber}`, body);
-    const state: PullRequestDetail['state'] =
-      data.state === 'closed' && data.merged_at ? 'merged' : data.state;
+    return this.mapPullRequestDetail(data, repo);
+  }
+
+  /**
+   * Toggle a PR between draft and ready-for-review. The REST API only accepts `draft`
+   * at creation time, so this goes through the GraphQL mutations, which need the PR's
+   * node id rather than its number.
+   */
+  async setPullRequestDraft(repo: string, prNumber: number, draft: boolean): Promise<PullRequestDetail> {
+    this.assertRepo(repo);
+    const { data: pr } = await this.http.get<any>(`/repos/${repo}/pulls/${prNumber}`);
+    const nodeId: string | undefined = pr.node_id;
+    if (!nodeId) {
+      throw new Error(`Could not resolve node id for ${repo}#${prNumber}`);
+    }
+    const query = draft
+      ? 'mutation($id: ID!) { convertPullRequestToDraft(input: { pullRequestId: $id }) { pullRequest { isDraft } } }'
+      : 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }';
+    await this.graphql(query, { id: nodeId });
+    return this.getPullRequest(repo, prNumber);
+  }
+
+  /**
+   * List review threads for a pull request via GraphQL.
+   * Paginates through all threads (100 per page).
+   */
+  async getReviewThreads(repo: string, prNumber: number): Promise<ReviewThread[]> {
+    this.assertRepo(repo);
+    const [owner, name] = repo.split('/');
+    const threads: ReviewThread[] = [];
+    let cursor: string | null = null;
+
+    do {
+      const result: any = await this.graphql(
+        `query($owner: String!, $name: String!, $prNumber: Int!, $cursor: String) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $prNumber) {
+              reviewThreads(first: 100, after: $cursor) {
+                nodes { id isResolved isOutdated path line originalLine }
+                pageInfo { endCursor hasNextPage }
+              }
+            }
+          }
+        }`,
+        { owner, name, prNumber, cursor },
+      );
+      const reviewThreads: any = result.repository.pullRequest.reviewThreads;
+      for (const node of reviewThreads.nodes) {
+        threads.push({
+          id: node.id,
+          isResolved: node.isResolved,
+          isOutdated: node.isOutdated,
+          path: node.path,
+          line: node.line ?? undefined,
+          originalLine: node.originalLine ?? undefined,
+        });
+      }
+      cursor = reviewThreads.pageInfo.hasNextPage ? reviewThreads.pageInfo.endCursor : null;
+    } while (cursor);
+
+    return threads;
+  }
+
+  /**
+   * Resolve a review thread by its GraphQL node ID.
+   */
+  async resolveReviewThread(repo: string, threadId: string): Promise<{ isResolved: boolean }> {
+    this.assertRepo(repo);
+    const result = await this.graphql<any>(
+      'mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }',
+      { threadId },
+    );
+    return result.resolveReviewThread.thread;
+  }
+
+  /**
+   * Unresolve a review thread by its GraphQL node ID.
+   */
+  async unresolveReviewThread(repo: string, threadId: string): Promise<{ isResolved: boolean }> {
+    this.assertRepo(repo);
+    const result = await this.graphql<any>(
+      'mutation($threadId: ID!) { unresolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }',
+      { threadId },
+    );
+    return result.unresolveReviewThread.thread;
+  }
+
+  /**
+   * Delete an issue-level comment by its ID.
+   */
+  async deletePrComment(repo: string, commentId: number): Promise<void> {
+    this.assertRepo(repo);
+    await this.http.delete(`/repos/${repo}/issues/comments/${commentId}`);
+  }
+
+  /**
+   * Merge a pull request using the merge API.
+   * Surfaces 405 (not mergeable) and 409 (sha mismatch) clearly.
+   */
+  async mergePr(
+    repo: string,
+    prNumber: number,
+    opts?: { mergeMethod?: 'merge' | 'squash' | 'rebase'; sha?: string },
+  ): Promise<MergeResult> {
+    this.assertRepo(repo);
+    try {
+      const body: Record<string, unknown> = { merge_method: opts?.mergeMethod ?? 'merge' };
+      if (opts?.sha) body.sha = opts.sha;
+      const { data } = await this.http.put<any>(`/repos/${repo}/pulls/${prNumber}/merge`, body);
+      return { merged: data.merged, message: data.message, sha: data.sha };
+    } catch (err) {
+      if (isAxiosError(err)) {
+        const status = err.response?.status;
+        if (status === 405) {
+          throw new Error(`PR #${prNumber} is not mergeable. It may have conflicts or require review.`);
+        }
+        if (status === 409) {
+          throw new Error(`SHA mismatch for PR #${prNumber}. The branch has new commits; provide an updated SHA or omit it.`);
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Request reviewers for a pull request.
+   */
+  async requestReviewers(
+    repo: string,
+    prNumber: number,
+    reviewers: string[],
+    teamReviewers?: string[],
+  ): Promise<{ requestedReviewers: string[]; requestedTeams: string[] }> {
+    this.assertRepo(repo);
+    const body: Record<string, unknown> = { reviewers };
+    if (teamReviewers) body.team_reviewers = teamReviewers;
+    const { data } = await this.http.post<any>(`/repos/${repo}/pulls/${prNumber}/requested_reviewers`, body);
     return {
-      number: data.number,
-      title: data.title,
-      body: data.body ?? null,
-      state,
-      htmlUrl: data.html_url,
-      repo,
-      author: data.user?.login ?? 'unknown',
-      createdAt: data.created_at,
-      updatedAt: data.updated_at,
-      closedAt: data.closed_at ?? null,
-      mergedAt: data.merged_at ?? null,
-      mergeable: data.mergeable ?? null,
-      mergedBy: data.merged_by?.login ?? null,
-      baseBranch: data.base?.ref ?? '',
-      headBranch: data.head?.ref ?? '',
-      headSha: data.head?.sha ?? '',
-      changedFiles: data.changed_files ?? 0,
-      additions: data.additions ?? 0,
-      deletions: data.deletions ?? 0,
+      requestedReviewers: data.requested_reviewers?.map((r: any) => r.login) ?? [],
+      requestedTeams: data.requested_teams?.map((t: any) => t.slug) ?? [],
     };
   }
 
+  /**
+   * Remove requested reviewers from a pull request.
+   */
+  async removeReviewers(
+    repo: string,
+    prNumber: number,
+    reviewers: string[],
+    teamReviewers?: string[],
+  ): Promise<{ requestedReviewers: string[]; requestedTeams: string[] }> {
+    this.assertRepo(repo);
+    const body: Record<string, unknown> = { reviewers };
+    if (teamReviewers) body.team_reviewers = teamReviewers;
+    const { data } = await this.http.delete<any>(`/repos/${repo}/pulls/${prNumber}/requested_reviewers`, {
+      data: body,
+    });
+    return {
+      requestedReviewers: data.requested_reviewers?.map((r: any) => r.login) ?? [],
+      requestedTeams: data.requested_teams?.map((t: any) => t.slug) ?? [],
+    };
+  }
+
+  /**
+   * Replace all labels on an issue/PR.
+   */
+  async updateLabels(repo: string, prNumber: number, labels: string[]): Promise<string[]> {
+    this.assertRepo(repo);
+    const { data } = await this.http.put<any>(`/repos/${repo}/issues/${prNumber}/labels`, { labels });
+    return data.map((l: any) => l.name);
+  }
+
+  /**
+   * Add assignees to an issue/PR (POST endpoint adds to existing assignees).
+   */
+  async updateAssignees(repo: string, prNumber: number, assignees: string[]): Promise<string[]> {
+    this.assertRepo(repo);
+    const { data } = await this.http.post<any>(`/repos/${repo}/issues/${prNumber}/assignees`, { assignees });
+    return data.assignees?.map((a: any) => a.login) ?? [];
+  }
+
+  /**
+   * Dismiss a pull request review.
+   */
+  async dismissPrReview(repo: string, prNumber: number, reviewId: number, message: string): Promise<{ success: boolean; message: string }> {
+    this.assertRepo(repo);
+    await this.http.put<any>(`/repos/${repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`, { message });
+    return { success: true, message: 'Review dismissed' };
+  }
+
   async searchPullRequestsByQuery(opts: PrSearchOptions): Promise<PrSearchResult[]> {
-    if (!opts.query && !opts.author && !opts.repo) {
-      throw new Error('At least one of query, author, or repo must be provided');
+    if (!opts.query && !opts.author && !opts.repo && !opts.label && !opts.reviewRequested && !opts.base) {
+      throw new Error('At least one of query, author, repo, label, reviewRequested, or base must be provided');
     }
-    if (opts.repo && !REPO_PATTERN.test(opts.repo)) {
-      throw new Error(`Invalid repo format: "${opts.repo}". Must be in "owner/name" format.`);
-    }
+    if (opts.repo) this.assertRepo(opts.repo);
     const parts: string[] = ['type:pr'];
     if (opts.state && opts.state !== 'all') {
       parts.push(`state:${opts.state}`);
@@ -832,6 +1121,15 @@ export class GitHubClient {
     if (opts.query) {
       parts.push(`"${opts.query.replace(/"/g, '')}"`);
     }
+    if (opts.label) {
+      parts.push(`label:${opts.label}`);
+    }
+    if (opts.reviewRequested) {
+      parts.push(`review-requested:${opts.reviewRequested}`);
+    }
+    if (opts.base) {
+      parts.push(`base:${opts.base}`);
+    }
     const q = parts.join(' ');
     const { data } = await this.http.get<{ items: any[] }>('/search/issues', {
       params: { q, per_page: opts.perPage ?? 20, page: opts.page ?? 1 },
@@ -844,9 +1142,7 @@ export class GitHubClient {
     prNumber: number,
     input: CreateReviewCommentInput,
   ): Promise<PrReviewComment> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const body: Record<string, unknown> = {
       body: input.body,
       commit_id: input.commitId,
@@ -869,14 +1165,30 @@ export class GitHubClient {
     return mapToPrReviewComment(data);
   }
 
+  /**
+   * Reply to an existing inline review comment, keeping the reply in the same thread.
+   * Unlike createPrReviewComment this needs no path/line/commit — the parent supplies them.
+   */
+  async replyToPrReviewComment(
+    repo: string,
+    prNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<PrReviewComment> {
+    this.assertRepo(repo);
+    const { data } = await this.http.post<any>(
+      `/repos/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
+      { body },
+    );
+    return mapToPrReviewComment(data);
+  }
+
   async getPrReviewComments(
     repo: string,
     prNumber: number,
     opts?: { perPage?: number; page?: number },
   ): Promise<PrReviewComment[]> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/comments`, {
       params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
     });
@@ -888,17 +1200,13 @@ export class GitHubClient {
     commentId: number,
     body: string,
   ): Promise<PrReviewComment> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const { data } = await this.http.patch<any>(`/repos/${repo}/pulls/comments/${commentId}`, { body });
     return mapToPrReviewComment(data);
   }
 
   async deletePrReviewComment(repo: string, commentId: number): Promise<void> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     await this.http.delete(`/repos/${repo}/pulls/comments/${commentId}`);
   }
 
@@ -907,9 +1215,7 @@ export class GitHubClient {
     prNumber: number,
     input: SubmitPrReviewInput,
   ): Promise<PrReviewSubmitted> {
-    if (!REPO_PATTERN.test(repo)) {
-      throw new Error(`Invalid repo format: "${repo}". Must be in "owner/name" format.`);
-    }
+    this.assertRepo(repo);
     const body: Record<string, unknown> = {
       event: input.event,
     };

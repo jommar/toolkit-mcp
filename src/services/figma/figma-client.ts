@@ -105,6 +105,17 @@ export interface FigmaVersion {
 
 const FIGMA_BASE_URL = 'https://api.figma.com';
 
+/** Maximum retries for transient Figma API failures. */
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** Truncate a string to a maximum length, appending a truncation marker if truncated. */
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen) + '...';
+}
+
 /**
  * Minimal client over the Figma REST API.
  * Auth is X-Figma-Token header from the FIGMA_TOKEN env var.
@@ -132,18 +143,42 @@ export class FigmaClient {
       }
     }
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        'X-Figma-Token': this.token,
-      },
-    });
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Figma API error (${response.status}): ${body}`);
+        try {
+          const response = await fetch(url.toString(), {
+            headers: {
+              'X-Figma-Token': this.token,
+            },
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const body = await response.text();
+            // S2: truncate error bodies to ~500 chars
+            throw new Error(`Figma API error (${response.status}): ${truncate(body, 500)}`);
+          }
+
+          return response.json() as Promise<T>;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        // Don't retry if we got a valid HTTP error response (4xx)
+        if (err instanceof Error && /Figma API error \(4/.test(lastError.message)) throw lastError;
+        // Abort/timeout errors are retryable
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+        }
+      }
     }
 
-    return response.json() as Promise<T>;
+    throw lastError ?? new Error('Figma request failed');
   }
 
   /** Get the authenticated user's profile. */
@@ -151,9 +186,26 @@ export class FigmaClient {
     return this.request<FigmaUser>('/v1/me');
   }
 
-  /** Get a file by its key. */
-  async getFile(fileKey: string): Promise<FigmaFileResponse> {
-    return this.request<FigmaFileResponse>(`/v1/files/${encodeURIComponent(fileKey)}`);
+  /** Get a file by its key. Optional params: depth, ids, geometry, version — pass-throughs to the Figma API. */
+  async getFile(
+    fileKey: string,
+    opts: { depth?: number; ids?: string; geometry?: string; version?: string } = {},
+  ): Promise<FigmaFileResponse> {
+    const result = await this.request<FigmaFileResponse>(`/v1/files/${encodeURIComponent(fileKey)}`, {
+      depth: opts.depth,
+      ids: opts.ids,
+      geometry: opts.geometry,
+      version: opts.version,
+    });
+    // Interim guard: truncate the full document tree to avoid blowing the context window
+    if (result.document && !opts.depth) {
+      // No depth means caller gets the full tree — protect context window
+      const raw = JSON.stringify(result.document);
+      if (raw.length > 50_000) {
+        result.document = { _truncated: true, _originalSize: raw.length } as unknown as Record<string, unknown>;
+      }
+    }
+    return result;
   }
 
   /** Get specific nodes from a file by their IDs. */
@@ -202,5 +254,26 @@ export class FigmaClient {
       `/v1/files/${encodeURIComponent(fileKey)}/versions`,
     );
     return data.versions;
+  }
+
+  /** Post a comment on a file. Returns the created comment. Optional parent_id for threading. */
+  async postComment(fileKey: string, message: string, parentId?: string): Promise<FigmaComment> {
+    const body: Record<string, unknown> = { message };
+    if (parentId) body.parent_id = parentId;
+    // Figma POST /v1/files/{key}/comments uses fetch with JSON body
+    const url = `${FIGMA_BASE_URL}/v1/files/${encodeURIComponent(fileKey)}/comments`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'X-Figma-Token': this.token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Figma API error (${response.status}): ${truncate(errorBody, 500)}`);
+    }
+    return response.json() as Promise<FigmaComment>;
   }
 }

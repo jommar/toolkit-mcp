@@ -45,12 +45,13 @@ describe('jenkins module handlers', () => {
       expect(jenkins.getJobs).toHaveBeenCalledWith({ offset: 2, limit: 2 });
     });
 
-    it('treats a non-numeric or negative cursor as offset 0', async () => {
-      jenkins.getJobs.mockResolvedValue({ items: [], total: 0, hasMore: false });
-      await jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: 'abc' });
-      expect(jenkins.getJobs).toHaveBeenLastCalledWith({ offset: 0, limit: 2 });
-      await jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: '-5' });
-      expect(jenkins.getJobs).toHaveBeenLastCalledWith({ offset: 0, limit: 2 });
+    it('rejects an invalid cursor with McpError (M9)', async () => {
+      await expect(
+        jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: 'abc' }),
+      ).rejects.toThrow(McpError);
+      await expect(
+        jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: '-5' }),
+      ).rejects.toThrow(McpError);
     });
   });
 
@@ -199,14 +200,17 @@ describe('jenkins module handlers', () => {
       expect(body.jobs).toEqual([]);
     });
 
-    it('follows pagination so scope is never silently capped', async () => {
-      jenkins.getJobs
-        .mockResolvedValueOnce({ items: [job('a', 1, 'SUCCESS')], total: 2, hasMore: true, nextOffset: 1 })
-        .mockResolvedValueOnce({ items: [job('b', 1, 'SUCCESS')], total: 2, hasMore: false });
+    it('fetches all visible jobs in one call (M10 fix)', async () => {
+      jenkins.getJobs.mockResolvedValue({
+        items: [job('a', 1, 'SUCCESS'), job('b', 1, 'SUCCESS')],
+        total: 2,
+        hasMore: false,
+      });
       const result = await jenkinsHealthcheckHandler({ jenkins: jenkins as any })({});
       const body = JSON.parse(result.content[0].text);
       expect(body.checked).toBe(2);
-      expect(jenkins.getJobs).toHaveBeenCalledTimes(2);
+      expect(jenkins.getJobs).toHaveBeenCalledTimes(1);
+      expect(jenkins.getJobs).toHaveBeenCalledWith({ offset: 0, limit: 100 });
     });
   });
 

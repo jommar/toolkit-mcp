@@ -23,7 +23,7 @@ export function createHealthHandler(
       throw new McpError(ErrorCode.InvalidParams, 'mcp_get_health does not accept parameters');
     }
     const result: HealthResult = {
-      serverVersion: '0.1.0',
+      serverVersion: '0.3.0',
       integrations: {
         jira: jiraActive,
         github: githubActive,
