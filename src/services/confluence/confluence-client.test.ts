@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { ConfluenceClient, storageToText, describeConfluenceError } from './confluence-client.js';
+import { ConfluenceClient, storageToText, markdownToStorage, describeConfluenceError } from './confluence-client.js';
 
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 vi.mock('axios', async () => {
@@ -13,12 +13,16 @@ vi.mock('axios', async () => {
 
 interface MockAxiosInstance {
   get: Mock;
+  post: Mock;
+  put: Mock;
   interceptors: { response: { use: Mock } };
 }
 
 function mockAxiosInstance(): MockAxiosInstance {
   const instance: MockAxiosInstance = {
     get: vi.fn(),
+    post: vi.fn(),
+    put: vi.fn(),
     interceptors: { response: { use: vi.fn() } },
   };
   createMock.mockReturnValue(instance);
@@ -170,6 +174,80 @@ describe('ConfluenceClient', () => {
     });
   });
 
+  describe('createPage', () => {
+    it('posts storage-format content and maps the response', async () => {
+      http.post.mockResolvedValue({
+        data: {
+          id: '99',
+          title: 'New Page',
+          type: 'page',
+          space: { key: 'STD' },
+          _links: { webui: '/spaces/STD/pages/99' },
+        },
+      });
+
+      const client = new ConfluenceClient();
+      const page = await client.createPage({ space: 'STD', title: 'New Page', body: '<p>hi</p>' });
+
+      expect(http.post).toHaveBeenCalledWith('/content', {
+        type: 'page',
+        title: 'New Page',
+        space: { key: 'STD' },
+        body: { storage: { value: '<p>hi</p>', representation: 'storage' } },
+      });
+      expect(page).toMatchObject({ id: '99', title: 'New Page', spaceKey: 'STD' });
+      expect(page.url).toBe('https://test.atlassian.net/wiki/spaces/STD/pages/99');
+    });
+
+    it('includes ancestors when parentId is given', async () => {
+      http.post.mockResolvedValue({ data: { id: '99', title: 'New Page', type: 'page' } });
+      const client = new ConfluenceClient();
+      await client.createPage({ space: 'STD', title: 'New Page', body: '<p>hi</p>', parentId: '42' });
+
+      expect(http.post).toHaveBeenCalledWith(
+        '/content',
+        expect.objectContaining({ ancestors: [{ id: '42' }] }),
+      );
+    });
+  });
+
+  describe('updatePage', () => {
+    it('fetches the current version and increments it', async () => {
+      http.get.mockResolvedValue({
+        data: { id: '99', title: 'Old Title', type: 'page', version: { number: 3 } },
+      });
+      http.put.mockResolvedValue({
+        data: { id: '99', title: 'Old Title', type: 'page', version: { number: 4 } },
+      });
+
+      const client = new ConfluenceClient();
+      const page = await client.updatePage({ pageId: '99', body: '<p>new</p>' });
+
+      expect(http.get).toHaveBeenCalledWith('/content/99', { params: { expand: 'body.storage,version,space' } });
+      expect(http.put).toHaveBeenCalledWith('/content/99', {
+        id: '99',
+        type: 'page',
+        title: 'Old Title',
+        version: { number: 4 },
+        body: { storage: { value: '<p>new</p>', representation: 'storage' } },
+      });
+      expect(page.version).toBe(4);
+    });
+
+    it('uses the given title instead of the current one when provided', async () => {
+      http.get.mockResolvedValue({ data: { id: '99', title: 'Old Title', type: 'page', version: { number: 1 } } });
+      http.put.mockResolvedValue({ data: { id: '99', title: 'New Title', type: 'page', version: { number: 2 } } });
+
+      const client = new ConfluenceClient();
+      await client.updatePage({ pageId: '99', body: '<p>new</p>', title: 'New Title' });
+
+      expect(http.put).toHaveBeenCalledWith(
+        '/content/99',
+        expect.objectContaining({ title: 'New Title', version: { number: 2 } }),
+      );
+    });
+  });
+
   describe('listSpaces', () => {
     it('maps spaces and forwards filters', async () => {
       http.get.mockResolvedValue({
@@ -236,6 +314,44 @@ describe('storageToText', () => {
 
   it('leaves unknown named entities verbatim', () => {
     expect(storageToText('<p>a &frobnicate; b</p>')).toBe('a &frobnicate; b');
+  });
+});
+
+describe('markdownToStorage', () => {
+  it('converts headings and paragraphs', () => {
+    expect(markdownToStorage('# Title\n\nSome text.')).toBe('<h1>Title</h1><p>Some text.</p>');
+  });
+
+  it('converts unordered and ordered lists', () => {
+    expect(markdownToStorage('- one\n- two')).toBe('<ul><li>one</li><li>two</li></ul>');
+    expect(markdownToStorage('1. one\n2. two')).toBe('<ol><li>one</li><li>two</li></ol>');
+  });
+
+  it('converts a fenced code block, preserving language and content', () => {
+    const md = '```js\nconst x = 1;\n```';
+    expect(markdownToStorage(md)).toBe(
+      '<ac:structured-macro ac:name="code">' +
+        '<ac:parameter ac:name="language">js</ac:parameter>' +
+        '<ac:plain-text-body><![CDATA[const x = 1;]]></ac:plain-text-body>' +
+        '</ac:structured-macro>',
+    );
+  });
+
+  it('converts a pipe table with header separator', () => {
+    const md = '| A | B |\n|---|---|\n| 1 | 2 |';
+    expect(markdownToStorage(md)).toBe(
+      '<table><tbody><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></tbody></table>',
+    );
+  });
+
+  it('applies inline bold, italic, inline code, and links', () => {
+    expect(markdownToStorage('**bold** and *italic* and `code` and [link](https://x.test)')).toBe(
+      '<p><strong>bold</strong> and <em>italic</em> and <code>code</code> and <a href="https://x.test">link</a></p>',
+    );
+  });
+
+  it('escapes HTML-significant characters in plain text', () => {
+    expect(markdownToStorage('a < b & c > d')).toBe('<p>a &lt; b &amp; c &gt; d</p>');
   });
 });
 

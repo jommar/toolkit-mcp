@@ -155,6 +155,36 @@ export class ConfluenceClient {
     };
   }
 
+  /** Create a page. `body` must already be storage-format XHTML (see `markdownToStorage`). */
+  async createPage(input: { space: string; title: string; body: string; parentId?: string }): Promise<ConfluencePage> {
+    const payload: Record<string, unknown> = {
+      type: 'page',
+      title: input.title,
+      space: { key: input.space },
+      body: { storage: { value: input.body, representation: 'storage' } },
+      ...(input.parentId ? { ancestors: [{ id: input.parentId }] } : {}),
+    };
+    const { data } = await this.http.post<any>('/content', payload);
+    return this.toPage(data);
+  }
+
+  /**
+   * Update a page in place. Confluence requires the version number to be incremented on
+   * every update, so the current version is fetched first and bumped automatically.
+   */
+  async updatePage(input: { pageId: string; body: string; title?: string }): Promise<ConfluencePage> {
+    const current = await this.getPageById(input.pageId);
+    const payload: Record<string, unknown> = {
+      id: input.pageId,
+      type: 'page',
+      title: input.title ?? current.title,
+      version: { number: (current.version ?? 0) + 1 },
+      body: { storage: { value: input.body, representation: 'storage' } },
+    };
+    const { data } = await this.http.put<any>(`/content/${encodeURIComponent(input.pageId)}`, payload);
+    return this.toPage(data);
+  }
+
   /** List spaces (offset-based pagination). Optionally filter by type or specific keys. */
   async listSpaces(
     opts: { limit?: number; start?: number; type?: string; keys?: string[] } = {},
@@ -210,6 +240,141 @@ export function storageToText(html: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+\n/g, '\n')
     .trim();
+}
+
+/** Escape the characters that are special in XHTML text content. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Apply a deliberately small set of inline Markdown rules to already-HTML-escaped text:
+ * inline code, links, bold, italic. Order matters — code spans are protected first so
+ * their contents are never re-processed by the later rules.
+ */
+function inlineMarkdown(text: string): string {
+  const codeSpans: string[] = [];
+  let out = escapeHtml(text).replace(/`([^`]+)`/g, (_m, code: string) => {
+    codeSpans.push(`<code>${code}</code>`);
+    return ` ${codeSpans.length - 1} `;
+  });
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, url: string) => `<a href="${url}">${label}</a>`);
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  out = out.replace(/_([^_]+)_/g, '<em>$1</em>');
+  out = out.replace(/ (\d+) /g, (_m, i: string) => codeSpans[Number(i)]);
+  return out;
+}
+
+/** Split a `| a | b |` table row into trimmed cell strings. */
+function splitTableRow(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+/** A table separator row, e.g. `|---|:---:|---:|`. */
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Convert a deliberately limited subset of Markdown to Confluence storage-format XHTML:
+ * headings, paragraphs, unordered/ordered lists, pipe tables, fenced code blocks, and the
+ * inline rules handled by `inlineMarkdown` (bold, italic, inline code, links). This is not
+ * a general Markdown parser — anything outside this subset (nested lists, blockquotes,
+ * images, HTML passthrough, etc.) is passed through as plain paragraph text.
+ */
+export function markdownToStorage(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const out: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      const lang = fence[1];
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing fence
+      out.push(
+        '<ac:structured-macro ac:name="code">' +
+          (lang ? `<ac:parameter ac:name="language">${lang}</ac:parameter>` : '') +
+          `<ac:plain-text-body><![CDATA[${codeLines.join('\n')}]]></ac:plain-text-body>` +
+          '</ac:structured-macro>',
+      );
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      out.push(`<h${level}>${inlineMarkdown(heading[2].trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    if (/^\s*\|/.test(line) && i + 1 < lines.length && TABLE_SEPARATOR.test(lines[i + 1])) {
+      const headerCells = splitTableRow(line);
+      i += 2; // skip header + separator row
+      const bodyRows: string[][] = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        bodyRows.push(splitTableRow(lines[i]));
+        i++;
+      }
+      const headerHtml = `<tr>${headerCells.map((c) => `<th>${inlineMarkdown(c)}</th>`).join('')}</tr>`;
+      const bodyHtml = bodyRows
+        .map((row) => `<tr>${row.map((c) => `<td>${inlineMarkdown(c)}</td>`).join('')}</tr>`)
+        .join('');
+      out.push(`<table><tbody>${headerHtml}${bodyHtml}</tbody></table>`);
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*]\s+/, ''));
+        i++;
+      }
+      out.push(`<ul>${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join('')}</ul>`);
+      continue;
+    }
+
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, ''));
+        i++;
+      }
+      out.push(`<ol>${items.map((it) => `<li>${inlineMarkdown(it)}</li>`).join('')}</ol>`);
+      continue;
+    }
+
+    const paraLines: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() !== '' &&
+      !/^```/.test(lines[i]) &&
+      !/^#{1,6}\s/.test(lines[i]) &&
+      !/^\s*\|/.test(lines[i]) &&
+      !/^\s*[-*]\s+/.test(lines[i]) &&
+      !/^\s*\d+\.\s+/.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    out.push(`<p>${inlineMarkdown(paraLines.join(' '))}</p>`);
+  }
+
+  return out.join('');
 }
 
 /** Turn an axios error into a concise, readable message (status + Confluence error body). */

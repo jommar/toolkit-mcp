@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ConfluenceClient, describeConfluenceError } from '../../services/index.js';
+import { ConfluenceClient, describeConfluenceError, markdownToStorage } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
 
@@ -45,6 +45,32 @@ export const confluenceListSpacesSchema = z.object({
 });
 
 export const confluenceWhoamiSchema = z.object({}).describe('Empty — no parameters required.');
+
+const confluenceBodyFormatSchema = z
+  .enum(['storage', 'markdown'])
+  .optional()
+  .default('storage')
+  .describe(
+    'Format of `body`: "storage" is Confluence storage-format XHTML (default); ' +
+      '"markdown" is converted via a deliberately limited subset — headings, paragraphs, ' +
+      'lists, pipe tables, fenced code blocks, bold/italic, inline code, and links. ' +
+      'Anything else (nested lists, blockquotes, images, raw HTML) is not converted.',
+  );
+
+export const confluenceCreatePageSchema = z.object({
+  space: z.string().max(100).describe('Space key to create the page in (e.g. "STD").'),
+  title: z.string().max(255).describe('Page title.'),
+  body: z.string().max(500_000).describe('Page content — see `format` for the accepted representation.'),
+  format: confluenceBodyFormatSchema,
+  parentId: z.string().max(30).optional().describe('Parent page ID to nest this page under.'),
+});
+
+export const confluenceUpdatePageSchema = z.object({
+  pageId: z.string().max(30).describe('ID of the page to update.'),
+  body: z.string().max(500_000).describe('New page content — see `format` for the accepted representation.'),
+  title: z.string().max(255).optional().describe('New title (omit to keep the existing title).'),
+  format: confluenceBodyFormatSchema,
+});
 
 // ---------------------------------------------------------------------------
 // CQL helpers
@@ -129,6 +155,47 @@ export const confluenceListSpacesHandler: ToolHandler<z.infer<typeof confluenceL
     }
   };
 
+export const confluenceCreatePageHandler: ToolHandler<z.infer<typeof confluenceCreatePageSchema>> =
+  (clients) => async (args) => {
+    try {
+      const body = args.format === 'markdown' ? markdownToStorage(args.body) : args.body;
+      const page = await clients.confluence.createPage({
+        space: args.space,
+        title: args.title,
+        body,
+        parentId: args.parentId,
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ id: page.id, title: page.title, spaceKey: page.spaceKey, url: page.url }),
+          },
+        ],
+      };
+    } catch (err) {
+      toMcp(err);
+    }
+  };
+
+export const confluenceUpdatePageHandler: ToolHandler<z.infer<typeof confluenceUpdatePageSchema>> =
+  (clients) => async (args) => {
+    try {
+      const body = args.format === 'markdown' ? markdownToStorage(args.body) : args.body;
+      const page = await clients.confluence.updatePage({ pageId: args.pageId, body, title: args.title });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ id: page.id, title: page.title, version: page.version, url: page.url }),
+          },
+        ],
+      };
+    } catch (err) {
+      toMcp(err);
+    }
+  };
+
 export const confluenceWhoamiHandler: ToolHandler<z.infer<typeof confluenceWhoamiSchema>> =
   (clients) => async (_args) => {
     try {
@@ -157,6 +224,20 @@ export const confluenceToolDescriptors = [
     name: 'confluence_list_spaces',
     description: 'List Confluence spaces (key, name, type, url) for discovery.',
     inputSchema: zodToJsonSchema(confluenceListSpacesSchema),
+  },
+  {
+    name: 'confluence_create_page',
+    description:
+      'Create a Confluence page. Accepts `format: "storage"` (XHTML, default) or `format: "markdown"` ' +
+      '(limited subset — see schema).',
+    inputSchema: zodToJsonSchema(confluenceCreatePageSchema),
+  },
+  {
+    name: 'confluence_update_page',
+    description:
+      'Update an existing Confluence page in place, auto-incrementing the version. Accepts ' +
+      '`format: "storage"` (XHTML, default) or `format: "markdown"` (limited subset — see schema).',
+    inputSchema: zodToJsonSchema(confluenceUpdatePageSchema),
   },
   {
     name: 'confluence_whoami',

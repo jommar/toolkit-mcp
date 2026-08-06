@@ -5,8 +5,12 @@ import {
   confluenceSearchSchema,
   confluenceGetPageSchema,
   confluenceListSpacesSchema,
+  confluenceCreatePageSchema,
+  confluenceUpdatePageSchema,
   confluenceSearchHandler,
   confluenceGetPageHandler,
+  confluenceCreatePageHandler,
+  confluenceUpdatePageHandler,
   confluenceWhoamiHandler,
   confluenceToolDescriptors,
 } from './module.js';
@@ -76,6 +80,81 @@ describe('handlers', () => {
       confluenceGetPageHandler(clients)({ space: 'STD', title: 'Nope', includeStorage: false }),
     ).rejects.toThrow(/No page found/);
   });
+
+  it('confluence_create_page passes storage body through unchanged by default', async () => {
+    const createPage = vi.fn().mockResolvedValue({ id: '1', title: 'T', spaceKey: 'STD', url: 'https://x/1' });
+    const clients = { confluence: { createPage } as any };
+
+    const result = await confluenceCreatePageHandler(clients)({
+      space: 'STD',
+      title: 'T',
+      body: '<p>hi</p>',
+      format: 'storage',
+    });
+
+    expect(createPage).toHaveBeenCalledWith({ space: 'STD', title: 'T', body: '<p>hi</p>', parentId: undefined });
+    expect(JSON.parse(result!.content[0].text as string)).toEqual({
+      id: '1',
+      title: 'T',
+      spaceKey: 'STD',
+      url: 'https://x/1',
+    });
+  });
+
+  it('confluence_create_page converts markdown before sending', async () => {
+    const createPage = vi.fn().mockResolvedValue({ id: '1', title: 'T', spaceKey: 'STD', url: 'https://x/1' });
+    const clients = { confluence: { createPage } as any };
+
+    await confluenceCreatePageHandler(clients)({ space: 'STD', title: 'T', body: '# Hi', format: 'markdown' });
+
+    expect(createPage).toHaveBeenCalledWith({
+      space: 'STD',
+      title: 'T',
+      body: '<h1>Hi</h1>',
+      parentId: undefined,
+    });
+  });
+
+  it('confluence_update_page fetches and increments the version via the client, then returns it', async () => {
+    const updatePage = vi.fn().mockResolvedValue({ id: '1', title: 'T', version: 4, url: 'https://x/1' });
+    const clients = { confluence: { updatePage } as any };
+
+    const result = await confluenceUpdatePageHandler(clients)({
+      pageId: '1',
+      body: '<p>new</p>',
+      format: 'storage',
+    });
+
+    expect(updatePage).toHaveBeenCalledWith({ pageId: '1', body: '<p>new</p>', title: undefined });
+    expect(JSON.parse(result!.content[0].text as string)).toEqual({ id: '1', title: 'T', version: 4, url: 'https://x/1' });
+  });
+
+  it('confluence_update_page converts markdown before sending', async () => {
+    const updatePage = vi.fn().mockResolvedValue({ id: '1', title: 'T', version: 2, url: 'https://x/1' });
+    const clients = { confluence: { updatePage } as any };
+
+    await confluenceUpdatePageHandler(clients)({ pageId: '1', body: '- a\n- b', format: 'markdown' });
+
+    expect(updatePage).toHaveBeenCalledWith({
+      pageId: '1',
+      body: '<ul><li>a</li><li>b</li></ul>',
+      title: undefined,
+    });
+  });
+});
+
+describe('schemas: create/update page', () => {
+  it('confluenceCreatePageSchema requires space, title, body and defaults format to storage', () => {
+    expect(confluenceCreatePageSchema.safeParse({}).success).toBe(false);
+    const parsed = confluenceCreatePageSchema.parse({ space: 'STD', title: 'T', body: '<p>x</p>' });
+    expect(parsed.format).toBe('storage');
+  });
+
+  it('confluenceUpdatePageSchema requires pageId and body, title/format optional', () => {
+    expect(confluenceUpdatePageSchema.safeParse({}).success).toBe(false);
+    const parsed = confluenceUpdatePageSchema.parse({ pageId: '1', body: '<p>x</p>' });
+    expect(parsed.format).toBe('storage');
+  });
 });
 
 describe('confluenceWhoamiHandler', () => {
@@ -106,9 +185,16 @@ describe('confluenceWhoamiHandler', () => {
 });
 
 describe('confluenceToolDescriptors', () => {
-  it('exposes exactly the four tools with object input schemas', () => {
+  it('exposes exactly the six tools with object input schemas', () => {
     const names = confluenceToolDescriptors.map((d) => d.name).sort();
-    expect(names).toEqual(['confluence_get_page', 'confluence_list_spaces', 'confluence_search', 'confluence_whoami']);
+    expect(names).toEqual([
+      'confluence_create_page',
+      'confluence_get_page',
+      'confluence_list_spaces',
+      'confluence_search',
+      'confluence_update_page',
+      'confluence_whoami',
+    ]);
     for (const d of confluenceToolDescriptors) {
       expect(d.inputSchema).toMatchObject({ type: 'object' });
       expect(typeof d.description).toBe('string');

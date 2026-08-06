@@ -7,6 +7,10 @@ import {
   confluenceGetPageSchema,
   confluenceListSpacesHandler,
   confluenceListSpacesSchema,
+  confluenceCreatePageHandler,
+  confluenceCreatePageSchema,
+  confluenceUpdatePageHandler,
+  confluenceUpdatePageSchema,
   confluenceWhoamiHandler,
   confluenceWhoamiSchema,
   confluenceToolDescriptors,
@@ -36,6 +40,14 @@ export class ConfluenceModule implements IntegrationModule<{ confluence: Conflue
       confluence_list_spaces: async (args) => {
         const parsed = confluenceListSpacesSchema.parse(args);
         return await confluenceListSpacesHandler(clients)(parsed);
+      },
+      confluence_create_page: async (args) => {
+        const parsed = confluenceCreatePageSchema.parse(args);
+        return await confluenceCreatePageHandler(clients)(parsed);
+      },
+      confluence_update_page: async (args) => {
+        const parsed = confluenceUpdatePageSchema.parse(args);
+        return await confluenceUpdatePageHandler(clients)(parsed);
       },
       confluence_whoami: async (args) => {
         const parsed = confluenceWhoamiSchema.parse(args);
