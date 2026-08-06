@@ -90,6 +90,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 
 | Tool | Description | Key Parameters |
 |---|---|---|
+| `github_get_code_review_ready` | Fetch Jira tickets in a given status (default "Ready For Code Review") and report which have every PR approved by a human (bot and author approvals ignored). | `status`, `project`, `assignee`, `prState` |
 | `github_get_prs` | Find pull requests for one or more issue keys. Supports title/body search and optional branch-name matching. | `issueKey`, `keys`, `state`, `limit`, `cursor`, `searchBranches` |
 | `github_create_pr` | Create a pull request on GitHub. | `repo`, `title`, `head`, `base`, `body`, `draft` |
 | `github_add_pr_comment` | Add an issue-level comment to a pull request. | `repo`, `prNumber`, `body` |

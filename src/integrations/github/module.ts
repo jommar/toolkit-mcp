@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { GitHubClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
+import { GitHubClient, JiraClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
 import type { PrInfo, PullRequestDetail, PullRequestReview, PullRequestChecks, PrReviewComment, PrReviewSubmitted } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
@@ -40,6 +40,35 @@ export const githubGetPrsSchema = z.object({
     .optional()
     .default(false)
     .describe('Also search by branch name for the given issue key.'),
+});
+
+export const githubGetCodeReviewReadySchema = z.object({
+  status: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .default('Ready For Code Review')
+    .describe('Jira status to search for tickets in (default "Ready For Code Review").'),
+  project: z
+    .string()
+    .min(1)
+    .max(20)
+    .optional()
+    .default('TRIPS')
+    .describe('Jira project key to search (default "TRIPS").'),
+  assignee: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .default('currentUser()')
+    .describe('Jira assignee filter — JQL expression (default "currentUser()").'),
+  prState: z
+    .enum(['open', 'all'])
+    .optional()
+    .default('open')
+    .describe('Filter PRs by state (default "open").'),
 });
 
 export const githubCreatePrSchema = z.object({
@@ -366,7 +395,7 @@ function parseOffsetCursor(cursor: string | undefined): number {
 // Handler Factories
 // ---------------------------------------------------------------------------
 type ToolHandler<T = unknown> = (
-  clients: { github: GitHubClient },
+  clients: { github: GitHubClient; jira?: JiraClient },
 ) => (args: T) => Promise<{
   content: { type: 'text'; text: string }[];
 }>;
@@ -438,6 +467,77 @@ export const githubGetPrsHandler: ToolHandler<z.infer<typeof githubGetPrsSchema>
     }
 
     throw new McpError(ErrorCode.InvalidParams, 'Provide either issueKey or keys');
+  };
+
+export const githubGetCodeReviewReadyHandler: ToolHandler<z.infer<typeof githubGetCodeReviewReadySchema>> =
+  (clients) => async (args) => {
+    const {
+      status = 'Ready For Code Review',
+      project = 'TRIPS',
+      assignee = 'currentUser()',
+      prState = 'open',
+    } = args;
+    if (!clients.jira) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        'Jira integration not configured — JIRA_BASE_URL, JIRA_EMAIL, and JIRA_TOKEN are required.',
+      );
+    }
+    const jql = `project = ${project} AND assignee = ${assignee} AND status = '${status.replace(/'/g, "\\'")}'`;
+    const issues = await clients.jira.searchAllSlim(jql);
+    if (issues.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              tickets: [],
+              summary: `No tickets found in status "${status}" assigned to ${assignee} in ${project}.`,
+            }),
+          },
+        ],
+      };
+    }
+    const prsByKey = await clients.github.findPrsForIssueKeys(
+      issues.map((issue) => issue.key),
+      prState,
+    );
+    const tickets = await Promise.all(
+      issues.map(async (issue) => {
+        const prs = prsByKey.get(issue.key) ?? [];
+        const settled = await Promise.allSettled(
+          prs.map((pr) => clients.github.isPrApprovedByHuman(pr.repo, pr.number, pr.author)),
+        );
+        const prReports = prs.map((pr, i) => ({
+          repo: pr.repo,
+          prNumber: pr.number,
+          title: pr.title,
+          state: pr.state,
+          htmlUrl: pr.htmlUrl,
+          approved: settled[i].status === 'fulfilled' ? settled[i].value : false,
+          approvalCheckFailed: settled[i].status === 'rejected',
+        }));
+        return {
+          key: issue.key,
+          summary: issue.summary,
+          allApproved: prReports.length > 0 && prReports.every((pr) => pr.approved && !pr.approvalCheckFailed),
+          prs: prReports,
+        };
+      }),
+    );
+    const ready = tickets.filter((ticket) => ticket.allApproved);
+    const withPrs = tickets.filter((ticket) => ticket.prs.length > 0);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            tickets,
+            summary: `${ready.length} of ${withPrs.length} tickets with PRs have every PR approved by a human.`,
+          }),
+        },
+      ],
+    };
   };
 
 export const githubCreatePrHandler: ToolHandler<z.infer<typeof githubCreatePrSchema>> =
@@ -754,6 +854,12 @@ export const githubDismissPrReviewHandler: ToolHandler<z.infer<typeof githubDism
 
 /** All tool descriptors for the ListToolsRequestSchema response. */
 export const githubToolDescriptors = [
+  {
+    name: 'github_get_code_review_ready',
+    description:
+      'Fetch Jira tickets in a given status (default "Ready For Code Review") and report which have every PR approved by a human.',
+    inputSchema: zodToJsonSchema(githubGetCodeReviewReadySchema),
+  },
   {
     name: 'github_get_prs',
     description: 'Find pull requests for one or more issue keys.',

@@ -1,8 +1,10 @@
-import { GitHubClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
+import { GitHubClient, JiraClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
 import { IntegrationModule, ToolHandlerFn, ToolDescriptor } from '../index.js';
 import {
   githubGetPrsHandler,
   githubGetPrsSchema,
+  githubGetCodeReviewReadyHandler,
+  githubGetCodeReviewReadySchema,
   githubCreatePrHandler,
   githubCreatePrSchema,
   githubAddPrCommentHandler,
@@ -60,7 +62,7 @@ import {
   githubToolDescriptors,
 } from './module.js';
 
-export class GitHubModule implements IntegrationModule<{ github: GitHubClient }> {
+export class GitHubModule implements IntegrationModule<{ github: GitHubClient; jira?: JiraClient }> {
   readonly id = 'github';
 
   getResourcePrefix(): string {
@@ -71,8 +73,12 @@ export class GitHubModule implements IntegrationModule<{ github: GitHubClient }>
     return !!process.env.GH_TOKEN;
   }
 
-  createToolHandlers(clients: { github: GitHubClient }): Record<string, ToolHandlerFn> {
+  createToolHandlers(clients: { github: GitHubClient; jira?: JiraClient }): Record<string, ToolHandlerFn> {
     return {
+      github_get_code_review_ready: async (args) => {
+        const parsed = githubGetCodeReviewReadySchema.parse(args);
+        return await githubGetCodeReviewReadyHandler(clients)(parsed);
+      },
       github_get_prs: async (args) => {
         const parsed = githubGetPrsSchema.parse(args);
         return await githubGetPrsHandler(clients)(parsed);

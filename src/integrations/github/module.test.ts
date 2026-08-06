@@ -55,6 +55,8 @@ import {
   githubUpdatePrAssigneesSchema,
   githubDismissPrReviewHandler,
   githubDismissPrReviewSchema,
+  githubGetCodeReviewReadyHandler,
+  githubGetCodeReviewReadySchema,
 } from './module.js';
 
 function makeMockGitHub() {
@@ -69,6 +71,7 @@ function makeMockGitHub() {
     listBranches: vi.fn(),
     getPullRequest: vi.fn(),
     getPullRequestReviews: vi.fn(),
+    isPrApprovedByHuman: vi.fn(),
     getPullRequestChecks: vi.fn(),
     searchPullRequestsByQuery: vi.fn(),
     updatePullRequest: vi.fn(),
@@ -281,6 +284,152 @@ describe('githubGetPrsHandler', () => {
     expect(parsed.items[0].number).toBe(10);
     expect(parsed.hasMore).toBe(true);
     expect(parsed.nextPageToken).toBe('15');
+  });
+});
+
+describe('githubGetCodeReviewReadyHandler', () => {
+  let mockGitHub: MockGitHub;
+  let mockJira: { searchAllSlim: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGitHub = makeMockGitHub();
+    mockJira = { searchAllSlim: vi.fn() };
+  });
+
+  function makeIssue(key: string, summary: string) {
+    return {
+      key,
+      summary,
+      status: 'Ready For Code Review',
+      type: 'Story',
+      assignee: 'Jommar Ilagan',
+      reporter: null,
+      priority: null,
+      labels: [],
+      created: null,
+      updated: null,
+      parent: null,
+      subtasks: [],
+      comments: [],
+      attachments: [],
+      description: null,
+    };
+  }
+
+  function makePr(number: number, repo: string, author = 'jommar') {
+    return {
+      number,
+      title: `PR ${number}`,
+      state: 'open' as const,
+      repo,
+      author,
+      createdAt: '2026-08-05T00:00:00Z',
+      htmlUrl: `https://github.com/${repo}/pull/${number}`,
+      reviewStatus: 'REVIEW_REQUIRED' as const,
+    };
+  }
+
+  it('reports tickets where every PR is approved by a human', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-100', 'One PR')]);
+    const grouped = new Map([['TRIPS-100', [makePr(1, 'Org/Repo')]]]);
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
+    mockGitHub.isPrApprovedByHuman.mockResolvedValue(true);
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    const result = await handler({});
+
+    expect(mockJira.searchAllSlim).toHaveBeenCalledWith(
+      "project = TRIPS AND assignee = currentUser() AND status = 'Ready For Code Review'",
+    );
+    expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(['TRIPS-100'], 'open');
+    expect(mockGitHub.isPrApprovedByHuman).toHaveBeenCalledWith('Org/Repo', 1, 'jommar');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.tickets[0].key).toBe('TRIPS-100');
+    expect(parsed.tickets[0].allApproved).toBe(true);
+    expect(parsed.tickets[0].prs[0].approved).toBe(true);
+    expect(parsed.summary).toBe('1 of 1 tickets with PRs have every PR approved by a human.');
+  });
+
+  it('marks a ticket pending when any PR lacks a human approval', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-200', 'Two PRs')]);
+    const grouped = new Map([
+      ['TRIPS-200', [makePr(2, 'Org/Repo'), makePr(3, 'Org/Other')]],
+    ]);
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
+    mockGitHub.isPrApprovedByHuman
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    const parsed = JSON.parse((await handler({})).content[0].text);
+
+    expect(parsed.tickets[0].allApproved).toBe(false);
+    expect(parsed.tickets[0].prs[0].approved).toBe(true);
+    expect(parsed.tickets[0].prs[1].approved).toBe(false);
+    expect(parsed.summary).toBe('0 of 1 tickets with PRs have every PR approved by a human.');
+  });
+
+  it('does not mark a ticket with no PRs as approved', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-300', 'No PRs')]);
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(new Map([['TRIPS-300', []]]));
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    const parsed = JSON.parse((await handler({})).content[0].text);
+
+    expect(parsed.tickets[0].prs).toEqual([]);
+    expect(parsed.tickets[0].allApproved).toBe(false);
+    expect(parsed.summary).toBe('0 of 0 tickets with PRs have every PR approved by a human.');
+  });
+
+  it('flags a PR with a failed approval check instead of failing the whole call', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-400', 'Flaky')]);
+    const grouped = new Map([['TRIPS-400', [makePr(4, 'Org/Repo')]]]);
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
+    mockGitHub.isPrApprovedByHuman.mockRejectedValue(new Error('rate limited'));
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    const parsed = JSON.parse((await handler({})).content[0].text);
+
+    expect(parsed.tickets[0].prs[0].approved).toBe(false);
+    expect(parsed.tickets[0].prs[0].approvalCheckFailed).toBe(true);
+    expect(parsed.tickets[0].allApproved).toBe(false);
+  });
+
+  it('returns an empty report when no tickets match', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([]);
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    const parsed = JSON.parse((await handler({})).content[0].text);
+
+    expect(parsed.tickets).toEqual([]);
+    expect(mockGitHub.findPrsForIssueKeys).not.toHaveBeenCalled();
+  });
+
+  it('honors custom status, project, assignee, and prState params', async () => {
+    mockJira.searchAllSlim.mockResolvedValue([]);
+
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
+    await handler({ status: 'In Review', project: 'TEST', assignee: 'alice', prState: 'all' });
+
+    expect(mockJira.searchAllSlim).toHaveBeenCalledWith(
+      "project = TEST AND assignee = alice AND status = 'In Review'",
+    );
+  });
+
+  it('throws when the Jira client is not configured', async () => {
+    const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any });
+    await expect(handler({})).rejects.toThrow(/Jira integration not configured/);
+  });
+
+  it('validates the prState param and applies defaults via the schema', async () => {
+    expect(() => githubGetCodeReviewReadySchema.parse({ prState: 'bogus' })).toThrow();
+    expect(githubGetCodeReviewReadySchema.parse({})).toMatchObject({
+      status: 'Ready For Code Review',
+      project: 'TRIPS',
+      assignee: 'currentUser()',
+      prState: 'open',
+    });
   });
 });
 

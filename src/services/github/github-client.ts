@@ -852,6 +852,20 @@ export class GitHubClient {
     }));
   }
 
+  /**
+   * True when the PR has an APPROVED review from a human other than the PR author.
+   * Bot reviews (login ending in "[bot]") and the author's own approval never count.
+   */
+  async isPrApprovedByHuman(repo: string, prNumber: number, authorLogin: string): Promise<boolean> {
+    const reviews = await this.getPullRequestReviews(repo, prNumber);
+    return reviews.some(
+      (review) =>
+        review.state === 'APPROVED' &&
+        !review.user.endsWith('[bot]') &&
+        review.user !== authorLogin,
+    );
+  }
+
   async getPullRequestChecks(repo: string, prNumber: number): Promise<PullRequestChecks> {
     this.assertRepo(repo);
     const prDetail = await this.getPullRequest(repo, prNumber);

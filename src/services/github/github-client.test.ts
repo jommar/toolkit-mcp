@@ -1316,6 +1316,66 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('isPrApprovedByHuman', () => {
+    it('returns true when a human other than the author approved', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [{ id: 1, user: { login: 'alice' }, state: 'APPROVED', body: 'LGTM', submitted_at: '', commit_id: '' }],
+      });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(true);
+    });
+
+    it('returns false when only the PR author approved (self-approval)', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [{ id: 1, user: { login: 'jommar' }, state: 'APPROVED', body: 'LGTM', submitted_at: '', commit_id: '' }],
+      });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(false);
+    });
+
+    it('returns false when only a bot approved', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [{ id: 1, user: { login: 'copilot-pull-request-reviewer[bot]' }, state: 'APPROVED', body: '', submitted_at: '', commit_id: '' }],
+      });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(false);
+    });
+
+    it('returns false when reviews are COMMENTED only', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, user: { login: 'copilot-pull-request-reviewer[bot]' }, state: 'COMMENTED', body: '', submitted_at: '', commit_id: '' },
+          { id: 2, user: { login: 'alice' }, state: 'COMMENTED', body: 'nits', submitted_at: '', commit_id: '' },
+        ],
+      });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(false);
+    });
+
+    it('returns true when a bot commented and a human approved', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { id: 1, user: { login: 'copilot-pull-request-reviewer[bot]' }, state: 'COMMENTED', body: 'nits', submitted_at: '', commit_id: '' },
+          { id: 2, user: { login: 'alice' }, state: 'APPROVED', body: 'LGTM', submitted_at: '', commit_id: '' },
+        ],
+      });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(true);
+    });
+
+    it('returns false when there are no reviews', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(false);
+    });
+  });
+
   describe('getPullRequestChecks', () => {
     it('returns full PullRequestChecks structure with headSha from PR detail', async () => {
       // First http.get call: getPullRequest returns PR detail with head.sha
