@@ -23,8 +23,10 @@ import {
   jiraListTransitionsHandler,
   jiraListIssueLinkTypesHandler,
   jiraSearchUsersHandler,
+  jiraListFieldsHandler,
   jiraDeleteCommentHandler,
 } from './module.js';
+import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
 
 function makeMockJira() {
   return {
@@ -33,6 +35,7 @@ function makeMockJira() {
     getIssueSlim: vi.fn(),
     search: vi.fn(),
     searchUsers: vi.fn(),
+    getFields: vi.fn(),
     createIssue: vi.fn(),
     updateIssue: vi.fn(),
     listTransitions: vi.fn(),
@@ -148,6 +151,39 @@ describe('jiraGetIssuesHandler', () => {
     expect(mockJira.search).not.toHaveBeenCalled();
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(1);
+  });
+
+  it('requests and passes through custom fields (key mode), excluding DEV_FIELDS', async () => {
+    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Test', customfield_10058: 5 } };
+    mockJira.getIssue.mockResolvedValue(rawIssue);
+
+    const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', fields: ['summary', 'customfield_10058'] });
+
+    expect(mockJira.getIssue).toHaveBeenCalledWith(
+      'TRIPS-1',
+      expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
+    );
+    expect(toSlimIssue).toHaveBeenCalledWith(rawIssue, ['customfield_10058']);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items[0].fields.customfield_10058).toBe(5);
+  });
+
+  it('requests and passes through custom fields (JQL mode)', async () => {
+    const rawIssues = [{ id: '1', key: 'TRIPS-1', fields: { summary: 'A', customfield_10058: 5 } }];
+    mockJira.search.mockResolvedValue({ issues: rawIssues, nextPageToken: undefined });
+
+    const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+    const result = await handler({ jql: 'project = TRIPS', limit: 20, fields: ['customfield_10058'] });
+
+    expect(mockJira.search).toHaveBeenCalledWith('project = TRIPS', {
+      maxResults: 20,
+      nextPageToken: undefined,
+      fields: expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
+    });
+    expect(toSlimIssue).toHaveBeenCalledWith(rawIssues[0], ['customfield_10058']);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items[0].fields.customfield_10058).toBe(5);
   });
 
   it('throws when neither key nor jql provided', async () => {
@@ -729,6 +765,46 @@ describe('jiraSearchUsersHandler', () => {
     expect(mockJira.searchUsers).toHaveBeenCalledWith('John');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(users);
+  });
+});
+
+describe('jiraListFieldsHandler', () => {
+  let mockJira: MockJira;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('returns all fields when no search filter given', async () => {
+    const fields = [
+      { id: 'summary', name: 'Summary', custom: false },
+      { id: 'customfield_10058', name: 'Story Points', custom: true },
+    ];
+    mockJira.getFields.mockResolvedValue(fields);
+
+    const handler = jiraListFieldsHandler({ jira: mockJira as any });
+    const result = await handler({});
+
+    expect(mockJira.getFields).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(result.content[0].text)).toEqual(fields);
+  });
+
+  it('filters fields by case-insensitive name substring', async () => {
+    const fields = [
+      { id: 'summary', name: 'Summary', custom: false },
+      { id: 'customfield_10058', name: 'Story Points', custom: true },
+      { id: 'customfield_10016', name: 'Story point estimate', custom: true },
+      { id: 'customfield_10020', name: 'Sprint', custom: true },
+    ];
+    mockJira.getFields.mockResolvedValue(fields);
+
+    const handler = jiraListFieldsHandler({ jira: mockJira as any });
+    const result = await handler({ search: 'STORY' });
+
+    const items = JSON.parse(result.content[0].text);
+    expect(items).toHaveLength(2);
+    expect(items.map((f: any) => f.id).sort()).toEqual(['customfield_10016', 'customfield_10058']);
   });
 });
 

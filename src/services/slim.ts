@@ -56,11 +56,16 @@ export interface SlimIssue {
   description: string | null;
   comments: SlimComment[];
   attachments: SlimAttachment[];
+  /** Requested custom fields, keyed by their Jira field ID (e.g. story points). Absent unless asked for. */
+  custom?: Record<string, unknown>;
 }
 
 /** Flatten a raw Jira issue into the compact dev shape (drops nulls/links/avatars/ADF). */
-export function toSlimIssue(issue: JiraIssue): SlimIssue {
+export function toSlimIssue(issue: JiraIssue, customIds?: string[]): SlimIssue {
   const f = issue.fields as Record<string, any>;
+  const entries = (customIds ?? [])
+    .map((id) => [id, f[id]] as const)
+    .filter(([, v]) => v != null);
   return {
     key: issue.key,
     summary: f.summary ?? '',
@@ -77,6 +82,7 @@ export function toSlimIssue(issue: JiraIssue): SlimIssue {
     description: adfToText(f.description),
     comments: Array.isArray(f.comment?.comments) ? f.comment.comments.map(toSlimComment).reverse() : [],
     attachments: Array.isArray(f.attachment) ? f.attachment.map(toSlimAttachment) : [],
+    custom: entries.length ? Object.fromEntries(entries) : undefined,
   };
 }
 

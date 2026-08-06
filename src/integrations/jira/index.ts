@@ -15,6 +15,7 @@ import {
   jiraListTransitionsHandler,
   jiraListIssueLinkTypesHandler,
   jiraSearchUsersHandler,
+  jiraListFieldsHandler,
   jiraDeleteCommentHandler,
   jiraWhoamiSchema,
   jiraGetIssuesSchema,
@@ -30,6 +31,7 @@ import {
   jiraListTransitionsSchema,
   jiraListIssueLinkTypesSchema,
   jiraSearchUsersSchema,
+  jiraListFieldsSchema,
   jiraDeleteCommentSchema,
   jiraCreateIssuePromptSchema,
   jiraTriageIssuePromptSchema,
@@ -104,6 +106,10 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
       jira_search_users: async (args) => {
         const parsed = jiraSearchUsersSchema.parse(args);
         return await jiraSearchUsersHandler(clients)(parsed);
+      },
+      jira_list_fields: async (args) => {
+        const parsed = jiraListFieldsSchema.parse(args);
+        return await jiraListFieldsHandler(clients)(parsed);
       },
       jira_delete_comment: async (args) => {
         const parsed = jiraDeleteCommentSchema.parse(args);

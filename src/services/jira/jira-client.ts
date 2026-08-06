@@ -9,6 +9,12 @@ export interface JiraUser {
   emailAddress?: string;
 }
 
+export interface JiraField {
+  id: string;
+  name: string;
+  custom: boolean;
+}
+
 export interface JiraIssue {
   id: string;
   key: string;
@@ -66,6 +72,12 @@ export class JiraClient {
     return data;
   }
 
+  /** All fields on the instance — use to find custom field IDs (e.g. Story Points). */
+  async getFields(): Promise<JiraField[]> {
+    const { data } = await this.http.get<JiraField[]>('/field');
+    return data.map((f) => ({ id: f.id, name: f.name, custom: f.custom ?? false }));
+  }
+
   /** Fetch a single issue by key (e.g. "TRIPS-1267"). */
   async getIssue(key: string, fields?: string[]): Promise<JiraIssue> {
     const { data } = await this.http.get<JiraIssue>(`/issue/${encodeURIComponent(key)}`, {
@@ -109,7 +121,7 @@ export class JiraClient {
   /** JQL search returning compact dev-shaped issues (narrow fields + flattened). */
   async searchSlim(jql: string, opts: { maxResults?: number; nextPageToken?: string } = {}): Promise<SlimIssue[]> {
     const res = await this.search(jql, { ...opts, fields: [...DEV_FIELDS] });
-    return res.issues.map(toSlimIssue);
+    return res.issues.map((issue) => toSlimIssue(issue));
   }
 
   /**
@@ -132,7 +144,7 @@ export class JiraClient {
   /** searchAll returning compact dev-shaped issues. */
   async searchAllSlim(jql: string, opts: { pageSize?: number; max?: number } = {}): Promise<SlimIssue[]> {
     const issues = await this.searchAll(jql, { ...opts, fields: [...DEV_FIELDS] });
-    return issues.map(toSlimIssue);
+    return issues.map((issue) => toSlimIssue(issue));
   }
 
   /**

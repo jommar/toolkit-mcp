@@ -148,6 +148,37 @@ describe('toSlimIssue', () => {
     expect(slim.comments[0].id).toBe('new');
     expect(slim.comments[1].id).toBe('old');
   });
+
+  it('passes through requested custom fields by their field ID', () => {
+    const issue: JiraIssue = {
+      id: '1',
+      key: 'TEST-1',
+      fields: {
+        summary: 'Test',
+        customfield_10058: 5,
+      },
+    };
+    const slim = toSlimIssue(issue, ['customfield_10058']);
+    expect(slim.custom).toEqual({ customfield_10058: 5 });
+  });
+
+  it('drops null/undefined custom field values', () => {
+    const issue: JiraIssue = {
+      id: '1',
+      key: 'TEST-1',
+      fields: {
+        summary: 'Test',
+        customfield_10058: null,
+      },
+    };
+    const slim = toSlimIssue(issue, ['customfield_10058']);
+    expect(slim.custom).toBeUndefined();
+  });
+
+  it('omits custom key when no custom fields requested', () => {
+    const slim = toSlimIssue(fullIssue);
+    expect(slim.custom).toBeUndefined();
+  });
 });
 
 describe('toSlimComment', () => {

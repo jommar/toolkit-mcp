@@ -22,7 +22,10 @@ export const jiraGetIssuesSchema = z.object({
     .describe('JQL query string for searching issues.'),
   limit: z.number().optional().default(20).describe('Maximum items per page (default 20).'),
   cursor: z.string().optional().describe('Opaque pagination token from a previous response.'),
-  fields: z.array(z.string()).optional().describe('Subset of fields to return (e.g., ["key","status"]).'),
+  fields: z
+    .array(z.string())
+    .optional()
+    .describe('Subset of fields to return (e.g., ["key","status"]). Custom fields (e.g. story points) pass through under their field ID — look IDs up with `jira_list_fields`.'),
 });
 
 export const jiraCreateIssueSchema = z.object({
@@ -129,6 +132,14 @@ export const jiraSearchUsersSchema = z.object({
   query: z.string().max(256).describe('Query string to search users by display name or email.'),
 });
 
+export const jiraListFieldsSchema = z.object({
+  search: z
+    .string()
+    .max(100)
+    .optional()
+    .describe('Case-insensitive substring filter on field name (e.g. "story" finds Story Points).'),
+});
+
 export const jiraDeleteCommentSchema = z.object({
   key: z.string().max(20).describe('Issue key the comment belongs to.'),
   commentId: z.string().max(30).describe('ID of the comment to delete.'),
@@ -177,6 +188,7 @@ export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
 export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchema>> =
   (_clients) => async (args) => {
     const { key, jql, limit, cursor, fields } = args;
+    const customFieldIds = fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
 
     if (key) {
       // Always slim. If custom fields are requested, merge with DEV_FIELDS.
@@ -184,7 +196,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
       const raw = issueFields
         ? await _clients.jira.getIssue(key, issueFields)
         : await _clients.jira.getIssue(key, [...DEV_FIELDS]);
-      const issue = toSlimIssue(raw);
+      const issue = toSlimIssue(raw, customFieldIds);
       return {
         content: [
           {
@@ -205,7 +217,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
         searchOpts.fields = searchFields;
       }
       const result: SearchResult = await _clients.jira.search(jql, searchOpts);
-      const items: SlimIssue[] = result.issues.map(toSlimIssue);
+      const items: SlimIssue[] = result.issues.map((issue) => toSlimIssue(issue, customFieldIds));
       return {
         content: [
           {
@@ -384,6 +396,15 @@ export const jiraSearchUsersHandler: ToolHandler<z.infer<typeof jiraSearchUsersS
     return { content: [{ type: 'text', text: JSON.stringify(users) }] };
   };
 
+export const jiraListFieldsHandler: ToolHandler<z.infer<typeof jiraListFieldsSchema>> =
+  (_clients) => async (args) => {
+    const fields = await _clients.jira.getFields();
+    const items = args.search
+      ? fields.filter((f) => f.name.toLowerCase().includes(args.search!.toLowerCase()))
+      : fields;
+    return { content: [{ type: 'text', text: JSON.stringify(items) }] };
+  };
+
 export const jiraDeleteCommentHandler: ToolHandler<z.infer<typeof jiraDeleteCommentSchema>> =
   (_clients) => async (args) => {
     await _clients.jira.deleteComment(args.key, args.commentId);
@@ -498,6 +519,11 @@ export const jiraToolDescriptors = [
     name: 'jira_search_users',
     description: 'Search for Jira users by display name or email.',
     inputSchema: zodToJsonSchema(jiraSearchUsersSchema),
+  },
+  {
+    name: 'jira_list_fields',
+    description: 'List Jira fields (id, name, custom) — use to find custom field IDs like Story Points.',
+    inputSchema: zodToJsonSchema(jiraListFieldsSchema),
   },
   {
     name: 'jira_delete_comment',
