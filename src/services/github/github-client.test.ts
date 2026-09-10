@@ -2436,6 +2436,396 @@ describe('getReviewStatus regression', () => {
     });
   });
 
+  describe('getCopilotUnresolvedPrs', () => {
+    const threadPage = (nodes: unknown[], endCursor: string | null = null, hasNextPage = false) => ({
+      data: { data: { repository: { pullRequest: { reviewThreads: {
+        nodes, pageInfo: { endCursor, hasNextPage },
+      } } } } },
+    });
+    const copilotThread = {
+      isResolved: false,
+      comments: { nodes: [{ body: 'Check the return value.', author: { __typename: 'Bot', login: 'copilot-pull-request-reviewer' } }] },
+    };
+    const candidatePage = (nodes: unknown[], endCursor: string | null = null, hasNextPage = false) => ({
+      data: { data: { repository: { pullRequests: { nodes, pageInfo: { endCursor, hasNextPage } } } } },
+    });
+
+    it('collects full unresolved originating bodies across all pages after an earlier match', async () => {
+      http.post
+        .mockResolvedValueOnce(threadPage([
+          { isResolved: false, comments: { nodes: [{ body: 'First concern.\n\n```ts\nreturn value;\n```', author: { __typename: 'Bot', login: 'Copilot' } }] } },
+          { isResolved: true, comments: { nodes: [{ body: 'Resolved concern must not appear.', author: { __typename: 'Bot', login: 'Copilot' } }] } },
+        ], 'threads-1', true))
+        .mockResolvedValueOnce(threadPage([
+          { isResolved: false, isOutdated: true, comments: { nodes: [{ body: 'Later unresolved concern.', author: { __typename: 'Bot', login: 'Copilot' } }] } },
+          { isResolved: true, comments: { nodes: [{ body: 'Another resolved concern.', author: { __typename: 'Bot', login: 'Copilot' } }] } },
+        ]));
+      expect(await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] })).toEqual({
+        items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['First concern.\n\n```ts\nreturn value;\n```', 'Later unresolved concern.'] }],
+        hasMore: false,
+      });
+      expect(http.post).toHaveBeenCalledTimes(2);
+      expect(http.post.mock.calls[0][1].query).toContain('body');
+    });
+
+    it('returns an empty originating body as a valid unresolved comment', async () => {
+      http.post.mockResolvedValueOnce(threadPage([{
+        isResolved: false,
+        comments: { nodes: [{ body: '', author: { __typename: 'Bot', login: 'Copilot' } }] },
+      }]));
+      expect(await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] })).toEqual({
+        items: [{ repo: 'Org/Repo', prNumber: 42, comments: [''] }], hasMore: false,
+      });
+    });
+
+    it('returns comment bodies for a viewer PR with an unresolved Copilot-started thread when prNumbers is omitted', async () => {
+      http.post
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'alice' } } } })
+        .mockResolvedValueOnce({
+          data: {
+            data: {
+              repository: {
+                pullRequests: {
+                  nodes: [{ number: 42, author: { login: 'alice' }, state: 'OPEN' }],
+                  pageInfo: { endCursor: null, hasNextPage: false },
+                },
+              },
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [{
+                      isResolved: false,
+                      isOutdated: false,
+                      comments: {
+                        nodes: [{ body: 'Check the return value.', author: { __typename: 'Bot', login: 'copilot-pull-request-reviewer' } }],
+                      },
+                    }],
+                    pageInfo: { endCursor: null, hasNextPage: false },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+      const client = new GitHubClient();
+      const result = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo' });
+
+      expect(result.items).toEqual([{ repo: 'Org/Repo', prNumber: 42, comments: ['Check the return value.'] }]);
+      expect(result.hasMore).toBe(false);
+      expect(result.nextPageToken).toBeUndefined();
+    });
+
+    it('deduplicates explicit numbers and inspects them without viewer, author or state discovery', async () => {
+      http.post
+        .mockResolvedValueOnce(threadPage([copilotThread]))
+        .mockResolvedValueOnce(threadPage([copilotThread]));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', prNumbers: [42, 7, 42], state: 'closed',
+      });
+      expect(result).toEqual({
+        items: [
+          { repo: 'Org/Repo', prNumber: 42, comments: ['Check the return value.'] },
+          { repo: 'Org/Repo', prNumber: 7, comments: ['Check the return value.'] },
+        ], hasMore: false,
+      });
+      expect(http.post).toHaveBeenCalledTimes(2);
+      expect(http.post.mock.calls.map((call) => call[1].variables.prNumber)).toEqual([42, 7]);
+      expect(http.post.mock.calls.every((call) => !call[1].query.includes('viewer'))).toBe(true);
+    });
+
+    it.each([
+      [undefined, ['OPEN']], ['closed', ['CLOSED', 'MERGED']], ['all', null],
+    ] as const)('discovers all authors with [] and state %s in one bounded repository page', async (state, states) => {
+      http.post
+        .mockResolvedValueOnce(candidatePage([
+          { number: 11, author: { login: 'bob' } }, { number: 12, author: null },
+        ]))
+        .mockResolvedValueOnce(threadPage([copilotThread]))
+        .mockResolvedValueOnce(threadPage([]));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [], state });
+      expect(result).toEqual({ items: [{ repo: 'Org/Repo', prNumber: 11, comments: ['Check the return value.'] }], hasMore: false });
+      expect(http.post).toHaveBeenNthCalledWith(1, '/graphql', {
+        query: expect.stringContaining('states: $states'),
+        variables: { owner: 'Org', name: 'Repo', limit: 20, states, cursor: null },
+      });
+      expect(http.post).toHaveBeenCalledTimes(3);
+    });
+
+    it('scans every thread page and includes outdated matches', async () => {
+      http.post
+        .mockResolvedValueOnce(threadPage([], 'threads-1', true))
+        .mockResolvedValueOnce(threadPage([{ ...copilotThread, isOutdated: true }], 'threads-2', true))
+        .mockResolvedValueOnce(threadPage([]));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] });
+      expect(result).toEqual({ items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['Check the return value.'] }], hasMore: false });
+      expect(http.post).toHaveBeenCalledTimes(3);
+      expect(http.post).toHaveBeenNthCalledWith(2, '/graphql', {
+        query: expect.stringContaining('reviewThreads(first: 100, after: $cursor)'),
+        variables: { owner: 'Org', name: 'Repo', prNumber: 42, cursor: 'threads-1' },
+      });
+      expect(http.post.mock.calls[0][1].query).toContain('comments(first: 1)');
+      expect(http.post.mock.calls[0][1].query).toContain('body');
+      expect(http.post.mock.calls[0][1].query).not.toMatch(/\b(path|diffHunk)\b/);
+    });
+
+    it.each([
+      ['current bot login', { __typename: 'Bot', login: 'Copilot' }, false, true],
+      ['historical bot login', { __typename: 'Bot', login: 'copilot-pull-request-reviewer' }, false, true],
+      ['resolved bot', { __typename: 'Bot', login: 'Copilot' }, true, false],
+      ['deleted author', null, false, false],
+      ['lookalike bot', { __typename: 'Bot', login: 'copilot-pull-request-reviewer-helper' }, false, false],
+      ['human lookalike', { __typename: 'User', login: 'copilot-pull-request-reviewer' }, false, false],
+      ['human origin with Copilot reply', { __typename: 'User', login: 'alice' }, false, false],
+    ])('classifies %s by the first comment only', async (_label, author, isResolved, matches) => {
+      http.post.mockResolvedValueOnce(threadPage([{
+        isResolved, comments: { nodes: [
+          { body: 'Originating concern.', author },
+          { body: 'Reply must not appear.', author: { __typename: 'Bot', login: 'Copilot' } },
+        ] },
+      }]));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] });
+      expect(result).toEqual({ items: matches ? [{ repo: 'Org/Repo', prNumber: 42, comments: ['Originating concern.'] }] : [], hasMore: false });
+    });
+
+    it('continues sparse viewer-filtered candidate pages without skipping or fetching hidden pages', async () => {
+      http.post
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'alice' } } } })
+        .mockResolvedValueOnce(candidatePage([
+          { number: 1, author: { login: 'bob' } }, { number: 2, author: null },
+        ], 'prs-2', true))
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'alice' } } } })
+        .mockResolvedValueOnce(candidatePage([{ number: 3, author: { login: 'alice' } }]))
+        .mockResolvedValueOnce(threadPage([copilotThread]));
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', limit: 2 });
+      expect(first).toEqual({ items: [], hasMore: true, nextPageToken: expect.any(String) });
+      expect(http.post).toHaveBeenCalledTimes(2);
+      const second = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', limit: 2, cursor: first.nextPageToken });
+      expect(second).toEqual({ items: [{ repo: 'Org/Repo', prNumber: 3, comments: ['Check the return value.'] }], hasMore: false });
+      expect(http.post).toHaveBeenNthCalledWith(4, '/graphql', {
+        query: expect.stringContaining('after: $cursor'),
+        variables: { owner: 'Org', name: 'Repo', limit: 2, states: ['OPEN'], cursor: 'prs-2' },
+      });
+      expect(http.post).toHaveBeenCalledTimes(5);
+    });
+
+    it('pages the deduplicated explicit list at the candidate limit and ignores state on continuation', async () => {
+      http.post
+        .mockResolvedValueOnce(threadPage([]))
+        .mockResolvedValueOnce(threadPage([copilotThread]))
+        .mockResolvedValueOnce(threadPage([copilotThread]));
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [7, 7, 42, 9], limit: 2 });
+      expect(first).toEqual({ items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['Check the return value.'] }], hasMore: true, nextPageToken: expect.any(String) });
+      expect(http.post).toHaveBeenCalledTimes(2);
+      const second = await client.getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', prNumbers: [7, 42, 9], limit: 2, state: 'all', cursor: first.nextPageToken,
+      });
+      expect(second).toEqual({ items: [{ repo: 'Org/Repo', prNumber: 9, comments: ['Check the return value.'] }], hasMore: false });
+      expect(http.post.mock.calls.map((call) => call[1].variables.prNumber)).toEqual([7, 42, 9]);
+    });
+
+    it.each([
+      { repo: 'bad' }, { repo: '../Repo' },
+      ...[0, -1, 1.5, NaN, Infinity, 2147483648, '42', null].map((value) => ({ prNumbers: [value] })),
+      { prNumbers: '42' }, { prNumbers: null },
+      ...[0, -1, 1.5, 101, NaN, Infinity, '20', null].map((limit) => ({ limit })),
+      { state: 'merged' },
+    ])('rejects invalid selection options before any API call: %j', async (overrides) => {
+      await expect(new GitHubClient().getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', prNumbers: [42], ...overrides,
+      } as any)).rejects.toThrow(/Invalid/);
+      expect(http.post).not.toHaveBeenCalled();
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { repo: 'Other/Repo' }, { state: 'closed' }, { prNumbers: undefined }, { prNumbers: [1, 2] }, { limit: 3 },
+    ])('binds discovery cursors to their selection scope: %j', async (changes) => {
+      http.post.mockResolvedValueOnce(candidatePage([], 'prs-2', true));
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [], limit: 2 });
+      http.post.mockClear();
+      await expect(client.getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', prNumbers: [], limit: 2, ...changes, cursor: first.nextPageToken,
+      })).rejects.toThrow('Invalid cursor');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it.each(['', 'not-base64!', 'e30', 'bnVsbA', 'W10', 'eyJwb3NpdGlvbiI6MH0', 12, null])(
+      'rejects malformed cursor %j before API calls', async (cursor) => {
+        await expect(new GitHubClient().getCopilotUnresolvedPrs({
+          repo: 'Org/Repo', prNumbers: [42], cursor,
+        } as any)).rejects.toThrow('Invalid cursor');
+        expect(http.post).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([undefined, null, -1, 0, 0.5, 3, 100000000000000000000, '1', {}, []].map((position) => ({ position })))(
+      'rejects invalid explicit cursor positions %j even with a matching scope', async ({ position }) => {
+        http.post.mockResolvedValueOnce(threadPage([]));
+        const client = new GitHubClient();
+        const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [1, 2, 3], limit: 1 });
+        const payload = JSON.parse(Buffer.from(first.nextPageToken!, 'base64url').toString());
+        payload.position = position;
+        http.post.mockClear();
+        await expect(client.getCopilotUnresolvedPrs({
+          repo: 'Org/Repo', prNumbers: [1, 2, 3], limit: 1,
+          cursor: Buffer.from(JSON.stringify(payload)).toString('base64url'),
+        })).rejects.toThrow('Invalid cursor');
+        expect(http.post).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([undefined, null, '', 1, {}, []].map((position) => ({ position })))(
+      'rejects malformed repository continuation position %j before API calls', async ({ position }) => {
+        http.post.mockResolvedValueOnce(candidatePage([], 'prs-1', true));
+        const client = new GitHubClient();
+        const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [] });
+        const payload = JSON.parse(Buffer.from(first.nextPageToken!, 'base64url').toString());
+        payload.position = position;
+        http.post.mockClear();
+        await expect(client.getCopilotUnresolvedPrs({
+          repo: 'Org/Repo', prNumbers: [], cursor: Buffer.from(JSON.stringify(payload)).toString('base64url'),
+        })).rejects.toThrow('Invalid cursor');
+        expect(http.post).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects viewer-scoped continuation when the authenticated viewer changes', async () => {
+      http.post
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'alice' } } } })
+        .mockResolvedValueOnce(candidatePage([], 'prs-1', true))
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'bob' } } } });
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo' });
+      await expect(client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', cursor: first.nextPageToken }))
+        .rejects.toThrow('Invalid cursor');
+      expect(http.post).toHaveBeenCalledTimes(3);
+    });
+
+    it('preserves successes around failed PR inspections with compact errors and continuation', async () => {
+      http.post
+        .mockResolvedValueOnce(threadPage([copilotThread]))
+        .mockRejectedValueOnce(new Error('upstream failure with verbose details'))
+        .mockResolvedValueOnce({ data: { data: { repository: { pullRequest: null } } } })
+        .mockResolvedValueOnce(threadPage([copilotThread]));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', prNumbers: [1, 2, 3, 4, 5], limit: 4,
+      });
+      expect(result).toEqual({
+        items: [
+          { repo: 'Org/Repo', prNumber: 1, comments: ['Check the return value.'] },
+          { repo: 'Org/Repo', prNumber: 4, comments: ['Check the return value.'] },
+        ],
+        errors: [
+          { repo: 'Org/Repo', prNumber: 2, error: 'Unable to inspect review threads.' },
+          { repo: 'Org/Repo', prNumber: 3, error: 'Unable to inspect review threads.' },
+        ],
+        hasMore: true, nextPageToken: expect.any(String),
+      });
+      expect(http.post).toHaveBeenCalledTimes(4);
+    });
+
+    it.each([null, 'same-cursor'])('reports incomplete thread pagination instead of a false negative (%j)', async (endCursor) => {
+      http.post
+        .mockResolvedValueOnce(threadPage([], 'same-cursor', true))
+        .mockResolvedValueOnce(threadPage([], endCursor, true));
+      const result = await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] });
+      expect(result).toEqual({
+        items: [], hasMore: false,
+        errors: [{ repo: 'Org/Repo', prNumber: 42, error: 'Unable to inspect review threads.' }],
+      });
+      expect(http.post).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { data: { data: { viewer: null } } },
+      { data: { data: { viewer: { login: '' } } } },
+      { data: { errors: [{ message: 'Bad credentials' }] } },
+    ])('fails viewer discovery without inspecting any PR when viewer lookup fails', async (response) => {
+      http.post.mockResolvedValueOnce(response);
+      await expect(new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo' })).rejects.toThrow();
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      candidatePage([], null, true),
+      candidatePage([], '', true),
+      { data: { data: { repository: null } } },
+      { data: { errors: [{ message: 'Repository access denied' }] } },
+    ])('fails the call for inaccessible or incomplete repository discovery', async (response) => {
+      http.post.mockResolvedValueOnce(response);
+      await expect(new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [] }))
+        .rejects.toThrow();
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('validates viewer cursor metadata before contacting GitHub', async () => {
+      http.post
+        .mockResolvedValueOnce({ data: { data: { viewer: { login: 'alice' } } } })
+        .mockResolvedValueOnce(candidatePage([], 'prs-1', true));
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo' });
+      const payload = JSON.parse(Buffer.from(first.nextPageToken!, 'base64url').toString());
+      delete payload.viewer;
+      http.post.mockClear();
+      await expect(client.getCopilotUnresolvedPrs({
+        repo: 'Org/Repo', cursor: Buffer.from(JSON.stringify(payload)).toString('base64url'),
+      })).rejects.toThrow('Invalid cursor');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { data: { errors: [{ message: 'Resource not accessible' }] } },
+      { data: { data: { repository: { pullRequest: null } } } },
+    ])('discards incomplete comment collection when a later thread page fails', async (failure) => {
+      http.post
+        .mockResolvedValueOnce(threadPage([copilotThread], 'threads-1', true))
+        .mockResolvedValueOnce(failure);
+      expect(await new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [42] })).toEqual({
+        items: [], hasMore: false,
+        errors: [{ repo: 'Org/Repo', prNumber: 42, error: 'Unable to inspect review threads.' }],
+      });
+      expect(http.post).toHaveBeenCalledTimes(2);
+    });
+
+    it('rejects sparse explicit number arrays before API access', async () => {
+      await expect(new GitHubClient().getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: new Array(1) }))
+        .rejects.toThrow('Invalid prNumbers');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it.each([{ limit: undefined, calls: 20 }, { limit: 100, calls: 100 }])(
+      'bounds explicit scans at %j candidates and accepts the maximum GraphQL PR integer', async ({ limit, calls }) => {
+        http.post.mockResolvedValue(threadPage([]));
+        const result = await new GitHubClient().getCopilotUnresolvedPrs({
+          repo: 'Org/Repo', prNumbers: [2147483647, ...Array.from({ length: 100 }, (_, index) => index + 1)], limit,
+        });
+        expect(result).toEqual({ items: [], hasMore: true, nextPageToken: expect.any(String) });
+        expect(http.post).toHaveBeenCalledTimes(calls);
+        expect(http.post.mock.calls[0][1].variables.prNumber).toBe(2147483647);
+      },
+    );
+
+    it.each([[2, 1, 3], [1, 2, 4]])('rejects a cursor for a changed explicit selection %j', async (...prNumbers) => {
+      http.post.mockResolvedValueOnce(threadPage([]));
+      const client = new GitHubClient();
+      const first = await client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers: [1, 2, 3], limit: 1 });
+      http.post.mockClear();
+      await expect(client.getCopilotUnresolvedPrs({ repo: 'Org/Repo', prNumbers, limit: 1, cursor: first.nextPageToken }))
+        .rejects.toThrow('Invalid cursor');
+      expect(http.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getReviewThreads', () => {
     it('paginates through GraphQL review threads', async () => {
       http.post.mockResolvedValueOnce({

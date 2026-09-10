@@ -1,6 +1,8 @@
 import { GitHubClient, JiraClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
 import { IntegrationModule, ToolHandlerFn, ToolDescriptor } from '../index.js';
 import {
+  githubGetCopilotUnresolvedPrsHandler,
+  githubGetCopilotUnresolvedPrsSchema,
   githubGetPrsHandler,
   githubGetPrsSchema,
   githubGetCodeReviewReadyHandler,
@@ -75,6 +77,10 @@ export class GitHubModule implements IntegrationModule<{ github: GitHubClient; j
 
   createToolHandlers(clients: { github: GitHubClient; jira?: JiraClient }): Record<string, ToolHandlerFn> {
     return {
+      github_get_copilot_unresolved_prs: async (args) => {
+        const parsed = githubGetCopilotUnresolvedPrsSchema.parse(args);
+        return await githubGetCopilotUnresolvedPrsHandler(clients)(parsed);
+      },
       github_get_code_review_ready: async (args) => {
         const parsed = githubGetCodeReviewReadySchema.parse(args);
         return await githubGetCodeReviewReadyHandler(clients)(parsed);

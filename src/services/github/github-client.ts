@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
+import { createHash } from 'node:crypto';
 import { installRetry } from '../http-retry.js';
 
 const MAX_BRANCH_SEARCH_CALLS = 20;
@@ -155,6 +156,21 @@ export interface ReviewThread {
   path: string;
   line?: number;
   originalLine?: number;
+}
+
+export interface CopilotUnresolvedPrsOptions {
+  repo: string;
+  prNumbers?: number[];
+  state?: 'open' | 'closed' | 'all';
+  cursor?: string;
+  limit?: number;
+}
+
+export interface CopilotUnresolvedPrsResult {
+  items: { repo: string; prNumber: number; comments: string[] }[];
+  hasMore: boolean;
+  nextPageToken?: string;
+  errors?: { repo: string; prNumber: number; error: string }[];
 }
 
 export interface MergeResult {
@@ -946,6 +962,132 @@ export class GitHubClient {
       : 'mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { isDraft } } }';
     await this.graphql(query, { id: nodeId });
     return this.getPullRequest(repo, prNumber);
+  }
+
+  async getCopilotUnresolvedPrs(opts: CopilotUnresolvedPrsOptions): Promise<CopilotUnresolvedPrsResult> {
+    this.assertRepo(opts.repo);
+    if (opts.prNumbers !== undefined && (!Array.isArray(opts.prNumbers)
+      || [...opts.prNumbers].some((number) => !Number.isInteger(number) || number < 1 || number > 2147483647))) {
+      throw new Error('Invalid prNumbers: expected positive GraphQL integers.');
+    }
+    const limit = opts.limit === undefined ? 20 : opts.limit;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error('Invalid limit: expected an integer from 1 to 100.');
+    }
+    if (opts.state !== undefined && !['open', 'closed', 'all'].includes(opts.state)) {
+      throw new Error('Invalid state: expected open, closed or all.');
+    }
+    const numbers = opts.prNumbers?.length ? [...new Set(opts.prNumbers)] : undefined;
+    const scope = createHash('sha256').update(JSON.stringify({
+      repo: opts.repo, selection: numbers ?? (opts.prNumbers === undefined ? 'viewer' : 'all'),
+      state: numbers ? null : opts.state ?? 'open', limit,
+    })).digest('hex');
+    let continuation: { scope: string; position: number | string; viewer?: string } | undefined;
+    if (opts.cursor !== undefined) {
+      try {
+        if (typeof opts.cursor !== 'string' || !/^[A-Za-z0-9_-]+$/.test(opts.cursor)) throw new Error();
+        const decoded = Buffer.from(opts.cursor, 'base64url');
+        if (decoded.toString('base64url') !== opts.cursor) throw new Error();
+        const value = JSON.parse(decoded.toString());
+        if (!value || value.scope !== scope) throw new Error();
+        if (numbers && (!Number.isSafeInteger(value.position) || value.position < 1
+          || value.position >= numbers.length || value.position % limit !== 0)) throw new Error();
+        if (!numbers && (typeof value.position !== 'string' || !value.position.trim())) throw new Error();
+        if (opts.prNumbers === undefined && (typeof value.viewer !== 'string' || !value.viewer.trim())) throw new Error();
+        continuation = value;
+      } catch {
+        throw new Error('Invalid cursor.');
+      }
+    }
+    const [owner, name] = opts.repo.split('/');
+    let prNumbers: number[];
+    let nextPageToken: string | undefined;
+    if (numbers) {
+      const position = (continuation?.position as number | undefined) ?? 0;
+      const end = position + limit;
+      prNumbers = numbers.slice(position, end);
+      if (end < numbers.length) {
+        nextPageToken = Buffer.from(JSON.stringify({ scope, position: end })).toString('base64url');
+      }
+    } else {
+      const viewer = opts.prNumbers === undefined
+        ? await this.graphql<{ viewer: { login: string } }>('query { viewer { login } }', {})
+        : undefined;
+      if (opts.prNumbers === undefined && !viewer?.viewer?.login) throw new Error('Unable to identify authenticated viewer.');
+      if (viewer && continuation && continuation.viewer !== viewer.viewer.login) throw new Error('Invalid cursor: viewer changed.');
+      const states = opts.state === 'all' ? null : opts.state === 'closed' ? ['CLOSED', 'MERGED'] : ['OPEN'];
+      const discovery = await this.graphql<any>(
+        `query($owner: String!, $name: String!, $limit: Int!, $states: [PullRequestState!], $cursor: String) {
+          repository(owner: $owner, name: $name) {
+            pullRequests(first: $limit, after: $cursor, states: $states, orderBy: {field: CREATED_AT, direction: ASC}) {
+              nodes { number author { login } }
+              pageInfo { endCursor hasNextPage }
+            }
+          }
+        }`,
+        { owner, name, limit, states, cursor: continuation?.position ?? null },
+      );
+      prNumbers = discovery.repository.pullRequests.nodes
+        .filter((pr: any) => !viewer || pr.author?.login === viewer.viewer.login)
+        .map((pr: any) => pr.number);
+      if (discovery.repository.pullRequests.pageInfo.hasNextPage) {
+        const endCursor = discovery.repository.pullRequests.pageInfo.endCursor;
+        if (typeof endCursor !== 'string' || !endCursor.trim() || endCursor === continuation?.position) {
+          throw new Error('Incomplete pull request pagination.');
+        }
+        nextPageToken = Buffer.from(JSON.stringify({
+          scope, position: endCursor, viewer: viewer?.viewer.login,
+        })).toString('base64url');
+      }
+    }
+    const items: CopilotUnresolvedPrsResult['items'] = [];
+    const errors: NonNullable<CopilotUnresolvedPrsResult['errors']> = [];
+    for (const prNumber of prNumbers) {
+      try {
+        const comments: string[] = [];
+        let cursor: string | null = null;
+        const seenCursors = new Set<string>();
+        do {
+          const result: any = await this.graphql(
+            `query($owner: String!, $name: String!, $prNumber: Int!, $cursor: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $prNumber) {
+                  reviewThreads(first: 100, after: $cursor) {
+                    nodes { isResolved comments(first: 1) { nodes { body author { __typename login } } } }
+                    pageInfo { endCursor hasNextPage }
+                  }
+                }
+              }
+            }`,
+            { owner, name, prNumber, cursor },
+          );
+          const threads: any = result.repository.pullRequest.reviewThreads;
+          for (const thread of threads.nodes) {
+            const comment = thread.comments.nodes[0];
+            const author = comment?.author;
+            if (thread.isResolved === false && author?.__typename === 'Bot'
+              && (author.login === 'copilot-pull-request-reviewer' || author.login === 'Copilot')) {
+              comments.push(comment.body);
+            }
+          }
+          cursor = threads.pageInfo.hasNextPage ? threads.pageInfo.endCursor : null;
+          if (threads.pageInfo.hasNextPage) {
+            if (typeof cursor !== 'string' || !cursor.trim() || seenCursors.has(cursor)) {
+              throw new Error('Incomplete review thread pagination.');
+            }
+            seenCursors.add(cursor);
+          }
+        } while (cursor);
+        if (comments.length) items.push({ repo: opts.repo, prNumber, comments });
+      } catch {
+        errors.push({ repo: opts.repo, prNumber, error: 'Unable to inspect review threads.' });
+      }
+    }
+    return {
+      items, hasMore: nextPageToken !== undefined,
+      ...(nextPageToken ? { nextPageToken } : {}),
+      ...(errors.length ? { errors } : {}),
+    };
   }
 
   /**

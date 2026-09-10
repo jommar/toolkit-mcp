@@ -42,6 +42,14 @@ export const githubGetPrsSchema = z.object({
     .describe('Also search by branch name for the given issue key.'),
 });
 
+export const githubGetCopilotUnresolvedPrsSchema = z.object({
+  repo: repoField,
+  prNumbers: z.array(z.number().int().positive().max(2147483647)).optional().describe('Omit for the authenticated user\'s PRs, [] for all authors, or list PR numbers for any author/state (duplicates ignored).'),
+  state: z.enum(['open', 'closed', 'all']).optional().default('open').describe('Discovery state: open (default), closed including merged, or all; ignored for explicit PR numbers.'),
+  limit: z.number().int().min(1).max(100).optional().default(20).describe('Maximum candidate PRs scanned per call (default 20, max 100); all unresolved Copilot originating comment bodies are collected per matching PR.'),
+  cursor: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe('Opaque continuation token; keep repo, selection, discovery state, limit and authenticated user unchanged.'),
+});
+
 export const githubGetCodeReviewReadySchema = z.object({
   status: z
     .string()
@@ -469,6 +477,12 @@ export const githubGetPrsHandler: ToolHandler<z.infer<typeof githubGetPrsSchema>
     throw new McpError(ErrorCode.InvalidParams, 'Provide either issueKey or keys');
   };
 
+export const githubGetCopilotUnresolvedPrsHandler: ToolHandler<z.infer<typeof githubGetCopilotUnresolvedPrsSchema>> =
+  (clients) => async (args) => {
+    const result = await clients.github.getCopilotUnresolvedPrs(args);
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+  };
+
 export const githubGetCodeReviewReadyHandler: ToolHandler<z.infer<typeof githubGetCodeReviewReadySchema>> =
   (clients) => async (args) => {
     const {
@@ -852,8 +866,21 @@ export const githubDismissPrReviewHandler: ToolHandler<z.infer<typeof githubDism
     return { content: [{ type: 'text', text: JSON.stringify(result) }] };
   };
 
+const copilotUnresolvedPrsInputSchema = zodToJsonSchema(githubGetCopilotUnresolvedPrsSchema);
+const copilotUnresolvedPrsProperties = copilotUnresolvedPrsInputSchema.properties as Record<string, Record<string, unknown>>;
+Object.assign(copilotUnresolvedPrsProperties.prNumbers, {
+  items: { type: 'integer', exclusiveMinimum: 0, maximum: 2147483647 },
+});
+Object.assign(copilotUnresolvedPrsProperties.limit, { type: 'integer', minimum: 1, maximum: 100 });
+Object.assign(copilotUnresolvedPrsProperties.cursor, { pattern: '^[A-Za-z0-9_-]+$' });
+
 /** All tool descriptors for the ListToolsRequestSchema response. */
 export const githubToolDescriptors = [
+  {
+    name: 'github_get_copilot_unresolved_prs',
+    description: 'List PRs with full originating comment bodies from every unresolved Copilot-started review thread.',
+    inputSchema: copilotUnresolvedPrsInputSchema,
+  },
   {
     name: 'github_get_code_review_ready',
     description:

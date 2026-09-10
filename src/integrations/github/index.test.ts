@@ -9,6 +9,7 @@ import { GitHubModule } from './index.js';
 
 function makeMockGitHub() {
   return {
+    getCopilotUnresolvedPrs: vi.fn(),
     searchPrs: vi.fn(),
     findPrsForIssueKeys: vi.fn(),
     updatePullRequest: vi.fn(),
@@ -60,9 +61,10 @@ describe('GitHubModule', () => {
       mockGitHub = makeMockGitHub();
     });
 
-    it('returns 29 handlers', () => {
+    it('returns 30 handlers', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
-      expect(Object.keys(handlers)).toHaveLength(29);
+      expect(Object.keys(handlers)).toHaveLength(30);
+      expect(handlers).toHaveProperty('github_get_copilot_unresolved_prs');
       expect(handlers).toHaveProperty('github_get_prs');
       expect(handlers).toHaveProperty('github_create_pr');
       expect(handlers).toHaveProperty('github_add_pr_comment');
@@ -93,6 +95,25 @@ describe('GitHubModule', () => {
       expect(handlers).toHaveProperty('github_dismiss_pr_review');
     });
 
+    it('github_get_copilot_unresolved_prs validates and delegates default discovery', async () => {
+      mockGitHub.getCopilotUnresolvedPrs.mockResolvedValue({
+        items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['Handle the empty response.'] }], hasMore: false,
+      });
+      const handlers = mod.createToolHandlers({ github: mockGitHub as any });
+
+      expect(handlers.github_get_copilot_unresolved_prs).toBeTypeOf('function');
+      const result = await handlers.github_get_copilot_unresolved_prs({ repo: 'Org/Repo' });
+
+      expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledExactlyOnceWith({
+        repo: 'Org/Repo', state: 'open', limit: 20,
+      });
+      expect(result).toEqual({ content: [{
+        type: 'text', text: '{"items":[{"repo":"Org/Repo","prNumber":42,"comments":["Handle the empty response."]}],"hasMore":false}',
+      }] });
+      await expect(handlers.github_get_copilot_unresolved_prs({ repo: 'Org/Repo', prNumbers: [1.5] })).rejects.toThrow();
+      expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledTimes(1);
+    });
+
     it('github_get_prs delegates to handler with parsed args', async () => {
       mockGitHub.searchPrs.mockResolvedValue([{ number: 1, title: 'PR', repo: 'Org/Repo', state: 'open' }]);
 
@@ -114,9 +135,24 @@ describe('GitHubModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 29 tool descriptors', () => {
+    it('returns 30 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(29);
+      expect(descriptors).toHaveLength(30);
+      expect(descriptors.find((d) => d.name === 'github_get_copilot_unresolved_prs')).toMatchObject({
+        description: 'List PRs with full originating comment bodies from every unresolved Copilot-started review thread.',
+        inputSchema: {
+          type: 'object', required: ['repo'],
+          properties: {
+            prNumbers: { type: 'array', items: { type: 'integer', exclusiveMinimum: 0, maximum: 2147483647 } },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            state: { enum: ['open', 'closed', 'all'], default: 'open' },
+            cursor: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
+          },
+        },
+      });
+      const schema = descriptors.find((d) => d.name === 'github_get_copilot_unresolved_prs')!.inputSchema as any;
+      expect(schema.properties.prNumbers).not.toHaveProperty('default');
+      expect(schema.properties.cursor).not.toHaveProperty('maxLength');
     });
 
     it('descriptors have name, description, and inputSchema', () => {

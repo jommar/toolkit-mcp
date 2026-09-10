@@ -18,7 +18,7 @@ An MCP server that exposes developer toolchain operations (Jira issue management
 │         │                             │               │
 │  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
 │  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │
-│  │  8 tools     │    │  11 tools          │   │  8 tools           │   │
+│  │  8 tools     │    │  30 tools          │   │  8 tools           │   │
 │  │  3 resources │    │  1 resource        │   │                    │   │
 │  │  2 prompts   │    │                    │   │                    │   │
 │  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   │
@@ -56,7 +56,7 @@ All variables are optional — tools only register if their required env vars ar
 | Variable | Integration | Required for |
 |---|---|---|
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools, resources, and prompts |
-| `GH_TOKEN` | GitHub | All 11 GitHub tools and `github://prs/{issueKey}` resource |
+| `GH_TOKEN` | GitHub | All 30 GitHub tools and `github://prs/{issueKey}` resource |
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
@@ -92,6 +92,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 |---|---|---|
 | `github_get_code_review_ready` | Fetch Jira tickets in a given status (default "Ready For Code Review") and report which have every PR approved by a human (bot and author approvals ignored). | `status`, `project`, `assignee`, `prState` |
 | `github_get_prs` | Find pull requests for one or more issue keys. Supports title/body search and optional branch-name matching. | `issueKey`, `keys`, `state`, `limit`, `cursor`, `searchBranches` |
+| `github_get_copilot_unresolved_prs` | List PRs with full originating comment bodies from every unresolved Copilot-started review thread. | `repo` (required), `prNumbers`, `state`, `limit`, `cursor` |
 | `github_create_pr` | Create a pull request on GitHub. | `repo`, `title`, `head`, `base`, `body`, `draft` |
 | `github_add_pr_comment` | Add an issue-level comment to a pull request. | `repo`, `prNumber`, `body` |
 | `github_get_pr_comments` | List issue-level (conversation) comments on a pull request. | `repo`, `prNumber`, `limit`, `cursor` |
@@ -102,6 +103,29 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | `github_get_pr_checks` | Get PR status check / CI results (check-runs for the latest commit on the PR). | `repo`, `prNumber` |
 | `github_update_pr` | Update an existing pull request (title, body, state, base branch, or maintainer settings). | `repo`, `prNumber`, `title`, `body`, `state`, `base`, `maintainerCanModify` |
 | `github_search_prs` | Flexible PR search by author, repo, state, or free-text query. Provide at least one of `query`, `author`, or `repo`. | `query`, `author`, `repo`, `state`, `limit`, `cursor` |
+
+#### PRs with unresolved Copilot review threads
+
+`github_get_copilot_unresolved_prs` returns **`{ repo, prNumber, comments: string[] }`**, with the full originating comment body from **every unresolved review thread started by Copilot**. All review-thread pages are inspected to collect these comments. Resolved threads never contribute comments: a PR with only resolved Copilot threads is excluded. Outdated threads still qualify if unresolved; replies and human-started threads are excluded. PR metadata is limited to `repo` and `prNumber`, with no titles, counts, or links.
+
+- `repo` is required in `owner/name` format.
+- Omit `prNumbers` to discover PRs authored by the current authenticated GitHub user; pass `[]` to discover PRs from all authors.
+- Pass a nonempty `prNumbers` list to inspect those PRs regardless of author or state; duplicates are ignored. Numbers must be positive integers up to `2147483647`.
+- Discovery `state` defaults to `open`; `closed` includes merged PRs, and `all` includes every state. Explicit PR numbers ignore this filter.
+- `limit` is an integer from 1 to 100 (default 20) and bounds **candidate PRs scanned**, not matches returned. Discovery scans a repository page before filtering by author, so even `items: []` can have `hasMore: true`.
+- Pass `nextPageToken` back unchanged as `cursor` to continue, retaining the same repository, selection mode/list/order, discovery state and limit. Omitted-number discovery also requires the same authenticated user. Cursors are opaque scope-bound tokens; stop when `hasMore` is false, at which point `nextPageToken` is absent.
+
+Example request and completed response:
+
+```json
+{"repo":"Org/Repo","prNumbers":[42,43]}
+```
+
+```json
+{"items":[{"repo":"Org/Repo","prNumber":42,"comments":["Handle the empty response before reading its first item.","Add a test for the retry limit."]}],"hasMore":false}
+```
+
+If a PR's threads cannot be inspected, successful PR results with their comments remain in `items` and an optional compact `errors` array identifies failures, for example `[{"repo":"Org/Repo","prNumber":43,"error":"Unable to inspect review threads."}]`. A failed inspection is not a confirmed nonmatch. Discovery or authenticated-user lookup failures fail the tool call.
 
 ### Figma Tools (registered when `FIGMA_TOKEN` is set)
 
@@ -152,6 +176,7 @@ All list-style tools return a uniform envelope:
 | `limit` | number | 20 | Items per page (max 100) |
 
 - `jira_get_issues` with `key` always returns a one-item `PaginatedResponse` with `hasMore: false` — consistent shape regardless of input mode.
+- `github_get_copilot_unresolved_prs` limits candidate PRs rather than matches; sparse or empty pages may still have `hasMore: true`.
 - No tool auto-fetches all pages; the agent must explicitly paginate via `cursor`.
 
 ---

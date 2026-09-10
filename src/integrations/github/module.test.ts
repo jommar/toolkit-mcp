@@ -7,6 +7,8 @@ vi.mock('../../services/index.js', () => ({
 }));
 
 import {
+  githubGetCopilotUnresolvedPrsHandler,
+  githubGetCopilotUnresolvedPrsSchema,
   githubGetPrsSchema,
   githubGetPrsHandler,
   githubCreatePrHandler,
@@ -61,6 +63,7 @@ import {
 
 function makeMockGitHub() {
   return {
+    getCopilotUnresolvedPrs: vi.fn(),
     searchPrs: vi.fn(),
     findPrsForIssueKeys: vi.fn(),
     searchPrsByBranchName: vi.fn(),
@@ -98,6 +101,113 @@ function makeMockGitHub() {
 }
 
 type MockGitHub = ReturnType<typeof makeMockGitHub>;
+
+describe('githubGetCopilotUnresolvedPrsHandler', () => {
+  it.each([
+    { prNumbers: [] },
+    { prNumbers: [42, 7, 42] },
+  ])('forwards selection and continuation unchanged: %j', async ({ prNumbers }) => {
+    const mockGitHub = makeMockGitHub();
+    mockGitHub.getCopilotUnresolvedPrs.mockResolvedValue({
+      items: [], hasMore: true, nextPageToken: 'next_opaque-token',
+    });
+    const args = githubGetCopilotUnresolvedPrsSchema.parse({
+      repo: 'Org/Repo', prNumbers, state: 'all', limit: 2, cursor: 'previous_opaque-token',
+    });
+
+    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })(args);
+
+    expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledExactlyOnceWith({
+      repo: 'Org/Repo', prNumbers, state: 'all', limit: 2, cursor: 'previous_opaque-token',
+    });
+    expect(result).toEqual({ content: [{
+      type: 'text', text: '{"items":[],"hasMore":true,"nextPageToken":"next_opaque-token"}',
+    }] });
+  });
+
+  it('preserves successful PR comments and compact per-PR errors', async () => {
+    const mockGitHub = makeMockGitHub();
+    mockGitHub.getCopilotUnresolvedPrs.mockResolvedValue({
+      items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['Handle the empty response.'] }], hasMore: false, nextPageToken: undefined,
+      errors: [{ repo: 'Org/Repo', prNumber: 7, error: 'Unable to inspect review threads.' }],
+    });
+
+    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })({ repo: 'Org/Repo' });
+
+    expect(result).toEqual({ content: [{
+      type: 'text',
+      text: '{"items":[{"repo":"Org/Repo","prNumber":42,"comments":["Handle the empty response."]}],"hasMore":false,"errors":[{"repo":"Org/Repo","prNumber":7,"error":"Unable to inspect review threads."}]}',
+    }] });
+  });
+
+  it('propagates call-level discovery and cursor failures', async () => {
+    const mockGitHub = makeMockGitHub();
+    const handler = githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any });
+    mockGitHub.getCopilotUnresolvedPrs.mockRejectedValueOnce(new Error('Unable to identify authenticated viewer.'));
+    await expect(handler({ repo: 'Org/Repo' })).rejects.toThrow('Unable to identify authenticated viewer.');
+    mockGitHub.getCopilotUnresolvedPrs.mockRejectedValueOnce(new Error('Invalid cursor.'));
+    await expect(handler(githubGetCopilotUnresolvedPrsSchema.parse({
+      repo: 'Org/Repo', cursor: 'invalid_scope',
+    }))).rejects.toThrow('Invalid cursor.');
+  });
+
+  it('delegates omitted selection and retains every unresolved Copilot comment body', async () => {
+    const mockGitHub = makeMockGitHub();
+    mockGitHub.getCopilotUnresolvedPrs.mockResolvedValue({
+      items: [{ repo: 'Org/Repo', prNumber: 42, comments: [
+        'Handle the empty response before reading its first item.',
+        'Use a bounded retry:\n```suggestion\nretry({ attempts: 3 });\n```',
+      ] }], hasMore: false,
+    });
+
+    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })({ repo: 'Org/Repo' });
+
+    expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledExactlyOnceWith({ repo: 'Org/Repo' });
+    expect(result).toEqual({ content: [{
+      type: 'text', text: '{"items":[{"repo":"Org/Repo","prNumber":42,"comments":["Handle the empty response before reading its first item.","Use a bounded retry:\\n```suggestion\\nretry({ attempts: 3 });\\n```"]}],"hasMore":false}',
+    }] });
+  });
+});
+
+describe('githubGetCopilotUnresolvedPrsSchema', () => {
+  it('accepts numeric boundaries and service envelope cursors longer than legacy page tokens', () => {
+    const cursor = Buffer.from(JSON.stringify({
+      scope: 'a'.repeat(64), position: 'Y3Vyc29yOnYyOpHOAA==', viewer: 'octocat',
+    })).toString('base64url');
+    expect(cursor.length).toBeGreaterThan(50);
+    expect(githubGetCopilotUnresolvedPrsSchema.parse({
+      repo: 'Org/Repo', prNumbers: [1, 2147483647], state: 'all', limit: 100, cursor,
+    })).toEqual({ repo: 'Org/Repo', prNumbers: [1, 2147483647], state: 'all', limit: 100, cursor });
+  });
+
+  it.each([
+    {}, { repo: 'Repo' }, { repo: 'Org/Repo/Extra' },
+    { repo: 'Org/Repo', prNumbers: [0] }, { repo: 'Org/Repo', prNumbers: [-1] },
+    { repo: 'Org/Repo', prNumbers: [1.5] }, { repo: 'Org/Repo', prNumbers: [2147483648] },
+    { repo: 'Org/Repo', prNumbers: ['42'] }, { repo: 'Org/Repo', prNumbers: null },
+    { repo: 'Org/Repo', limit: 0 }, { repo: 'Org/Repo', limit: 101 },
+    { repo: 'Org/Repo', limit: 1.5 }, { repo: 'Org/Repo', limit: '20' },
+    { repo: 'Org/Repo', state: 'merged' }, { repo: 'Org/Repo', state: null },
+    { repo: 'Org/Repo', cursor: '' }, { repo: 'Org/Repo', cursor: 'a b' },
+    { repo: 'Org/Repo', cursor: 'abc=' }, { repo: 'Org/Repo', cursor: 1 },
+  ])('rejects invalid input %j', (args) => {
+    expect(githubGetCopilotUnresolvedPrsSchema.safeParse(args).success).toBe(false);
+  });
+
+  it('preserves omitted, empty and explicit selections with discovery defaults', () => {
+    expect(githubGetCopilotUnresolvedPrsSchema.parse({ repo: 'Org/Repo' })).toEqual({
+      repo: 'Org/Repo', state: 'open', limit: 20,
+    });
+    expect(githubGetCopilotUnresolvedPrsSchema.parse({ repo: 'Org/Repo', prNumbers: [] })).toEqual({
+      repo: 'Org/Repo', prNumbers: [], state: 'open', limit: 20,
+    });
+    expect(githubGetCopilotUnresolvedPrsSchema.parse({
+      repo: 'Org/Repo', prNumbers: [42, 7, 42], state: 'closed', limit: 1, cursor: 'eyJzY29wZSI6InRlc3QifQ',
+    })).toEqual({
+      repo: 'Org/Repo', prNumbers: [42, 7, 42], state: 'closed', limit: 1, cursor: 'eyJzY29wZSI6InRlc3QifQ',
+    });
+  });
+});
 
 describe('githubGetPrsHandler', () => {
   let mockGitHub: MockGitHub;
