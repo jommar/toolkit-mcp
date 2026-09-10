@@ -5,6 +5,12 @@ All notable changes to the toolkit-mcp project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **GitHub: `github_get_copilot_unresolved_prs`** — Lists PRs together with the full originating comment body of every unresolved Copilot-started review thread, so an agent can pick up outstanding Copilot feedback without re-reading resolved threads. Omit `prNumbers` for the authenticated user's PRs, pass `[]` to scan all authors, or pass explicit numbers to inspect any PR regardless of author or state. `limit` bounds candidate PRs scanned (not matches), so sparse pages can still report `hasMore: true`; per-PR thread-inspection failures are reported in a compact `errors` array instead of failing the call.
+
 ## [0.3.0] — 2026-07-30
 
 ### Added
