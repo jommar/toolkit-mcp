@@ -780,4 +780,69 @@ describe('JiraClient', () => {
       });
     });
   });
+
+  describe('comment mentions', () => {
+    const accountId = '712020:e130b750-b09b-4d24-95b9-d72d503e4911';
+    const otherAccountId = '5b10ac8d82e05b22cc7d4ef5';
+
+    async function addedParagraph(body: string) {
+      http.post.mockResolvedValueOnce({ data: { id: '1' } });
+      await new JiraClient().addComment('TRIPS-1', body);
+      return http.post.mock.calls[0][1].body.content[0].content;
+    }
+
+    it('converts a mention token into a mention node', async () => {
+      expect(await addedParagraph(`[~accountid:${accountId}]`)).toEqual([
+        { type: 'mention', attrs: { id: accountId } },
+      ]);
+    });
+
+    it('keeps the text around a mention token', async () => {
+      expect(await addedParagraph(`Hi [~accountid:${accountId}], please review.`)).toEqual([
+        { type: 'text', text: 'Hi ' },
+        { type: 'mention', attrs: { id: accountId } },
+        { type: 'text', text: ', please review.' },
+      ]);
+    });
+
+    it('converts every mention token in one body', async () => {
+      expect(await addedParagraph(`[~accountid:${accountId}] and [~accountid:${otherAccountId}]`)).toEqual([
+        { type: 'mention', attrs: { id: accountId } },
+        { type: 'text', text: ' and ' },
+        { type: 'mention', attrs: { id: otherAccountId } },
+      ]);
+    });
+
+    it('leaves a body without tokens as a single text node', async () => {
+      const body = 'Line one\nLine two [link](https://example.com) [~notamention] [~accountid:]';
+      expect(await addedParagraph(body)).toEqual([{ type: 'text', text: body }]);
+    });
+
+    it('leaves an unclosed token as plain text', async () => {
+      const body = `see [~accountid:${accountId} for details`;
+      expect(await addedParagraph(body)).toEqual([{ type: 'text', text: body }]);
+    });
+
+    it('converts mention tokens when updating a comment', async () => {
+      http.put.mockResolvedValueOnce({ data: { id: '38560' } });
+
+      await new JiraClient().updateComment('TRIPS-1', '38560', `Ping [~accountid:${accountId}]`);
+
+      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/comment/38560', {
+        body: {
+          type: 'doc',
+          version: 1,
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Ping ' },
+                { type: 'mention', attrs: { id: accountId } },
+              ],
+            },
+          ],
+        },
+      });
+    });
+  });
 });

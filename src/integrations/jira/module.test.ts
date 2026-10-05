@@ -25,6 +25,8 @@ import {
   jiraSearchUsersHandler,
   jiraListFieldsHandler,
   jiraDeleteCommentHandler,
+  jiraAddCommentSchema,
+  jiraUpdateCommentSchema,
 } from './module.js';
 import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
 
@@ -523,6 +525,15 @@ describe('jiraUpdateCommentHandler', () => {
 
     expect(mockJira.updateComment).toHaveBeenCalledWith('TRIPS-799', '38560', 'Revised.');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
+  });
+});
+
+describe('comment body schemas', () => {
+  it.each([
+    ['jiraAddCommentSchema', jiraAddCommentSchema],
+    ['jiraUpdateCommentSchema', jiraUpdateCommentSchema],
+  ])('%s documents the mention token syntax', (_name, schema) => {
+    expect(schema.shape.body.description).toContain('[~accountid:<accountId>]');
   });
 });
 

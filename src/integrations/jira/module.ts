@@ -88,13 +88,21 @@ export const jiraAssignIssueSchema = z.object({
 
 export const jiraAddCommentSchema = z.object({
   key: z.string().max(20).describe('Issue key to comment on.'),
-  body: z.string().max(65536).describe('Comment body (plain text).'),
+  body: z
+    .string()
+    .max(65536)
+    .describe('Comment body (plain text). Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`).'),
 });
 
 export const jiraUpdateCommentSchema = z.object({
   key: z.string().max(20).describe('Issue key the comment belongs to.'),
   commentId: z.string().max(30).describe('ID of the comment to update.'),
-  body: z.string().max(65536).describe('New comment body (plain text) — replaces the existing content.'),
+  body: z
+    .string()
+    .max(65536)
+    .describe(
+      'New comment body (plain text) — replaces the existing content. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`).',
+    ),
 });
 
 export const jiraLinkIssuesSchema = z.object({

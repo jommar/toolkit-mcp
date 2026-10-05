@@ -189,20 +189,20 @@ export class JiraClient {
     await this.http.put(`/issue/${encodeURIComponent(key)}`, { fields });
   }
 
-  /** Add a plain-text comment (wrapped in Atlassian Document Format). */
+  /** Add a comment (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. */
   async addComment(key: string, body: string): Promise<{ id: string }> {
     const { data } = await this.http.post<{ id: string }>(
       `/issue/${encodeURIComponent(key)}/comment`,
-      { body: toAdf(body) },
+      { body: toCommentAdf(body) },
     );
     return data;
   }
 
-  /** Replace an existing comment's body (plain text, wrapped in Atlassian Document Format). */
+  /** Replace an existing comment's body (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. */
   async updateComment(key: string, commentId: string, body: string): Promise<{ id: string }> {
     const { data } = await this.http.put<{ id: string }>(
       `/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`,
-      { body: toAdf(body) },
+      { body: toCommentAdf(body) },
     );
     return data;
   }
@@ -318,6 +318,22 @@ function toAdf(text: string) {
     version: 1,
     content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
   };
+}
+
+const MENTION_TOKEN = /\[~accountid:([^\]]+)\]/g;
+
+/** Like toAdf, but turns `[~accountid:<id>]` tokens into ADF mention nodes. */
+function toCommentAdf(text: string) {
+  const content: unknown[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(MENTION_TOKEN)) {
+    if (match.index > cursor) content.push({ type: 'text', text: text.slice(cursor, match.index) });
+    content.push({ type: 'mention', attrs: { id: match[1] } });
+    cursor = match.index + match[0].length;
+  }
+  if (!content.length) return toAdf(text);
+  if (cursor < text.length) content.push({ type: 'text', text: text.slice(cursor) });
+  return { type: 'doc', version: 1, content: [{ type: 'paragraph', content }] };
 }
 
 /** Turn an axios error into a concise, readable message (status + Jira error body). */
