@@ -149,6 +149,21 @@ describe('JiraModule', () => {
         handlers.jira_link_issues({ inwardKey: 'TRIPS-1' }),
       ).rejects.toThrow();
     });
+
+    it('jira_add_comment forwards a numeric parentId to the client', async () => {
+      mockJira.addComment.mockResolvedValue({ id: '48838' });
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_add_comment({ key: 'TRIPS-1', body: 'hi', parentId: '48106' });
+      expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'hi', '48106');
+    });
+
+    it('jira_add_comment rejects a non-numeric parentId without posting', async () => {
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await expect(
+        handlers.jira_add_comment({ key: 'TRIPS-1', body: 'hi', parentId: 'abc' }),
+      ).rejects.toThrow();
+      expect(mockJira.addComment).not.toHaveBeenCalled();
+    });
   });
 
   describe('getToolDescriptors', () => {

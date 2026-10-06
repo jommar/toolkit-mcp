@@ -189,11 +189,11 @@ export class JiraClient {
     await this.http.put(`/issue/${encodeURIComponent(key)}`, { fields });
   }
 
-  /** Add a comment (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. */
-  async addComment(key: string, body: string): Promise<{ id: string }> {
+  /** Add a comment (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. Pass `parentId` to reply in that comment's thread. */
+  async addComment(key: string, body: string, parentId?: string): Promise<{ id: string }> {
     const { data } = await this.http.post<{ id: string }>(
       `/issue/${encodeURIComponent(key)}/comment`,
-      { body: toCommentAdf(body) },
+      { body: toCommentAdf(body), ...(parentId ? { parentId } : {}) },
     );
     return data;
   }

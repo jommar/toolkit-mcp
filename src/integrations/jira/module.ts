@@ -92,6 +92,12 @@ export const jiraAddCommentSchema = z.object({
     .string()
     .max(65536)
     .describe('Comment body (plain text). Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`).'),
+  parentId: z
+    .string()
+    .max(30)
+    .regex(/^\d+$/, 'Must be a numeric comment ID')
+    .optional()
+    .describe('ID of the top-level comment to reply to; omit to post a top-level comment.'),
 });
 
 export const jiraUpdateCommentSchema = z.object({
@@ -323,7 +329,9 @@ export const jiraAssignIssueHandler: ToolHandler<z.infer<typeof jiraAssignIssueS
 
 export const jiraAddCommentHandler: ToolHandler<z.infer<typeof jiraAddCommentSchema>> =
   (_clients) => async (args) => {
-    const comment = await _clients.jira.addComment(args.key, args.body);
+    const comment = args.parentId
+      ? await _clients.jira.addComment(args.key, args.body, args.parentId)
+      : await _clients.jira.addComment(args.key, args.body);
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 

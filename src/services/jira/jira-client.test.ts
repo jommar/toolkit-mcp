@@ -535,6 +535,29 @@ describe('JiraClient', () => {
       });
       expect(result.id).toBe('12345');
     });
+
+    it('sends parentId alongside the ADF body when replying in a thread', async () => {
+      http.post.mockResolvedValueOnce({ data: { id: '48838' } });
+
+      await new JiraClient().addComment('TRIPS-1', 'Nice work', '48106');
+
+      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/comment', {
+        body: {
+          type: 'doc',
+          version: 1,
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Nice work' }] }],
+        },
+        parentId: '48106',
+      });
+    });
+
+    it('omits the parentId key from the request body when not replying', async () => {
+      http.post.mockResolvedValueOnce({ data: { id: '12345' } });
+
+      await new JiraClient().addComment('TRIPS-1', 'Nice work');
+
+      expect(Object.keys(http.post.mock.calls[0][1])).toEqual(['body']);
+    });
   });
 
   describe('updateComment', () => {
@@ -821,6 +844,19 @@ describe('JiraClient', () => {
     it('leaves an unclosed token as plain text', async () => {
       const body = `see [~accountid:${accountId} for details`;
       expect(await addedParagraph(body)).toEqual([{ type: 'text', text: body }]);
+    });
+
+    it('converts mention tokens identically when replying in a thread', async () => {
+      http.post.mockResolvedValue({ data: { id: '1' } });
+      const text = `Hi [~accountid:${accountId}], done.`;
+
+      await new JiraClient().addComment('TRIPS-1', text);
+      await new JiraClient().addComment('TRIPS-1', text, '48106');
+
+      const [topLevel, reply] = http.post.mock.calls.map((call) => call[1]);
+      expect(reply.body).toEqual(topLevel.body);
+      expect(reply.body.content[0].content).toContainEqual({ type: 'mention', attrs: { id: accountId } });
+      expect(reply.parentId).toBe('48106');
     });
 
     it('converts mention tokens when updating a comment', async () => {

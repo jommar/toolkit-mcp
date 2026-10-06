@@ -82,7 +82,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | `jira_update_issue` | Update fields on an existing Jira issue. | `key`, `fields` |
 | `jira_transition_issue` | Transition a Jira issue to a new status. | `key`, `transitionId` or `transitionName`, `comment` |
 | `jira_assign_issue` | Assign a Jira issue to a user or unassign it. | `key`, `assignee` (accountId, "me", or "none") |
-| `jira_add_comment` | Add a comment to a Jira issue. | `key`, `body` |
+| `jira_add_comment` | Add a comment to a Jira issue. | `key`, `body`, `parentId` |
 | `jira_update_comment` | Update an existing comment on a Jira issue. | `key`, `commentId`, `body` |
 | `jira_link_issues` | Link two Jira issues together. | `inwardKey`, `outwardKey`, `type`, `comment` |
 

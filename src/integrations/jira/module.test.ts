@@ -27,6 +27,7 @@ import {
   jiraDeleteCommentHandler,
   jiraAddCommentSchema,
   jiraUpdateCommentSchema,
+  jiraToolDescriptors,
 } from './module.js';
 import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
 
@@ -506,6 +507,17 @@ describe('jiraAddCommentHandler', () => {
     expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'Thanks!');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
+
+  it('replies in a thread when parentId is given and returns the posted comment', async () => {
+    const comment = { id: '48838', parentId: '48106' };
+    mockJira.addComment.mockResolvedValue(comment);
+
+    const handler = jiraAddCommentHandler({ jira: mockJira as any });
+    const result = await handler({ key: 'TRIPS-1', body: 'Thanks!', parentId: '48106' });
+
+    expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'Thanks!', '48106');
+    expect(JSON.parse(result.content[0].text)).toEqual(comment);
+  });
 });
 
 describe('jiraUpdateCommentHandler', () => {
@@ -525,6 +537,30 @@ describe('jiraUpdateCommentHandler', () => {
 
     expect(mockJira.updateComment).toHaveBeenCalledWith('TRIPS-799', '38560', 'Revised.');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
+  });
+});
+
+describe('jiraAddCommentSchema parentId', () => {
+  const base = { key: 'TRIPS-1', body: 'Thanks!' };
+
+  it('accepts a numeric parentId', () => {
+    expect(jiraAddCommentSchema.safeParse({ ...base, parentId: '48106' }).success).toBe(true);
+  });
+
+  it('keeps parentId optional', () => {
+    expect(jiraAddCommentSchema.safeParse(base).success).toBe(true);
+  });
+
+  it.each(['abc', '48106abc', '48 106', '-1', ''])('rejects a non-numeric parentId %j', (parentId) => {
+    expect(jiraAddCommentSchema.safeParse({ ...base, parentId }).success).toBe(false);
+  });
+
+  it('is advertised as an optional property on the jira_add_comment descriptor', () => {
+    const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_add_comment')!;
+    const schema = descriptor.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+
+    expect(schema.properties).toHaveProperty('parentId');
+    expect(schema.required).not.toContain('parentId');
   });
 });
 
