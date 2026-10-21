@@ -26,6 +26,10 @@ export const jiraGetIssuesSchema = z.object({
     .array(z.string())
     .optional()
     .describe('Subset of fields to return (e.g., ["key","status"]). Custom fields (e.g. story points) pass through under their field ID — look IDs up with `jira_list_fields`.'),
+  adf: z
+    .boolean()
+    .optional()
+    .describe('Also return the raw ADF description as `descriptionAdf` (needed to append to a description without losing its structure).'),
 });
 
 export const jiraCreateIssueSchema = z.object({
@@ -201,8 +205,10 @@ export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
 
 export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchema>> =
   (_clients) => async (args) => {
-    const { key, jql, limit, cursor, fields } = args;
+    const { key, jql, limit, cursor, fields, adf } = args;
     const customFieldIds = fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
+    const slim = (issue: JiraIssue) =>
+      adf ? toSlimIssue(issue, customFieldIds, { adf }) : toSlimIssue(issue, customFieldIds);
 
     if (key) {
       // Always slim. If custom fields are requested, merge with DEV_FIELDS.
@@ -210,7 +216,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
       const raw = issueFields
         ? await _clients.jira.getIssue(key, issueFields)
         : await _clients.jira.getIssue(key, [...DEV_FIELDS]);
-      const issue = toSlimIssue(raw, customFieldIds);
+      const issue = slim(raw);
       return {
         content: [
           {
@@ -231,7 +237,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
         searchOpts.fields = searchFields;
       }
       const result: SearchResult = await _clients.jira.search(jql, searchOpts);
-      const items: SlimIssue[] = result.issues.map((issue) => toSlimIssue(issue, customFieldIds));
+      const items: SlimIssue[] = result.issues.map(slim);
       return {
         content: [
           {

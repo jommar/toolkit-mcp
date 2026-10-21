@@ -179,6 +179,77 @@ describe('toSlimIssue', () => {
     const slim = toSlimIssue(fullIssue);
     expect(slim.custom).toBeUndefined();
   });
+
+  describe('raw ADF description', () => {
+    const adfDescription = {
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Problem' }] },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Bold start', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ' and plain end' },
+          ],
+        },
+      ],
+    };
+
+    function issueWithDescription(description: unknown): JiraIssue {
+      return { id: '1', key: 'TEST-1', fields: { summary: 'Test', description } };
+    }
+
+    it('returns the raw ADF as descriptionAdf when adf is true, keeping the flattened text', () => {
+      const slim = toSlimIssue(issueWithDescription(adfDescription), undefined, { adf: true });
+      expect(slim.descriptionAdf).toEqual({
+        version: 1,
+        type: 'doc',
+        content: [
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Problem' }] },
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'Bold start', marks: [{ type: 'strong' }] },
+              { type: 'text', text: ' and plain end' },
+            ],
+          },
+        ],
+      });
+      expect(slim.description).toBe('Problem\nBold start and plain end');
+    });
+
+    it('omits descriptionAdf when adf is false', () => {
+      const slim = toSlimIssue(issueWithDescription(adfDescription), undefined, { adf: false });
+      expect('descriptionAdf' in slim).toBe(false);
+    });
+
+    it('omits descriptionAdf when no options are passed', () => {
+      const slim = toSlimIssue(issueWithDescription(adfDescription));
+      expect('descriptionAdf' in slim).toBe(false);
+    });
+
+    it('omits descriptionAdf when adf is true but the description is null', () => {
+      const slim = toSlimIssue(issueWithDescription(null), undefined, { adf: true });
+      expect('descriptionAdf' in slim).toBe(false);
+      expect(slim.description).toBeNull();
+    });
+
+    it('omits descriptionAdf when adf is true but the description is absent', () => {
+      const slim = toSlimIssue({ id: '1', key: 'TEST-1', fields: { summary: 'Test' } }, undefined, { adf: true });
+      expect('descriptionAdf' in slim).toBe(false);
+    });
+
+    it('still passes through custom fields when adf is true', () => {
+      const issue: JiraIssue = {
+        id: '1',
+        key: 'TEST-1',
+        fields: { summary: 'Test', description: adfDescription, customfield_10058: 5 },
+      };
+      const slim = toSlimIssue(issue, ['customfield_10058'], { adf: true });
+      expect(slim.custom).toEqual({ customfield_10058: 5 });
+    });
+  });
 });
 
 describe('toSlimComment', () => {

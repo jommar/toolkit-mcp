@@ -1,4 +1,4 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
 // Mock jira-cli so toSlimIssue is available (JiraClient constructor unused by these tests)
@@ -11,6 +11,7 @@ vi.mock('../../services/index.js', () => ({
 import {
   jiraWhoamiHandler,
   jiraGetIssuesHandler,
+  jiraGetIssuesSchema,
   jiraCreateIssueHandler,
   jiraUpdateIssueHandler,
   jiraTransitionIssueHandler,
@@ -194,6 +195,108 @@ describe('jiraGetIssuesHandler', () => {
 
     await expect(handler({})).rejects.toThrow(McpError);
     await expect(handler({})).rejects.toThrow('Provide either key or jql');
+  });
+
+  describe('raw ADF description', () => {
+    const adfDescription = {
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Problem' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Details', marks: [{ type: 'em' }] }] },
+      ],
+    };
+    const expectedAdf = {
+      version: 1,
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Problem' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Details', marks: [{ type: 'em' }] }] },
+      ],
+    };
+
+    beforeEach(async () => {
+      const { toSlimIssue: realToSlimIssue } = await vi.importActual<typeof import('../../services/slim.js')>(
+        '../../services/slim.js',
+      );
+      vi.mocked(toSlimIssue).mockImplementation(realToSlimIssue);
+    });
+
+    afterEach(() => {
+      vi.mocked(toSlimIssue).mockImplementation((issue: any) => issue);
+    });
+
+    it('returns descriptionAdf for a single issue by key when adf is true', async () => {
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler({ key: 'TRIPS-1', adf: true });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
+      expect(parsed.items[0].description).toBe('Problem\nDetails');
+    });
+
+    it('returns descriptionAdf on every issue of a JQL search when adf is true', async () => {
+      mockJira.search.mockResolvedValue({
+        issues: [
+          { id: '1', key: 'TRIPS-1', fields: { summary: 'One', description: adfDescription } },
+          { id: '2', key: 'TRIPS-2', fields: { summary: 'Two', description: null } },
+        ],
+        isLast: true,
+      });
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler({ jql: 'project = TRIPS', limit: 20, adf: true });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
+      expect('descriptionAdf' in parsed.items[1]).toBe(false);
+    });
+
+    it('omits descriptionAdf when adf is not set', async () => {
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler({ key: 'TRIPS-1' });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect('descriptionAdf' in parsed.items[0]).toBe(false);
+      expect(parsed.items[0].description).toBe('Problem\nDetails');
+    });
+
+    it('omits descriptionAdf when adf is false', async () => {
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler({ key: 'TRIPS-1', adf: false });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect('descriptionAdf' in parsed.items[0]).toBe(false);
+    });
+  });
+});
+
+describe('jiraGetIssuesSchema adf', () => {
+  it('accepts a boolean adf', () => {
+    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1', adf: true });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.adf).toBe(true);
+  });
+
+  it('leaves adf undefined when omitted', () => {
+    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1' });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.adf).toBeUndefined();
+  });
+
+  it('rejects a non-boolean adf', () => {
+    expect(jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1', adf: 'yes' }).success).toBe(false);
+  });
+
+  it('documents adf in the published tool input schema', () => {
+    const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_get_issues')!;
+    expect((descriptor.inputSchema as any).properties.adf.type).toBe('boolean');
   });
 });
 

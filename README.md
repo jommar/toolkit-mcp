@@ -77,7 +77,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `jira_whoami` | Return the authenticated Jira user profile. | *(none)* |
-| `jira_get_issues` | Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search. | `key`, `jql`, `limit`, `cursor`, `fields` |
+| `jira_get_issues` | Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search. | `key`, `jql`, `limit`, `cursor`, `fields`, `adf` |
 | `jira_create_issue` | Create a new Jira issue in a project. | `projectKey`, `issueType`, `summary`, `description`, `fields` |
 | `jira_update_issue` | Update fields on an existing Jira issue. | `key`, `fields` |
 | `jira_transition_issue` | Transition a Jira issue to a new status. | `key`, `transitionId` or `transitionName`, `comment` |
@@ -176,6 +176,7 @@ All list-style tools return a uniform envelope:
 | `limit` | number | 20 | Items per page (max 100) |
 
 - `jira_get_issues` with `key` always returns a one-item `PaginatedResponse` with `hasMore: false` — consistent shape regardless of input mode.
+- `jira_get_issues` flattens `description` to plain text; pass `adf: true` to also get the raw ADF document as `descriptionAdf` (omitted when the issue has no description), e.g. to append to a description via `jira_update_issue` without losing its structure.
 - `github_get_copilot_unresolved_prs` limits candidate PRs rather than matches; sparse or empty pages may still have `hasMore: true`.
 - No tool auto-fetches all pages; the agent must explicitly paginate via `cursor`.
 

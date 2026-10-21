@@ -58,15 +58,21 @@ export interface SlimIssue {
   attachments: SlimAttachment[];
   /** Requested custom fields, keyed by their Jira field ID (e.g. story points). Absent unless asked for. */
   custom?: Record<string, unknown>;
+  /** Raw ADF document exactly as Jira returned it. Absent unless asked for and the issue has a description. */
+  descriptionAdf?: unknown;
 }
 
-/** Flatten a raw Jira issue into the compact dev shape (drops nulls/links/avatars/ADF). */
-export function toSlimIssue(issue: JiraIssue, customIds?: string[]): SlimIssue {
+export interface SlimIssueOptions {
+  adf?: boolean;
+}
+
+/** Flatten a raw Jira issue into the compact dev shape (drops nulls/links/avatars/ADF unless `adf` is set). */
+export function toSlimIssue(issue: JiraIssue, customIds?: string[], options: SlimIssueOptions = {}): SlimIssue {
   const f = issue.fields as Record<string, any>;
   const entries = (customIds ?? [])
     .map((id) => [id, f[id]] as const)
     .filter(([, v]) => v != null);
-  return {
+  const slim: SlimIssue = {
     key: issue.key,
     summary: f.summary ?? '',
     status: f.status?.name ?? null,
@@ -84,6 +90,8 @@ export function toSlimIssue(issue: JiraIssue, customIds?: string[]): SlimIssue {
     attachments: Array.isArray(f.attachment) ? f.attachment.map(toSlimAttachment) : [],
     custom: entries.length ? Object.fromEntries(entries) : undefined,
   };
+  if (options.adf && f.description != null) slim.descriptionAdf = f.description;
+  return slim;
 }
 
 /** Flatten a raw Jira comment into the compact shape (author/created/text body). */
