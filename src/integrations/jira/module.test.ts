@@ -25,9 +25,13 @@ import {
   jiraListIssueLinkTypesHandler,
   jiraSearchUsersHandler,
   jiraListFieldsHandler,
+  jiraListComponentsHandler,
   jiraDeleteCommentHandler,
   jiraAddCommentSchema,
   jiraUpdateCommentSchema,
+  jiraCreateIssueSchema,
+  jiraUpdateIssueSchema,
+  jiraListComponentsSchema,
   jiraToolDescriptors,
 } from './module.js';
 import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
@@ -40,6 +44,7 @@ function makeMockJira() {
     search: vi.fn(),
     searchUsers: vi.fn(),
     getFields: vi.fn(),
+    listProjectComponents: vi.fn(),
     createIssue: vi.fn(),
     updateIssue: vi.fn(),
     listTransitions: vi.fn(),
@@ -362,6 +367,72 @@ describe('jiraCreateIssueHandler', () => {
       }),
     );
   });
+
+  describe('components', () => {
+    const projectComponents = [
+      { id: '10040', name: 'EZAT Automation' },
+      { id: '10041', name: 'Billing' },
+    ];
+    const base = { projectKey: 'TAP', issueType: 'Task', summary: 'My task' };
+
+    beforeEach(() => {
+      mockJira.listProjectComponents.mockResolvedValue(projectComponents);
+      mockJira.createIssue.mockResolvedValue({ key: 'TAP-45' });
+    });
+
+    it('resolves names case-insensitively against the project and sends ids', async () => {
+      const handler = jiraCreateIssueHandler({ jira: mockJira as any });
+      await handler({ ...base, components: ['ezat automation', 'BILLING'] });
+
+      expect(mockJira.listProjectComponents).toHaveBeenCalledWith('TAP');
+      expect(mockJira.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: { components: [{ id: '10040' }, { id: '10041' }] } }),
+      );
+    });
+
+    it('keeps other fields and lets components win over fields.components', async () => {
+      const handler = jiraCreateIssueHandler({ jira: mockJira as any });
+      await handler({
+        ...base,
+        fields: { priority: { name: 'High' }, components: [{ name: 'Billing' }] },
+        components: ['EZAT Automation'],
+      });
+
+      expect(mockJira.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fields: { priority: { name: 'High' }, components: [{ id: '10040' }] },
+        }),
+      );
+    });
+
+    it('throws an McpError listing the valid names when a name is unknown, without creating', async () => {
+      const handler = jiraCreateIssueHandler({ jira: mockJira as any });
+      const call = handler({ ...base, components: ['Billing', 'Nope'] });
+
+      await expect(call).rejects.toThrow(McpError);
+      await expect(call).rejects.toThrow('"Nope"');
+      await expect(call).rejects.toThrow('Available: EZAT Automation, Billing');
+      expect(mockJira.createIssue).not.toHaveBeenCalled();
+    });
+
+    it('leaves fields untouched and skips the lookup when components is omitted', async () => {
+      const handler = jiraCreateIssueHandler({ jira: mockJira as any });
+      await handler({ ...base, fields: { components: [{ name: 'Billing' }] } });
+
+      expect(mockJira.listProjectComponents).not.toHaveBeenCalled();
+      expect(mockJira.createIssue).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: { components: [{ name: 'Billing' }] } }),
+      );
+    });
+
+    it('does not add a components key to fields when components is omitted', async () => {
+      const handler = jiraCreateIssueHandler({ jira: mockJira as any });
+      await handler({ ...base, fields: { priority: { name: 'High' } } });
+
+      expect(mockJira.createIssue.mock.calls[0][0].fields).toEqual({ priority: { name: 'High' } });
+      expect(mockJira.createIssue.mock.calls[0][0].fields).not.toHaveProperty('components');
+    });
+  });
 });
 
 describe('jiraUpdateIssueHandler', () => {
@@ -388,6 +459,147 @@ describe('jiraUpdateIssueHandler', () => {
       success: true,
       key: 'TAP-1',
     });
+  });
+
+  describe('components', () => {
+    const projectComponents = [
+      { id: '10040', name: 'EZAT Automation' },
+      { id: '10041', name: 'Billing' },
+    ];
+
+    beforeEach(() => {
+      mockJira.listProjectComponents.mockResolvedValue(projectComponents);
+      mockJira.updateIssue.mockResolvedValue(undefined);
+    });
+
+    it('resolves names case-insensitively against the key prefix project and sends ids', async () => {
+      const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
+      const result = await handler({
+        key: 'TAP-1',
+        fields: { summary: 'Updated title' },
+        components: ['billing'],
+      });
+
+      expect(mockJira.listProjectComponents).toHaveBeenCalledWith('TAP');
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', {
+        summary: 'Updated title',
+        components: [{ id: '10041' }],
+      });
+      expect(JSON.parse(result.content[0].text)).toEqual({ success: true, key: 'TAP-1' });
+    });
+
+    it('lets components win over fields.components', async () => {
+      const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
+      await handler({
+        key: 'TAP-1',
+        fields: { components: [{ name: 'Billing' }] },
+        components: ['EZAT Automation'],
+      });
+
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10040' }] });
+    });
+
+    it('throws an McpError listing the valid names when a name is unknown, without updating', async () => {
+      const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
+      const call = handler({ key: 'TAP-1', fields: {}, components: ['Nope'] });
+
+      await expect(call).rejects.toThrow(McpError);
+      await expect(call).rejects.toThrow('"Nope"');
+      await expect(call).rejects.toThrow('Available: EZAT Automation, Billing');
+      expect(mockJira.updateIssue).not.toHaveBeenCalled();
+    });
+
+    it('never sends a components key and skips the lookup when components is omitted', async () => {
+      const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
+      await handler({ key: 'TAP-1', fields: { summary: 'Updated title' } });
+
+      expect(mockJira.listProjectComponents).not.toHaveBeenCalled();
+      expect(mockJira.updateIssue.mock.calls[0][1]).toEqual({ summary: 'Updated title' });
+      expect(mockJira.updateIssue.mock.calls[0][1]).not.toHaveProperty('components');
+    });
+  });
+});
+
+describe('jiraListComponentsHandler', () => {
+  it('lists the project components in the paginated envelope', async () => {
+    const mockJira = makeMockJira();
+    const components = [
+      { id: '10040', name: 'EZAT Automation' },
+      { id: '10041', name: 'Billing' },
+    ];
+    mockJira.listProjectComponents.mockResolvedValue(components);
+
+    const handler = jiraListComponentsHandler({ jira: mockJira as any });
+    const result = await handler({ projectKey: 'TAP' });
+
+    expect(mockJira.listProjectComponents).toHaveBeenCalledWith('TAP');
+    expect(JSON.parse(result.content[0].text)).toEqual({ items: components, hasMore: false });
+  });
+});
+
+describe('components schemas and descriptors', () => {
+  const descriptor = (name: string) => jiraToolDescriptors.find((d) => d.name === name)!;
+  const props = (name: string) =>
+    (descriptor(name).inputSchema as { properties: Record<string, any>; required?: string[] });
+
+  it.each([
+    ['jiraCreateIssueSchema', jiraCreateIssueSchema, { projectKey: 'TAP', issueType: 'Task', summary: 's' }],
+    ['jiraUpdateIssueSchema', jiraUpdateIssueSchema, { key: 'TAP-1', fields: {} }],
+  ])('%s accepts an optional, non-empty list of component names', (_name, schema, base) => {
+    expect(schema.safeParse(base).success).toBe(true);
+    expect(schema.safeParse({ ...base, components: ['Billing'] }).success).toBe(true);
+    expect(schema.safeParse({ ...base, components: [] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, components: [1] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, components: 'Billing' }).success).toBe(false);
+  });
+
+  it.each(['jira_create_issue', 'jira_update_issue'])(
+    '%s advertises components as an optional array of strings',
+    (name) => {
+      const schema = props(name);
+      expect(schema.properties.components.type).toBe('array');
+      expect(schema.properties.components.items).toEqual({ type: 'string' });
+      expect(schema.required).not.toContain('components');
+    },
+  );
+
+  it('documents that jira_update_issue components replace the existing ones', () => {
+    expect(props('jira_update_issue').properties.components.description).toContain('REPLACES');
+  });
+
+  it.each(['jira_create_issue', 'jira_update_issue'])(
+    '%s components description points at jira_list_components and the TAP requirement',
+    (name) => {
+      const description = props(name).properties.components.description as string;
+      expect(description).toContain('jira_list_components');
+      expect(description).toContain('required by the TAP project');
+    },
+  );
+
+  it.each(['jira_create_issue', 'jira_update_issue'])(
+    '%s fields description drops the old Product | Feature Group | Feature wording',
+    (name) => {
+      const description = props(name).properties.fields.description as string;
+      expect(description).not.toMatch(/Product|Feature Group|No Value Set|optional/);
+      expect(description).toContain('`components`');
+      expect(description).toContain('SECURITY');
+    },
+  );
+
+  it('keeps the leave-untouched guidance on jira_update_issue fields', () => {
+    expect(props('jira_update_issue').properties.fields.description).toContain('leave existing values untouched');
+  });
+
+  it('jiraListComponentsSchema requires a projectKey', () => {
+    expect(jiraListComponentsSchema.safeParse({}).success).toBe(false);
+    expect(jiraListComponentsSchema.safeParse({ projectKey: 'TAP' }).success).toBe(true);
+  });
+
+  it('publishes jira_list_components with a one-sentence description and a required projectKey', () => {
+    expect(descriptor('jira_list_components').description).toBe(
+      "List a Jira project's components (id, name) — use to find valid names for the Components field.",
+    );
+    expect(props('jira_list_components').required).toEqual(['projectKey']);
   });
 });
 

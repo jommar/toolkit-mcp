@@ -30,6 +30,7 @@ function makeMockJira() {
     deleteComment: vi.fn(),
     getComments: vi.fn(),
     listIssueLinkTypes: vi.fn(),
+    listProjectComponents: vi.fn(),
     linkIssues: vi.fn(),
   };
 }
@@ -99,9 +100,9 @@ describe('JiraModule', () => {
       mockJira = makeMockJira();
     });
 
-    it('returns all 16 handlers', () => {
+    it('returns all 17 handlers', () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      expect(Object.keys(handlers)).toHaveLength(16);
+      expect(Object.keys(handlers)).toHaveLength(17);
       expect(handlers).toHaveProperty('jira_whoami');
       expect(handlers).toHaveProperty('jira_get_issues');
       expect(handlers).toHaveProperty('jira_create_issue');
@@ -117,6 +118,7 @@ describe('JiraModule', () => {
       expect(handlers).toHaveProperty('jira_list_issue_link_types');
       expect(handlers).toHaveProperty('jira_search_users');
       expect(handlers).toHaveProperty('jira_list_fields');
+      expect(handlers).toHaveProperty('jira_list_components');
       expect(handlers).toHaveProperty('jira_delete_comment');
     });
 
@@ -150,6 +152,33 @@ describe('JiraModule', () => {
       ).rejects.toThrow();
     });
 
+    it('jira_list_components lists the project components via the client', async () => {
+      mockJira.listProjectComponents.mockResolvedValue([{ id: '10040', name: 'EZAT Automation' }]);
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      const result = await handlers.jira_list_components({ projectKey: 'TAP' });
+      expect(mockJira.listProjectComponents).toHaveBeenCalledWith('TAP');
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        items: [{ id: '10040', name: 'EZAT Automation' }],
+        hasMore: false,
+      });
+    });
+
+    it('jira_update_issue resolves component names to ids', async () => {
+      mockJira.listProjectComponents.mockResolvedValue([{ id: '10040', name: 'EZAT Automation' }]);
+      mockJira.updateIssue.mockResolvedValue(undefined);
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_update_issue({ key: 'TAP-1', fields: {}, components: ['ezat automation'] });
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10040' }] });
+    });
+
+    it('jira_update_issue rejects an empty components array so it can never clear them', async () => {
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await expect(
+        handlers.jira_update_issue({ key: 'TAP-1', fields: {}, components: [] }),
+      ).rejects.toThrow();
+      expect(mockJira.updateIssue).not.toHaveBeenCalled();
+    });
+
     it('jira_add_comment forwards a numeric parentId to the client', async () => {
       mockJira.addComment.mockResolvedValue({ id: '48838' });
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
@@ -167,9 +196,14 @@ describe('JiraModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 16 tool descriptors', () => {
+    it('returns 17 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(16);
+      expect(descriptors).toHaveLength(17);
+    });
+
+    it('has a descriptor for every handler', () => {
+      const handlerNames = Object.keys(mod.createToolHandlers({ jira: makeMockJira() as any })).sort();
+      expect(mod.getToolDescriptors().map((d) => d.name).sort()).toEqual(handlerNames);
     });
 
     it('each descriptor has name, description, and inputSchema', () => {

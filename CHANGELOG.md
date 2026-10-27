@@ -10,12 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **GitHub: `github_get_copilot_unresolved_prs`** — Lists PRs together with the full originating comment body of every unresolved Copilot-started review thread, so an agent can pick up outstanding Copilot feedback without re-reading resolved threads. Omit `prNumbers` for the authenticated user's PRs, pass `[]` to scan all authors, or pass explicit numbers to inspect any PR regardless of author or state. `limit` bounds candidate PRs scanned (not matches), so sparse pages can still report `hasMore: true`; per-PR thread-inspection failures are reported in a compact `errors` array instead of failing the call.
+- **Jira: Components support** — Jira's Components field replaces "Product | Feature Group | Feature" and is required on TAP tickets. New `jira_list_components` tool (`projectKey` → `{items: [{id, name}], hasMore: false}`) discovers valid names, and `jira_create_issue` / `jira_update_issue` gain an optional, non-empty `components: string[]`. Names are matched case-insensitively against the project (the issue key's prefix on update) and sent as `components: [{id}]`; an unknown name is rejected with the project's valid names, the param wins over `fields.components`, and omitting it leaves components untouched. On update it replaces the issue's components. Backed by a new `JiraClient.listProjectComponents(projectKey)`.
 - **Jira: `adf` parameter on `jira_get_issues`** — Opt-in boolean that adds the raw ADF description to each returned issue as `descriptionAdf` (both `key` and `jql` modes), so a description can be appended to via `jira_update_issue` without flattening its structure. `description` stays plain text, the key is omitted when the issue has no description, and default output is unchanged.
 
 - **GitHub: TAP keys also find PRs titled with the pre-rename TRIPS key** — Jira renamed project TRIPS to TAP (numbers carried over), but PR titles and branches created before the rename still say `TRIPS-n`. Given a `TAP-n` key, `github_get_prs` (`issueKey`, `keys`, `searchBranches`), `github_get_code_review_ready` and the `github://prs/{key}` resource now also match `TRIPS-n` in the same search, so results and pagination keep their shape. A `TRIPS-n` key searches only itself. `keys` runs two search terms per TAP key, so a full batch of 20 TAP keys issues up to 10 queries instead of 5.
 
 ### Changed
 
+- **Jira: `fields` descriptions on `jira_create_issue` / `jira_update_issue`** — no longer describe Product | Feature Group | Feature as optional or tell agents to omit it; they point to the `components` param instead. The SECURITY note and "leave existing values untouched on unrelated updates" stay.
 - **GitHub: `github_get_code_review_ready` default `project`** — now `TAP` (was `TRIPS`). Jira JQL still resolves the old key, so passing `TRIPS` keeps working.
 
 ## [0.3.0] — 2026-07-30

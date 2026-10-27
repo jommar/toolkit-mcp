@@ -48,7 +48,14 @@ export const jiraCreateIssueSchema = z.object({
     .record(z.unknown())
     .optional()
     .describe(
-      'Additional Jira fields to set. Product | Feature Group | Feature is optional: omit it unless the correct selection and API format are verified; never use placeholders such as "No Value Set" or guess a classification. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+      'Additional Jira fields to set. Set Components with the `components` param, not here. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+    ),
+  components: z
+    .array(z.string().max(255))
+    .min(1)
+    .optional()
+    .describe(
+      'Component names to set (case-insensitive), required by the TAP project — find valid names with `jira_list_components`.',
     ),
 });
 
@@ -57,7 +64,14 @@ export const jiraUpdateIssueSchema = z.object({
   fields: z
     .record(z.unknown())
     .describe(
-      'Fields to update (e.g., {"summary": "New title"}). Product | Feature Group | Feature is optional: omit it unless the correct selection and API format are verified; never use placeholders such as "No Value Set" or guess a classification; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+      'Fields to update (e.g., {"summary": "New title"}; pass {} when only changing components). Set Components with the `components` param, not here; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+    ),
+  components: z
+    .array(z.string().max(255))
+    .min(1)
+    .optional()
+    .describe(
+      "Component names (case-insensitive) — REPLACES the issue's components, so list every one to keep; required by the TAP project, find valid names with `jira_list_components`. Omit to leave components untouched.",
     ),
 });
 
@@ -158,6 +172,10 @@ export const jiraListFieldsSchema = z.object({
     .describe('Case-insensitive substring filter on field name (e.g. "story" finds Story Points).'),
 });
 
+export const jiraListComponentsSchema = z.object({
+  projectKey: z.string().max(20).describe('Project key (e.g., "TAP").'),
+});
+
 export const jiraDeleteCommentSchema = z.object({
   key: z.string().max(20).describe('Issue key the comment belongs to.'),
   commentId: z.string().max(30).describe('ID of the comment to delete.'),
@@ -196,6 +214,30 @@ type ToolHandler<T = unknown> = (
     | { type: 'audio'; data: string; mimeType: string }
   )[];
 }>;
+
+/** Project key of an issue key (e.g. "TAP-12" -> "TAP"). */
+const projectKeyOf = (issueKey: string): string => issueKey.split('-')[0];
+
+/** Resolve component names (case-insensitive) to the `{ id }` shape Jira expects, or throw listing the valid names. */
+async function resolveComponents(
+  jira: JiraClient,
+  projectKey: string,
+  names: string[],
+): Promise<{ id: string }[]> {
+  const available = await jira.listProjectComponents(projectKey);
+  const matches = names.map((name) => ({
+    name,
+    match: available.find((c) => c.name.toLowerCase() === name.toLowerCase()),
+  }));
+  const unknown = matches.filter((m) => !m.match).map((m) => `"${m.name}"`);
+  if (unknown.length > 0) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Component ${unknown.join(', ')} not found in project ${projectKey}. Available: ${available.map((c) => c.name).join(', ')}`,
+    );
+  }
+  return matches.map((m) => ({ id: m.match!.id }));
+}
 
 export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
   (_clients) => async (_args) => {
@@ -253,21 +295,29 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
 
 export const jiraCreateIssueHandler: ToolHandler<z.infer<typeof jiraCreateIssueSchema>> =
   (_clients) => async (args) => {
-    const { projectKey, issueType, summary, description, fields } = args;
+    const { projectKey, issueType, summary, description, fields, components } = args;
     const issue = await _clients.jira.createIssue({
       projectKey,
       issueType,
       summary,
       description,
-      fields,
+      fields: components
+        ? { ...fields, components: await resolveComponents(_clients.jira, projectKey, components) }
+        : fields,
     });
     return { content: [{ type: 'text', text: JSON.stringify(issue) }] };
   };
 
 export const jiraUpdateIssueHandler: ToolHandler<z.infer<typeof jiraUpdateIssueSchema>> =
   (_clients) => async (args) => {
-    await _clients.jira.updateIssue(args.key, args.fields);
-    return { content: [{ type: 'text', text: JSON.stringify({ success: true, key: args.key }) }] };
+    const { key, fields, components } = args;
+    await _clients.jira.updateIssue(
+      key,
+      components
+        ? { ...fields, components: await resolveComponents(_clients.jira, projectKeyOf(key), components) }
+        : fields,
+    );
+    return { content: [{ type: 'text', text: JSON.stringify({ success: true, key }) }] };
   };
 
 export const jiraTransitionIssueHandler: ToolHandler<z.infer<typeof jiraTransitionIssueSchema>> =
@@ -427,6 +477,12 @@ export const jiraListFieldsHandler: ToolHandler<z.infer<typeof jiraListFieldsSch
     return { content: [{ type: 'text', text: JSON.stringify(items) }] };
   };
 
+export const jiraListComponentsHandler: ToolHandler<z.infer<typeof jiraListComponentsSchema>> =
+  (_clients) => async (args) => {
+    const components = await _clients.jira.listProjectComponents(args.projectKey);
+    return { content: [{ type: 'text', text: JSON.stringify(paginated(components)) }] };
+  };
+
 export const jiraDeleteCommentHandler: ToolHandler<z.infer<typeof jiraDeleteCommentSchema>> =
   (_clients) => async (args) => {
     await _clients.jira.deleteComment(args.key, args.commentId);
@@ -546,6 +602,11 @@ export const jiraToolDescriptors = [
     name: 'jira_list_fields',
     description: 'List Jira fields (id, name, custom) — use to find custom field IDs like Story Points.',
     inputSchema: zodToJsonSchema(jiraListFieldsSchema),
+  },
+  {
+    name: 'jira_list_components',
+    description: "List a Jira project's components (id, name) — use to find valid names for the Components field.",
+    inputSchema: zodToJsonSchema(jiraListComponentsSchema),
   },
   {
     name: 'jira_delete_comment',
