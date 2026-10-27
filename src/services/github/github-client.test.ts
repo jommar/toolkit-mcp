@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { GitHubClient, PrSearchResult } from './github-client.js';
+import { GitHubClient, PrSearchResult, legacyIssueKey } from './github-client.js';
 
 // Mock only axios.create — keep real AxiosError and isAxiosError for other tests
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
@@ -44,6 +44,32 @@ function mockAxiosInstance(): MockAxiosInstance {
   createMock.mockReturnValue(instance);
   return instance;
 }
+
+describe('legacyIssueKey', () => {
+  it('maps a TAP key to the pre-rename TRIPS key with the same number', () => {
+    expect(legacyIssueKey('TAP-1877')).toBe('TRIPS-1877');
+  });
+
+  it('matches the TAP prefix case-insensitively and returns the key upper-cased', () => {
+    expect(legacyIssueKey('tap-5')).toBe('TRIPS-5');
+    expect(legacyIssueKey('Tap-5')).toBe('TRIPS-5');
+  });
+
+  it('returns undefined for a TRIPS key (it has no older alias)', () => {
+    expect(legacyIssueKey('TRIPS-1877')).toBeUndefined();
+  });
+
+  it('returns undefined for keys of other projects', () => {
+    expect(legacyIssueKey('ABC-1')).toBeUndefined();
+    expect(legacyIssueKey('XTAP-1')).toBeUndefined();
+  });
+
+  it('returns undefined for malformed or non-matching input', () => {
+    for (const input of ['', 'TAP', 'TAP-', 'TAP-abc', 'TAP-1-2', 'TAP-1 ', ' TAP-1', 'TAP_1', 'TAP-1\nX']) {
+      expect(legacyIssueKey(input)).toBeUndefined();
+    }
+  });
+});
 
 describe('GitHubClient', () => {
   let http: MockAxiosInstance;
@@ -843,6 +869,187 @@ describe('GitHubClient', () => {
       expect(result.get('TRIPS-77')).toHaveLength(1);
       expect(result.get('TRIPS-77')![0].state).toBe('merged');
       expect(result.get('TRIPS-77')![0].reviewStatus).toBe('APPROVED');
+    });
+  });
+
+  describe('TAP keys also match the pre-rename TRIPS key', () => {
+    // The existing tests above deliberately keep TRIPS keys: they pin that a TRIPS key searches only itself.
+    const REPOS = ['TransActComm/TravelTracker', 'TransActComm/Portage-backend', 'TransActComm/Portage-frontend'];
+
+    function searchItem(number: number, title: string, repo = 'TransActComm/Portage-backend', body?: string) {
+      return {
+        number,
+        title,
+        body,
+        state: 'open',
+        pull_request: {},
+        repository_url: `https://api.github.com/repos/${repo}`,
+        user: { login: 'dev' },
+        created_at: '2025-01-01T00:00:00Z',
+        html_url: `https://github.com/${repo}/pull/${number}`,
+      };
+    }
+    const searchPage = (...items: object[]) => ({ data: { total_count: items.length, items } });
+    const emptyPage = { data: { total_count: 0, items: [] } };
+    const approved = { data: [{ state: 'APPROVED' }] };
+    const searchQueries = () =>
+      http.get.mock.calls
+        .filter((call: any) => call[0] === '/search/issues')
+        .map((call: any) => call[1].params.q as string);
+
+    describe('searchPrs', () => {
+      it('puts both keys in one query per repo and de-duplicates the union by PR URL', async () => {
+        const legacyPr = searchItem(10, '[TRIPS-1877] Opened before the rename');
+        const newPr = searchItem(11, '[TAP-1877] Opened after the rename', 'TransActComm/TravelTracker');
+        http.get
+          .mockResolvedValueOnce(searchPage(newPr)) // TravelTracker
+          .mockResolvedValueOnce(searchPage(legacyPr)) // Portage-backend
+          .mockResolvedValueOnce(searchPage(legacyPr)); // Portage-frontend repeats a PR
+        http.get.mockResolvedValueOnce(approved).mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const results = await client.searchPrs('TAP-1877');
+
+        expect(searchQueries()).toEqual(
+          REPOS.map((repo) => `type:pr state:open repo:${repo} (TAP-1877 OR TRIPS-1877)`),
+        );
+        expect(results.map((pr) => pr.number)).toEqual([10, 11]);
+        expect(results.map((pr) => pr.htmlUrl)).toEqual([legacyPr.html_url, newPr.html_url]);
+      });
+
+      it('derives the legacy key from a lowercase TAP key', async () => {
+        http.get.mockResolvedValue(emptyPage);
+
+        const client = new GitHubClient();
+        await client.searchPrs('tap-5');
+
+        expect(searchQueries()[0]).toContain('(tap-5 OR TRIPS-5)');
+      });
+
+      it('searches only the TRIPS key itself for a TRIPS key', async () => {
+        http.get.mockResolvedValue(emptyPage);
+
+        const client = new GitHubClient();
+        await client.searchPrs('TRIPS-1877', undefined, 'all');
+
+        expect(searchQueries()).toEqual(REPOS.map((repo) => `type:pr repo:${repo} TRIPS-1877`));
+      });
+    });
+
+    describe('findPrsForIssueKeys', () => {
+      it('groups legacy and new PRs under the requested TAP key, each PR once', async () => {
+        const both = searchItem(1, '[TAP-1877] Also mentions the old key TRIPS-1877');
+        const legacy = searchItem(2, '[TRIPS-1877] Opened before the rename');
+        const inBody = searchItem(3, 'Unrelated title', 'TransActComm/TravelTracker', 'Follow-up to TRIPS-1877');
+        const otherTicket = searchItem(4, '[TAP-2000] Another ticket');
+        http.get.mockResolvedValueOnce(searchPage(both, legacy, inBody, otherTicket));
+        http.get.mockResolvedValueOnce(approved).mockResolvedValueOnce(approved).mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.findPrsForIssueKeys(['TAP-1877']);
+
+        expect(searchQueries()).toEqual(['(TAP-1877 OR TRIPS-1877) type:pr state:open org:TransActComm']);
+        expect([...result.keys()]).toEqual(['TAP-1877']);
+        expect(result.get('TAP-1877')!.map((pr) => pr.number)).toEqual([1, 2, 3]);
+        expect(result.get('TAP-1877')!.every((pr) => pr.reviewStatus === 'APPROVED')).toBe(true);
+      });
+
+      it('splits the search terms, not the keys, into chunks of 4 and de-duplicates across chunks', async () => {
+        const spansChunks = searchItem(7, '[TRIPS-1] and [TAP-3] landed together');
+        http.get.mockResolvedValueOnce(searchPage(spansChunks)).mockResolvedValueOnce(searchPage(spansChunks));
+        http.get.mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.findPrsForIssueKeys(['TAP-1', 'TAP-2', 'TAP-3']);
+
+        expect(searchQueries()).toEqual([
+          '(TAP-1 OR TRIPS-1 OR TAP-2 OR TRIPS-2) type:pr state:open org:TransActComm',
+          '(TAP-3 OR TRIPS-3) type:pr state:open org:TransActComm',
+        ]);
+        expect(result.get('TAP-1')).toHaveLength(1);
+        expect(result.get('TAP-3')).toHaveLength(1);
+        expect(result.has('TAP-2')).toBe(false);
+        expect(http.get).toHaveBeenCalledTimes(3); // 2 searches + 1 review lookup for the single unique PR
+      });
+
+      it('searches and groups only the TRIPS key itself for a TRIPS key', async () => {
+        const newStyle = searchItem(5, '[TAP-1877] New-style title');
+        const oldStyle = searchItem(6, '[TRIPS-1877] Old-style title');
+        http.get.mockResolvedValueOnce(searchPage(newStyle, oldStyle));
+        http.get.mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.findPrsForIssueKeys(['TRIPS-1877']);
+
+        expect(searchQueries()).toEqual(['(TRIPS-1877) type:pr state:open org:TransActComm']);
+        expect(result.get('TRIPS-1877')!.map((pr) => pr.number)).toEqual([6]);
+      });
+    });
+
+    describe('searchPrsByBranchName', () => {
+      function pullFor(number: number, branch: string) {
+        return {
+          data: [
+            {
+              number,
+              title: `PR ${number}`,
+              state: 'open',
+              user: { login: 'dev' },
+              created_at: '2025-01-01T00:00:00Z',
+              html_url: `https://github.com/TransActComm/TravelTracker/pull/${number}`,
+              head: { ref: branch },
+            },
+          ],
+        };
+      }
+
+      it('finds branches named with either key and returns them under the requested TAP key', async () => {
+        http.get.mockResolvedValueOnce({
+          data: [
+            { ref: 'refs/heads/feature/TRIPS-42-before' },
+            { ref: 'refs/heads/feature/TAP-42-after' },
+            { ref: 'refs/heads/main' },
+          ],
+        });
+        http.get.mockResolvedValueOnce({ data: [] }); // end of refs pagination
+        http.get.mockResolvedValueOnce(pullFor(101, 'feature/TRIPS-42-before'));
+        http.get.mockResolvedValueOnce(pullFor(102, 'feature/TAP-42-after'));
+        http.get.mockResolvedValueOnce({ data: [] }); // second repo, no branches
+        http.get.mockResolvedValueOnce({ data: [] }); // third repo, no branches
+        http.get.mockResolvedValueOnce(approved).mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.searchPrsByBranchName('TAP-42');
+
+        expect(http.get).toHaveBeenCalledWith('/repos/TransActComm/TravelTracker/pulls', {
+          params: { head: 'TransActComm:feature/TRIPS-42-before', state: 'open' },
+        });
+        expect(http.get).toHaveBeenCalledWith('/repos/TransActComm/TravelTracker/pulls', {
+          params: { head: 'TransActComm:feature/TAP-42-after', state: 'open' },
+        });
+        expect([...result.keys()]).toEqual(['TAP-42']);
+        expect(result.get('TAP-42')!.map((pr) => pr.number)).toEqual([101, 102]);
+      });
+
+      it('matches only branches named with the TRIPS key for a TRIPS key', async () => {
+        http.get.mockResolvedValueOnce({
+          data: [{ ref: 'refs/heads/feature/TRIPS-42-before' }, { ref: 'refs/heads/feature/TAP-42-after' }],
+        });
+        http.get.mockResolvedValueOnce({ data: [] }); // end of refs pagination
+        http.get.mockResolvedValueOnce(pullFor(101, 'feature/TRIPS-42-before'));
+        http.get.mockResolvedValueOnce({ data: [] }); // second repo, no branches
+        http.get.mockResolvedValueOnce({ data: [] }); // third repo, no branches
+        http.get.mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.searchPrsByBranchName('TRIPS-42');
+
+        expect(http.get).not.toHaveBeenCalledWith(
+          '/repos/TransActComm/TravelTracker/pulls',
+          { params: { head: 'TransActComm:feature/TAP-42-after', state: 'open' } },
+        );
+        expect(result.get('TRIPS-42')!.map((pr) => pr.number)).toEqual([101]);
+      });
     });
   });
 

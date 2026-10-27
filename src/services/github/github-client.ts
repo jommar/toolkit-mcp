@@ -5,8 +5,24 @@ import { installRetry } from '../http-retry.js';
 const MAX_BRANCH_SEARCH_CALLS = 20;
 /** Regex for validating repo "owner/name" format. */
 const REPO_PATTERN = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
-/** Regex for validating Jira issue keys (e.g. TRIPS-1234). */
+/** Regex for validating Jira issue keys (e.g. TAP-1234). */
 export const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i;
+
+/**
+ * Jira renamed project TRIPS to TAP with numbers carried over (TRIPS-1877 is TAP-1877),
+ * but PR titles and branches created before the rename still carry the old key.
+ * Returns the pre-rename key for a TAP key (e.g. "TAP-1877" -> "TRIPS-1877"), else undefined.
+ */
+export function legacyIssueKey(key: string): string | undefined {
+  const match = /^TAP-(\d+)$/i.exec(key);
+  return match ? `TRIPS-${match[1]}` : undefined;
+}
+
+/** The key plus its pre-rename alias, when it has one: every spelling a PR may carry. */
+function issueKeyAliases(key: string): string[] {
+  const legacy = legacyIssueKey(key);
+  return legacy ? [key, legacy] : [key];
+}
 
 export interface PrInfo {
   number: number;
@@ -297,11 +313,14 @@ export class GitHubClient {
       throw new Error(`Invalid issue key format: "${issueKey}"`);
     }
     const _state = prState ?? 'open';
+    // A TAP key also matches PRs still titled with the pre-rename key, in the same query.
+    const aliases = issueKeyAliases(issueKey);
+    const searchTerm = aliases.length > 1 ? `(${aliases.join(' OR ')})` : issueKey;
     const settled = await Promise.allSettled(
       this.ghRepos.map(async (repo) => {
         try {
           const stateFilter = _state === 'all' ? '' : `state:${_state}`;
-          const q = ['type:pr', stateFilter, `repo:${repo}`, issueKey].filter(Boolean).join(' ');
+          const q = ['type:pr', stateFilter, `repo:${repo}`, searchTerm].filter(Boolean).join(' ');
           const result = await this.fetchAllPages<any>('/search/issues', {
             q,
             per_page: 100,
@@ -348,9 +367,10 @@ export class GitHubClient {
   }
 
   /**
-   * Batched PR search for multiple issue keys (max 20). Splits keys into chunks
-   * of max 4 to stay under GitHub's 5-operator limit per query, runs multiple
-   * queries in parallel, deduplicates results, then groups by matching key.
+   * Batched PR search for multiple issue keys (max 20). Splits search terms (each key,
+   * plus its pre-rename alias for a TAP key) into chunks of max 4 to stay under GitHub's
+   * 5-operator limit per query, runs multiple queries in parallel, deduplicates results,
+   * then groups by matching key.
    *
    * Keys beyond 20 are logged as a warning and skipped.
    */
@@ -375,11 +395,14 @@ export class GitHubClient {
     // Sanitize keys by stripping potentially dangerous characters
     const sanitizedKeys = allKeys.map((k) => k.replace(/[()":]/g, ''));
 
+    // A TAP key is also searched under its pre-rename key, so each one adds a second term
+    const searchTerms = sanitizedKeys.flatMap(issueKeyAliases);
+
     // Split into chunks of 4 to stay under GitHub's 5-operator limit
     const CHUNK_SIZE = 4;
     const chunks: string[][] = [];
-    for (let i = 0; i < sanitizedKeys.length; i += CHUNK_SIZE) {
-      chunks.push(sanitizedKeys.slice(i, i + CHUNK_SIZE));
+    for (let i = 0; i < searchTerms.length; i += CHUNK_SIZE) {
+      chunks.push(searchTerms.slice(i, i + CHUNK_SIZE));
     }
 
     const _state = prState ?? 'open';
@@ -420,7 +443,11 @@ export class GitHubClient {
       const titleUpper = (item.title ?? '').toUpperCase();
       const bodyUpper = (item.body ?? '').toUpperCase();
       for (const key of allKeys) {
-        if (titleUpper.includes(key.toUpperCase()) || bodyUpper.includes(key.toUpperCase())) {
+        const mentionsKey = issueKeyAliases(key).some((alias) => {
+          const aliasUpper = alias.toUpperCase();
+          return titleUpper.includes(aliasUpper) || bodyUpper.includes(aliasUpper);
+        });
+        if (mentionsKey) {
           const pr = this.parseItems([item])[0];
           const existing = grouped.get(key) ?? [];
           existing.push(pr);
@@ -667,6 +694,7 @@ export class GitHubClient {
     }
 
     const results = new Map<string, PrSearchResult[]>();
+    const aliasesUpper = issueKeyAliases(issueKey).map((alias) => alias.toUpperCase());
     let apiCallsMade = 0;
 
     for (const repo of this.ghRepos) {
@@ -693,10 +721,11 @@ export class GitHubClient {
           this.branchRefsCache.set(repo, refsData);
         }
 
-        // Filter branches containing issue key (case-insensitive)
-        const matchingBranches = refsData.filter((ref: any) =>
-          ref.ref?.toUpperCase().includes(issueKey.toUpperCase()),
-        );
+        // Filter branches containing issue key or its pre-rename alias (case-insensitive)
+        const matchingBranches = refsData.filter((ref: any) => {
+          const refUpper = ref.ref?.toUpperCase();
+          return aliasesUpper.some((alias) => refUpper?.includes(alias));
+        });
 
         if (matchingBranches.length === 0) continue;
 
