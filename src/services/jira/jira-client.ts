@@ -15,6 +15,11 @@ export interface JiraField {
   custom: boolean;
 }
 
+export interface JiraComponent {
+  id: string;
+  name: string;
+}
+
 export interface JiraIssue {
   id: string;
   key: string;
@@ -253,6 +258,12 @@ export class JiraClient {
       params: { query },
     });
     return data;
+  }
+
+  /** List a project's components (id + name) — the valid values for an issue's Components field. */
+  async listProjectComponents(projectKey: string): Promise<JiraComponent[]> {
+    const { data } = await this.http.get<JiraComponent[]>(`/project/${encodeURIComponent(projectKey)}/components`);
+    return data.map((c) => ({ id: c.id, name: c.name }));
   }
 
   /** List the available issue link types (name + inward/outward labels). */

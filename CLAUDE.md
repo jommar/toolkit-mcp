@@ -157,6 +157,7 @@ Exactly one sentence. Concise. No filler.
 |------|-------------|
 | `jira_get_issues` | "Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search." |
 | `jira_list_fields` | "List Jira fields (id, name, custom) — use to find custom field IDs like Story Points." |
+| `jira_list_components` | "List a Jira project's components (id, name) — use to find valid names for the Components field." |
 | `jira_create_issue` | "Create a new Jira issue in a project." |
 | `jira_update_issue` | "Update fields on an existing Jira issue." |
 | `jira_transition_issue` | "Transition a Jira issue to a new status." |

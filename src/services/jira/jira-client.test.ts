@@ -687,6 +687,46 @@ describe('JiraClient', () => {
     });
   });
 
+  describe('listProjectComponents', () => {
+    it('GETs /project/{key}/components and maps each component to id + name', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          {
+            self: 'https://test.atlassian.net/rest/api/3/component/10040',
+            id: '10040',
+            name: 'EZAT Automation',
+            project: 'TAP',
+            assigneeType: 'PROJECT_DEFAULT',
+          },
+          { self: 'https://test.atlassian.net/rest/api/3/component/10041', id: '10041', name: 'Billing' },
+        ],
+      });
+
+      const client = new JiraClient();
+      const result = await client.listProjectComponents('TAP');
+
+      expect(http.get).toHaveBeenCalledWith('/project/TAP/components');
+      expect(result).toEqual([
+        { id: '10040', name: 'EZAT Automation' },
+        { id: '10041', name: 'Billing' },
+      ]);
+    });
+
+    it('encodes the project key', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      await new JiraClient().listProjectComponents('A/B');
+
+      expect(http.get).toHaveBeenCalledWith('/project/A%2FB/components');
+    });
+
+    it('returns an empty list for a project with no components', async () => {
+      http.get.mockResolvedValueOnce({ data: [] });
+
+      expect(await new JiraClient().listProjectComponents('TAP')).toEqual([]);
+    });
+  });
+
   describe('listIssueLinkTypes', () => {
     it('GETs /issueLinkType and returns types', async () => {
       const types = [{ id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }];
