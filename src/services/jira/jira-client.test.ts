@@ -106,23 +106,23 @@ describe('JiraClient', () => {
 
   describe('getIssue', () => {
     it('calls GET /issue/{key} with no fields', async () => {
-      const issue = { id: '1', key: 'TRIPS-1', fields: {} };
+      const issue = { id: '1', key: 'TAP-1', fields: {} };
       http.get.mockResolvedValueOnce({ data: issue });
 
       const client = new JiraClient();
-      const result = await client.getIssue('TRIPS-1');
+      const result = await client.getIssue('TAP-1');
 
-      expect(http.get).toHaveBeenCalledWith('/issue/TRIPS-1', { params: undefined });
+      expect(http.get).toHaveBeenCalledWith('/issue/TAP-1', { params: undefined });
       expect(result).toEqual(issue);
     });
 
     it('passes fields param when provided', async () => {
-      http.get.mockResolvedValueOnce({ data: { id: '1', key: 'TRIPS-1', fields: {} } });
+      http.get.mockResolvedValueOnce({ data: { id: '1', key: 'TAP-1', fields: {} } });
 
       const client = new JiraClient();
-      await client.getIssue('TRIPS-1', ['summary', 'status']);
+      await client.getIssue('TAP-1', ['summary', 'status']);
 
-      expect(http.get).toHaveBeenCalledWith('/issue/TRIPS-1', {
+      expect(http.get).toHaveBeenCalledWith('/issue/TAP-1', {
         params: { fields: 'summary,status' },
       });
     });
@@ -141,7 +141,7 @@ describe('JiraClient', () => {
     it('calls getIssue with DEV_FIELDS and maps to SlimIssue', async () => {
       const raw = {
         id: '1',
-        key: 'TRIPS-1',
+        key: 'TAP-1',
         fields: {
           summary: 'Test issue',
           status: { name: 'In Progress' },
@@ -162,12 +162,12 @@ describe('JiraClient', () => {
       http.get.mockResolvedValueOnce({ data: raw });
 
       const client = new JiraClient();
-      const result = await client.getIssueSlim('TRIPS-1');
+      const result = await client.getIssueSlim('TAP-1');
 
-      expect(http.get).toHaveBeenCalledWith('/issue/TRIPS-1', {
+      expect(http.get).toHaveBeenCalledWith('/issue/TAP-1', {
         params: { fields: expect.stringContaining('summary') },
       });
-      expect(result.key).toBe('TRIPS-1');
+      expect(result.key).toBe('TAP-1');
       expect(result.summary).toBe('Test issue');
       expect(result.status).toBe('In Progress');
       expect(result.type).toBe('Bug');
@@ -187,7 +187,7 @@ describe('JiraClient', () => {
     it('refetches comments when comment.total > comment.comments.length', async () => {
       const raw = {
         id: '1',
-        key: 'TRIPS-1',
+        key: 'TAP-1',
         fields: {
           summary: 'Test',
           status: { name: 'Open' },
@@ -206,11 +206,11 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.getIssueSlim('TRIPS-1');
+      const result = await client.getIssueSlim('TAP-1');
 
       // Should have called getComments for the second request
       expect(http.get).toHaveBeenCalledTimes(2);
-      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TRIPS-1/comment', {
+      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TAP-1/comment', {
         params: { startAt: 0, maxResults: 100 },
       });
       expect(result.comments).toHaveLength(1);
@@ -220,7 +220,7 @@ describe('JiraClient', () => {
     it('does not refetch comments when total matches comments length', async () => {
       const raw = {
         id: '1',
-        key: 'TRIPS-1',
+        key: 'TAP-1',
         fields: {
           summary: 'Test',
           status: { name: 'Open' },
@@ -230,7 +230,7 @@ describe('JiraClient', () => {
       http.get.mockResolvedValueOnce({ data: raw });
 
       const client = new JiraClient();
-      await client.getIssueSlim('TRIPS-1');
+      await client.getIssueSlim('TAP-1');
 
       // Only one GET call (getIssue), no additional getComments
       expect(http.get).toHaveBeenCalledTimes(1);
@@ -260,13 +260,13 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.getComments('TRIPS-1');
+      const result = await client.getComments('TAP-1');
 
       expect(http.get).toHaveBeenCalledTimes(2);
-      expect(http.get).toHaveBeenNthCalledWith(1, '/issue/TRIPS-1/comment', {
+      expect(http.get).toHaveBeenNthCalledWith(1, '/issue/TAP-1/comment', {
         params: { startAt: 0, maxResults: 100 },
       });
-      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TRIPS-1/comment', {
+      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TAP-1/comment', {
         params: { startAt: 2, maxResults: 100 },
       });
       expect(result).toHaveLength(3);
@@ -281,7 +281,7 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.getComments('TRIPS-1');
+      const result = await client.getComments('TAP-1');
 
       expect(http.get).toHaveBeenCalledTimes(1);
       expect(result).toEqual([]);
@@ -296,7 +296,7 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.getComments('TRIPS-1');
+      const result = await client.getComments('TAP-1');
 
       expect(http.get).toHaveBeenCalledTimes(1);
       expect(result).toHaveLength(1);
@@ -306,14 +306,14 @@ describe('JiraClient', () => {
   describe('search', () => {
     it('POSTs to /search/jql with default fields', async () => {
       http.post.mockResolvedValueOnce({
-        data: { issues: [{ id: '1', key: 'TRIPS-1', fields: {} }], nextPageToken: undefined, isLast: true },
+        data: { issues: [{ id: '1', key: 'TAP-1', fields: {} }], nextPageToken: undefined, isLast: true },
       });
 
       const client = new JiraClient();
-      const result = await client.search('project = TRIPS');
+      const result = await client.search('project = TAP');
 
       expect(http.post).toHaveBeenCalledWith('/search/jql', {
-        jql: 'project = TRIPS',
+        jql: 'project = TAP',
         fields: ['summary', 'status', 'assignee'],
         maxResults: 50,
       });
@@ -347,7 +347,7 @@ describe('JiraClient', () => {
       // Page 1: returns nextPageToken, isLast: false
       http.post.mockResolvedValueOnce({
         data: {
-          issues: [{ id: '1', key: 'TRIPS-1', fields: {} }],
+          issues: [{ id: '1', key: 'TAP-1', fields: {} }],
           nextPageToken: 'page2',
           isLast: false,
         },
@@ -355,17 +355,17 @@ describe('JiraClient', () => {
       // Page 2: returns no token, isLast: true
       http.post.mockResolvedValueOnce({
         data: {
-          issues: [{ id: '2', key: 'TRIPS-2', fields: {} }],
+          issues: [{ id: '2', key: 'TAP-2', fields: {} }],
           nextPageToken: undefined,
           isLast: true,
         },
       });
 
       const client = new JiraClient();
-      const result = await client.searchAll('project = TRIPS');
+      const result = await client.searchAll('project = TAP');
 
       expect(http.post).toHaveBeenCalledTimes(2);
-      expect(http.post).toHaveBeenNthCalledWith(1, '/search/jql', expect.objectContaining({ jql: 'project = TRIPS' }));
+      expect(http.post).toHaveBeenNthCalledWith(1, '/search/jql', expect.objectContaining({ jql: 'project = TAP' }));
       expect(http.post).toHaveBeenNthCalledWith(2, '/search/jql', expect.objectContaining({ nextPageToken: 'page2' }));
       expect(result).toHaveLength(2);
     });
@@ -374,9 +374,9 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({
         data: {
           issues: [
-            { id: '1', key: 'TRIPS-1', fields: {} },
-            { id: '2', key: 'TRIPS-2', fields: {} },
-            { id: '3', key: 'TRIPS-3', fields: {} },
+            { id: '1', key: 'TAP-1', fields: {} },
+            { id: '2', key: 'TAP-2', fields: {} },
+            { id: '3', key: 'TAP-3', fields: {} },
           ],
           nextPageToken: 'page2',
           isLast: false,
@@ -384,11 +384,11 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.searchAll('project = TRIPS', { max: 2 });
+      const result = await client.searchAll('project = TAP', { max: 2 });
 
       expect(result).toHaveLength(2);
-      expect(result[0].key).toBe('TRIPS-1');
-      expect(result[1].key).toBe('TRIPS-2');
+      expect(result[0].key).toBe('TAP-1');
+      expect(result[1].key).toBe('TAP-2');
       // Only one request since max was reached immediately
       expect(http.post).toHaveBeenCalledTimes(1);
     });
@@ -410,14 +410,14 @@ describe('JiraClient', () => {
     it('returns slim issues from search', async () => {
       http.post.mockResolvedValueOnce({
         data: {
-          issues: [{ id: '1', key: 'TRIPS-1', fields: { summary: 'Slim', status: { name: 'Open' } } }],
+          issues: [{ id: '1', key: 'TAP-1', fields: { summary: 'Slim', status: { name: 'Open' } } }],
           nextPageToken: undefined,
           isLast: true,
         },
       });
 
       const client = new JiraClient();
-      const result = await client.searchSlim('project = TRIPS');
+      const result = await client.searchSlim('project = TAP');
 
       expect(http.post).toHaveBeenCalledWith('/search/jql', expect.objectContaining({
         fields: expect.arrayContaining(['summary']),
@@ -431,14 +431,14 @@ describe('JiraClient', () => {
     it('returns slim issues from all pages', async () => {
       http.post.mockResolvedValueOnce({
         data: {
-          issues: [{ id: '1', key: 'TRIPS-1', fields: { summary: 'A' } }],
+          issues: [{ id: '1', key: 'TAP-1', fields: { summary: 'A' } }],
           nextPageToken: undefined,
           isLast: true,
         },
       });
 
       const client = new JiraClient();
-      const result = await client.searchAllSlim('project = TRIPS');
+      const result = await client.searchAllSlim('project = TAP');
 
       expect(result).toHaveLength(1);
       expect(result[0].summary).toBe('A');
@@ -447,11 +447,11 @@ describe('JiraClient', () => {
 
   describe('createIssue', () => {
     it('POSTs to /issue with ADF-wrapped description', async () => {
-      http.post.mockResolvedValueOnce({ data: { id: '100', key: 'TRIPS-42' } });
+      http.post.mockResolvedValueOnce({ data: { id: '100', key: 'TAP-42' } });
 
       const client = new JiraClient();
       const result = await client.createIssue({
-        projectKey: 'TRIPS',
+        projectKey: 'TAP',
         issueType: 'Task',
         summary: 'My task',
         description: 'Do the thing',
@@ -459,7 +459,7 @@ describe('JiraClient', () => {
 
       expect(http.post).toHaveBeenCalledWith('/issue', {
         fields: {
-          project: { key: 'TRIPS' },
+          project: { key: 'TAP' },
           issuetype: { name: 'Task' },
           summary: 'My task',
           description: {
@@ -469,22 +469,22 @@ describe('JiraClient', () => {
           },
         },
       });
-      expect(result.key).toBe('TRIPS-42');
+      expect(result.key).toBe('TAP-42');
     });
 
     it('creates issue without description', async () => {
-      http.post.mockResolvedValueOnce({ data: { key: 'TRIPS-43' } });
+      http.post.mockResolvedValueOnce({ data: { key: 'TAP-43' } });
 
       const client = new JiraClient();
       await client.createIssue({
-        projectKey: 'TRIPS',
+        projectKey: 'TAP',
         issueType: 'Bug',
         summary: 'No desc',
       });
 
       expect(http.post).toHaveBeenCalledWith('/issue', {
         fields: {
-          project: { key: 'TRIPS' },
+          project: { key: 'TAP' },
           issuetype: { name: 'Bug' },
           summary: 'No desc',
         },
@@ -494,11 +494,11 @@ describe('JiraClient', () => {
     });
 
     it('merges extra fields', async () => {
-      http.post.mockResolvedValueOnce({ data: { key: 'TRIPS-44' } });
+      http.post.mockResolvedValueOnce({ data: { key: 'TAP-44' } });
 
       const client = new JiraClient();
       await client.createIssue({
-        projectKey: 'TRIPS',
+        projectKey: 'TAP',
         issueType: 'Story',
         summary: 'Story',
         fields: { customfield_123: 'value' },
@@ -513,9 +513,9 @@ describe('JiraClient', () => {
       http.put.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.updateIssue('TRIPS-1', { summary: 'Updated' });
+      await client.updateIssue('TAP-1', { summary: 'Updated' });
 
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1', { fields: { summary: 'Updated' } });
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1', { fields: { summary: 'Updated' } });
     });
   });
 
@@ -524,9 +524,9 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({ data: { id: '12345' } });
 
       const client = new JiraClient();
-      const result = await client.addComment('TRIPS-1', 'Nice work');
+      const result = await client.addComment('TAP-1', 'Nice work');
 
-      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/comment', {
+      expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', {
         body: {
           type: 'doc',
           version: 1,
@@ -539,9 +539,9 @@ describe('JiraClient', () => {
     it('sends parentId alongside the ADF body when replying in a thread', async () => {
       http.post.mockResolvedValueOnce({ data: { id: '48838' } });
 
-      await new JiraClient().addComment('TRIPS-1', 'Nice work', '48106');
+      await new JiraClient().addComment('TAP-1', 'Nice work', '48106');
 
-      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/comment', {
+      expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', {
         body: {
           type: 'doc',
           version: 1,
@@ -554,7 +554,7 @@ describe('JiraClient', () => {
     it('omits the parentId key from the request body when not replying', async () => {
       http.post.mockResolvedValueOnce({ data: { id: '12345' } });
 
-      await new JiraClient().addComment('TRIPS-1', 'Nice work');
+      await new JiraClient().addComment('TAP-1', 'Nice work');
 
       expect(Object.keys(http.post.mock.calls[0][1])).toEqual(['body']);
     });
@@ -565,9 +565,9 @@ describe('JiraClient', () => {
       http.put.mockResolvedValueOnce({ data: { id: '38560' } });
 
       const client = new JiraClient();
-      const result = await client.updateComment('TRIPS-1', '38560', 'Revised');
+      const result = await client.updateComment('TAP-1', '38560', 'Revised');
 
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/comment/38560', {
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/comment/38560', {
         body: {
           type: 'doc',
           version: 1,
@@ -583,9 +583,9 @@ describe('JiraClient', () => {
       http.delete.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.deleteComment('TRIPS-1', '12345');
+      await client.deleteComment('TAP-1', '12345');
 
-      expect(http.delete).toHaveBeenCalledWith('/issue/TRIPS-1/comment/12345');
+      expect(http.delete).toHaveBeenCalledWith('/issue/TAP-1/comment/12345');
     });
   });
 
@@ -596,9 +596,9 @@ describe('JiraClient', () => {
       });
 
       const client = new JiraClient();
-      const result = await client.listTransitions('TRIPS-1');
+      const result = await client.listTransitions('TAP-1');
 
-      expect(http.get).toHaveBeenCalledWith('/issue/TRIPS-1/transitions');
+      expect(http.get).toHaveBeenCalledWith('/issue/TAP-1/transitions');
       expect(result).toEqual([{ id: '41', name: 'In Progress' }]);
     });
   });
@@ -608,9 +608,9 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.transitionIssue('TRIPS-1', '41');
+      await client.transitionIssue('TAP-1', '41');
 
-      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/transitions', {
+      expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/transitions', {
         transition: { id: '41' },
       });
     });
@@ -619,9 +619,9 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.transitionIssue('TRIPS-1', '41', { comment: 'Moving' });
+      await client.transitionIssue('TAP-1', '41', { comment: 'Moving' });
 
-      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/transitions', {
+      expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/transitions', {
         transition: { id: '41' },
         update: { comment: [{ add: { body: expect.objectContaining({ type: 'doc' }) } }] },
       });
@@ -631,9 +631,9 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.transitionIssue('TRIPS-1', '41', { fields: { resolution: { name: 'Done' } } });
+      await client.transitionIssue('TAP-1', '41', { fields: { resolution: { name: 'Done' } } });
 
-      expect(http.post).toHaveBeenCalledWith('/issue/TRIPS-1/transitions', {
+      expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/transitions', {
         transition: { id: '41' },
         fields: { resolution: { name: 'Done' } },
       });
@@ -645,18 +645,18 @@ describe('JiraClient', () => {
       http.put.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.assignIssue('TRIPS-1', 'abc-123');
+      await client.assignIssue('TAP-1', 'abc-123');
 
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/assignee', { accountId: 'abc-123' });
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/assignee', { accountId: 'abc-123' });
     });
 
     it('passes null to unassign', async () => {
       http.put.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      await client.assignIssue('TRIPS-1', null);
+      await client.assignIssue('TAP-1', null);
 
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/assignee', { accountId: null });
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/assignee', { accountId: null });
     });
   });
 
@@ -666,10 +666,10 @@ describe('JiraClient', () => {
       http.put.mockResolvedValueOnce({});
 
       const client = new JiraClient();
-      const result = await client.assignToMe('TRIPS-1');
+      const result = await client.assignToMe('TAP-1');
 
       expect(http.get).toHaveBeenCalledWith('/myself');
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/assignee', { accountId: 'me123' });
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/assignee', { accountId: 'me123' });
       expect(result.accountId).toBe('me123');
     });
   });
@@ -707,14 +707,14 @@ describe('JiraClient', () => {
       const client = new JiraClient();
       await client.linkIssues({
         type: 'Blocks',
-        inwardKey: 'TRIPS-1',
-        outwardKey: 'TRIPS-2',
+        inwardKey: 'TAP-1',
+        outwardKey: 'TAP-2',
       });
 
       expect(http.post).toHaveBeenCalledWith('/issueLink', {
         type: { name: 'Blocks' },
-        inwardIssue: { key: 'TRIPS-1' },
-        outwardIssue: { key: 'TRIPS-2' },
+        inwardIssue: { key: 'TAP-1' },
+        outwardIssue: { key: 'TAP-2' },
       });
     });
 
@@ -724,15 +724,15 @@ describe('JiraClient', () => {
       const client = new JiraClient();
       await client.linkIssues({
         type: 'Relates',
-        inwardKey: 'TRIPS-1',
-        outwardKey: 'TRIPS-2',
+        inwardKey: 'TAP-1',
+        outwardKey: 'TAP-2',
         comment: 'Related',
       });
 
       expect(http.post).toHaveBeenCalledWith('/issueLink', {
         type: { name: 'Relates' },
-        inwardIssue: { key: 'TRIPS-1' },
-        outwardIssue: { key: 'TRIPS-2' },
+        inwardIssue: { key: 'TAP-1' },
+        outwardIssue: { key: 'TAP-2' },
         comment: { body: expect.objectContaining({ type: 'doc' }) },
       });
     });
@@ -793,7 +793,7 @@ describe('JiraClient', () => {
       http.post.mockResolvedValueOnce({ data: { id: '12345' } });
 
       const client = new JiraClient();
-      await client.addComment('TRIPS-1', 'Hello world');
+      await client.addComment('TAP-1', 'Hello world');
 
       const body = http.post.mock.calls[0][1].body;
       expect(body).toEqual({
@@ -810,7 +810,7 @@ describe('JiraClient', () => {
 
     async function addedParagraph(body: string) {
       http.post.mockResolvedValueOnce({ data: { id: '1' } });
-      await new JiraClient().addComment('TRIPS-1', body);
+      await new JiraClient().addComment('TAP-1', body);
       return http.post.mock.calls[0][1].body.content[0].content;
     }
 
@@ -850,8 +850,8 @@ describe('JiraClient', () => {
       http.post.mockResolvedValue({ data: { id: '1' } });
       const text = `Hi [~accountid:${accountId}], done.`;
 
-      await new JiraClient().addComment('TRIPS-1', text);
-      await new JiraClient().addComment('TRIPS-1', text, '48106');
+      await new JiraClient().addComment('TAP-1', text);
+      await new JiraClient().addComment('TAP-1', text, '48106');
 
       const [topLevel, reply] = http.post.mock.calls.map((call) => call[1]);
       expect(reply.body).toEqual(topLevel.body);
@@ -862,9 +862,9 @@ describe('JiraClient', () => {
     it('converts mention tokens when updating a comment', async () => {
       http.put.mockResolvedValueOnce({ data: { id: '38560' } });
 
-      await new JiraClient().updateComment('TRIPS-1', '38560', `Ping [~accountid:${accountId}]`);
+      await new JiraClient().updateComment('TAP-1', '38560', `Ping [~accountid:${accountId}]`);
 
-      expect(http.put).toHaveBeenCalledWith('/issue/TRIPS-1/comment/38560', {
+      expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/comment/38560', {
         body: {
           type: 'doc',
           version: 1,

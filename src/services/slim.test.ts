@@ -5,7 +5,7 @@ import type { JiraIssue } from './jira/jira-client.js';
 describe('toSlimIssue', () => {
   const fullIssue: JiraIssue = {
     id: '100',
-    key: 'TRIPS-42',
+    key: 'TAP-42',
     fields: {
       summary: 'Fix the bug',
       status: { name: 'In Progress' },
@@ -51,7 +51,7 @@ describe('toSlimIssue', () => {
 
   it('flattens a full Jira issue correctly', () => {
     const slim = toSlimIssue(fullIssue);
-    expect(slim.key).toBe('TRIPS-42');
+    expect(slim.key).toBe('TAP-42');
     expect(slim.summary).toBe('Fix the bug');
     expect(slim.status).toBe('In Progress');
     expect(slim.type).toBe('Bug');

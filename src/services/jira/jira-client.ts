@@ -78,7 +78,7 @@ export class JiraClient {
     return data.map((f) => ({ id: f.id, name: f.name, custom: f.custom ?? false }));
   }
 
-  /** Fetch a single issue by key (e.g. "TRIPS-1267"). */
+  /** Fetch a single issue by key (e.g. "TAP-1267"). */
   async getIssue(key: string, fields?: string[]): Promise<JiraIssue> {
     const { data } = await this.http.get<JiraIssue>(`/issue/${encodeURIComponent(key)}`, {
       params: fields?.length ? { fields: fields.join(',') } : undefined,

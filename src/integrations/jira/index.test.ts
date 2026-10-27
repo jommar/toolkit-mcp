@@ -129,9 +129,9 @@ describe('JiraModule', () => {
     });
 
     it('jira_get_issues parses and delegates', async () => {
-      mockJira.getIssueSlim.mockResolvedValue({ key: 'TRIPS-1' });
+      mockJira.getIssueSlim.mockResolvedValue({ key: 'TAP-1' });
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      const result = await handlers.jira_get_issues({ key: 'TRIPS-1' });
+      const result = await handlers.jira_get_issues({ key: 'TAP-1' });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items).toHaveLength(1);
     });
@@ -146,21 +146,21 @@ describe('JiraModule', () => {
     it('jira_link_issues throws when required fields missing', async () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
       await expect(
-        handlers.jira_link_issues({ inwardKey: 'TRIPS-1' }),
+        handlers.jira_link_issues({ inwardKey: 'TAP-1' }),
       ).rejects.toThrow();
     });
 
     it('jira_add_comment forwards a numeric parentId to the client', async () => {
       mockJira.addComment.mockResolvedValue({ id: '48838' });
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      await handlers.jira_add_comment({ key: 'TRIPS-1', body: 'hi', parentId: '48106' });
-      expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'hi', '48106');
+      await handlers.jira_add_comment({ key: 'TAP-1', body: 'hi', parentId: '48106' });
+      expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'hi', '48106');
     });
 
     it('jira_add_comment rejects a non-numeric parentId without posting', async () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
       await expect(
-        handlers.jira_add_comment({ key: 'TRIPS-1', body: 'hi', parentId: 'abc' }),
+        handlers.jira_add_comment({ key: 'TAP-1', body: 'hi', parentId: 'abc' }),
       ).rejects.toThrow();
       expect(mockJira.addComment).not.toHaveBeenCalled();
     });
@@ -195,23 +195,23 @@ describe('JiraModule', () => {
     });
 
     it('resolves jira://issue/<key>', async () => {
-      mockJira.getIssueSlim.mockResolvedValue({ key: 'TRIPS-1', summary: 'Test' });
+      mockJira.getIssueSlim.mockResolvedValue({ key: 'TAP-1', summary: 'Test' });
       const rh = mod.getResourceHandler({ jira: mockJira as any });
-      const result = await rh('jira://issue/TRIPS-1');
+      const result = await rh('jira://issue/TAP-1');
 
-      expect(mockJira.getIssueSlim).toHaveBeenCalledWith('TRIPS-1');
+      expect(mockJira.getIssueSlim).toHaveBeenCalledWith('TAP-1');
       expect(result.contents).toHaveLength(1);
-      expect(result.contents[0].uri).toBe('jira://issue/TRIPS-1');
+      expect(result.contents[0].uri).toBe('jira://issue/TAP-1');
       expect(result.contents[0].mimeType).toBe('application/json');
     });
 
     it('resolves jira://search/<encoded JQL>', async () => {
-      mockJira.searchSlim.mockResolvedValue([{ key: 'TRIPS-1' }]);
+      mockJira.searchSlim.mockResolvedValue([{ key: 'TAP-1' }]);
       const rh = mod.getResourceHandler({ jira: mockJira as any });
-      const result = await rh('jira://search/project%20%3D%20TRIPS');
+      const result = await rh('jira://search/project%20%3D%20TAP');
 
       expect(mockJira.searchSlim).toHaveBeenCalledWith(
-        'project = TRIPS',
+        'project = TAP',
         { maxResults: 20 },
       );
       expect(result.contents).toHaveLength(1);
@@ -252,14 +252,14 @@ describe('JiraModule', () => {
     it('returns create-issue prompt with required fields', async () => {
       const ph = mod.getPromptHandler({ jira: mockJira as any });
       const result = await ph('create-issue', {
-        projectKey: 'TRIPS',
+        projectKey: 'TAP',
         issueType: 'Task',
         summary: 'Do the thing',
       });
 
       expect(result.messages).toHaveLength(1);
       const text = result.messages[0].content.text;
-      expect(text).toContain('TRIPS');
+      expect(text).toContain('TAP');
       expect(text).toContain('Task');
       expect(text).toContain('Do the thing');
       expect(text).toContain('jira_create_issue');
@@ -268,7 +268,7 @@ describe('JiraModule', () => {
     it('includes optional fields in create-issue prompt', async () => {
       const ph = mod.getPromptHandler({ jira: mockJira as any });
       const result = await ph('create-issue', {
-        projectKey: 'TRIPS',
+        projectKey: 'TAP',
         issueType: 'Story',
         summary: 'New feature',
         description: 'Implement X',
@@ -289,7 +289,7 @@ describe('JiraModule', () => {
 
     it('returns triage-issue prompt', async () => {
       mockJira.getIssueSlim.mockResolvedValue({
-        key: 'TRIPS-1',
+        key: 'TAP-1',
         summary: 'Bug in login',
         status: 'In Progress',
         assignee: 'john',
@@ -305,10 +305,10 @@ describe('JiraModule', () => {
       ]);
 
       const ph = mod.getPromptHandler({ jira: mockJira as any });
-      const result = await ph('triage-issue', { key: 'TRIPS-1' });
+      const result = await ph('triage-issue', { key: 'TAP-1' });
 
       const text = result.messages[0].content.text;
-      expect(text).toContain('TRIPS-1');
+      expect(text).toContain('TAP-1');
       expect(text).toContain('Bug in login');
       expect(text).toContain('In Progress');
       expect(text).toContain('john');
@@ -325,7 +325,7 @@ describe('JiraModule', () => {
 
     it('handles triage-issue for issue with no comments', async () => {
       mockJira.getIssueSlim.mockResolvedValue({
-        key: 'TRIPS-1',
+        key: 'TAP-1',
         summary: 'Test',
         status: 'Open',
         assignee: null,
@@ -337,7 +337,7 @@ describe('JiraModule', () => {
       mockJira.listTransitions.mockResolvedValue([]);
 
       const ph = mod.getPromptHandler({ jira: mockJira as any });
-      const result = await ph('triage-issue', { key: 'TRIPS-1' });
+      const result = await ph('triage-issue', { key: 'TAP-1' });
 
       const text = result.messages[0].content.text;
       expect(text).toContain('unassigned');

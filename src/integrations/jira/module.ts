@@ -14,7 +14,7 @@ export const jiraGetIssuesSchema = z.object({
     .string()
     .max(20)
     .optional()
-    .describe('Issue key (e.g., "TRIPS-1267") for a single issue.'),
+    .describe('Issue key (e.g., "TAP-1267") for a single issue.'),
   jql: z
     .string()
     .max(4096)
@@ -33,7 +33,7 @@ export const jiraGetIssuesSchema = z.object({
 });
 
 export const jiraCreateIssueSchema = z.object({
-  projectKey: z.string().max(20).describe('Project key (e.g., "TRIPS").'),
+  projectKey: z.string().max(20).describe('Project key (e.g., "TAP").'),
   issueType: z
     .string()
     .max(50)
@@ -131,7 +131,7 @@ export const jiraGetAttachmentSchema = z.object({
     .string()
     .max(20)
     .optional()
-    .describe('Issue key for context (e.g., "TRIPS-1260").'),
+    .describe('Issue key for context (e.g., "TAP-1260").'),
 });
 
 export const jiraGetCommentsSchema = z.object({

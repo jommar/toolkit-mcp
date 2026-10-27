@@ -22,7 +22,7 @@ export const githubGetPrsSchema = z.object({
     .max(20)
     .regex(ISSUE_KEY_PATTERN)
     .optional()
-    .describe('Single issue key to search for (e.g., "TRIPS-1267").'),
+    .describe('Single issue key to search for (e.g., "TAP-1267").'),
   keys: z
     .array(z.string().max(20))
     .max(20)
@@ -63,8 +63,8 @@ export const githubGetCodeReviewReadySchema = z.object({
     .min(1)
     .max(20)
     .optional()
-    .default('TRIPS')
-    .describe('Jira project key to search (default "TRIPS").'),
+    .default('TAP')
+    .describe('Jira project key to search (default "TAP").'),
   assignee: z
     .string()
     .min(1)
@@ -487,7 +487,7 @@ export const githubGetCodeReviewReadyHandler: ToolHandler<z.infer<typeof githubG
   (clients) => async (args) => {
     const {
       status = 'Ready For Code Review',
-      project = 'TRIPS',
+      project = 'TAP',
       assignee = 'currentUser()',
       prState = 'open',
     } = args;

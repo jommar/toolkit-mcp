@@ -224,9 +224,9 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(prs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1267' });
+    const result = await handler({ issueKey: 'TAP-1267' });
 
-    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1267', 20, 'open');
+    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1267', 20, 'open');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(prs);
     expect(parsed.hasMore).toBe(false);
@@ -234,19 +234,19 @@ describe('githubGetPrsHandler', () => {
 
   it('returns PRs for multiple keys', async () => {
     const grouped = new Map<string, any[]>();
-    grouped.set('TRIPS-1', [
+    grouped.set('TAP-1', [
       { number: 1, title: 'PR 1', repo: 'Org/A', state: 'open' as const },
     ]);
-    grouped.set('TRIPS-2', [
+    grouped.set('TAP-2', [
       { number: 2, title: 'PR 2', repo: 'Org/B', state: 'open' as const },
     ]);
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ keys: ['TRIPS-1', 'TRIPS-2'] });
+    const result = await handler({ keys: ['TAP-1', 'TAP-2'] });
 
     expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(
-      ['TRIPS-1', 'TRIPS-2'],
+      ['TAP-1', 'TAP-2'],
       'open',
     );
     const parsed = JSON.parse(result.content[0].text);
@@ -265,7 +265,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(prs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1', limit: 3 });
+    const result = await handler({ issueKey: 'TAP-1', limit: 3 });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(3);
@@ -290,10 +290,10 @@ describe('githubGetPrsHandler', () => {
   });
 
   it('rejects more than 20 keys via schema validation (M3)', () => {
-    const manyKeys = Array.from({ length: 21 }, (_, i) => `TRIPS-${i}`);
+    const manyKeys = Array.from({ length: 21 }, (_, i) => `TAP-${i}`);
     expect(() => githubGetPrsSchema.parse({ keys: manyKeys })).toThrow();
     // 20 keys should pass
-    const twentyKeys = Array.from({ length: 20 }, (_, i) => `TRIPS-${i}`);
+    const twentyKeys = Array.from({ length: 20 }, (_, i) => `TAP-${i}`);
     expect(() => githubGetPrsSchema.parse({ keys: twentyKeys })).not.toThrow();
   });
 
@@ -302,15 +302,15 @@ describe('githubGetPrsHandler', () => {
       { number: 1, title: 'PR 1', repo: 'Org/A', state: 'open' as const, htmlUrl: 'url1' },
     ]);
     const branchMap = new Map<string, any[]>();
-    branchMap.set('TRIPS-1', [
+    branchMap.set('TAP-1', [
       { number: 2, title: 'PR 2', repo: 'Org/B', state: 'open' as const, htmlUrl: 'url2' },
     ]);
     mockGitHub.searchPrsByBranchName.mockResolvedValue(branchMap);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1', searchBranches: true });
+    const result = await handler({ issueKey: 'TAP-1', searchBranches: true });
 
-    expect(mockGitHub.searchPrsByBranchName).toHaveBeenCalledWith('TRIPS-1', 'open');
+    expect(mockGitHub.searchPrsByBranchName).toHaveBeenCalledWith('TAP-1', 'open');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(2);
   });
@@ -320,13 +320,13 @@ describe('githubGetPrsHandler', () => {
       { number: 1, title: 'PR 1', repo: 'Org/A', state: 'open' as const, htmlUrl: 'url1' },
     ]);
     const branchMap = new Map<string, any[]>();
-    branchMap.set('TRIPS-1', [
+    branchMap.set('TAP-1', [
       { number: 1, title: 'PR 1', repo: 'Org/A', state: 'open' as const, htmlUrl: 'url1' },
     ]);
     mockGitHub.searchPrsByBranchName.mockResolvedValue(branchMap);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1', searchBranches: true });
+    const result = await handler({ issueKey: 'TAP-1', searchBranches: true });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(1);
@@ -336,9 +336,9 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue([]);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    await handler({ issueKey: 'TRIPS-1', limit: 10 });
+    await handler({ issueKey: 'TAP-1', limit: 10 });
 
-    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1', 10, 'open');
+    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 10, 'open');
   });
 
   it('uses cursor as offset (C3)', async () => {
@@ -349,7 +349,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(allPrs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1', limit: 10, cursor: '20' });
+    const result = await handler({ issueKey: 'TAP-1', limit: 10, cursor: '20' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
@@ -362,7 +362,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue([]);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TRIPS-1', limit: 10, cursor: '0' });
+    const result = await handler({ issueKey: 'TAP-1', limit: 10, cursor: '0' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(0);
@@ -372,9 +372,9 @@ describe('githubGetPrsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ issueKey: 'TRIPS-1', cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ issueKey: 'TRIPS-1', cursor: '-1' })).rejects.toThrow(McpError);
-    await expect(handler({ issueKey: 'TRIPS-1', cursor: '1.5' })).rejects.toThrow(McpError);
+    await expect(handler({ issueKey: 'TAP-1', cursor: 'abc' })).rejects.toThrow(McpError);
+    await expect(handler({ issueKey: 'TAP-1', cursor: '-1' })).rejects.toThrow(McpError);
+    await expect(handler({ issueKey: 'TAP-1', cursor: '1.5' })).rejects.toThrow(McpError);
   });
 
   it('uses cursor as offset for keys path (C3)', async () => {
@@ -383,11 +383,11 @@ describe('githubGetPrsHandler', () => {
       number: i, title: `PR ${i}`, repo: 'Org/Repo', state: 'open' as const,
       htmlUrl: `url${i}`,
     }));
-    grouped.set('TRIPS-1', allPrs);
+    grouped.set('TAP-1', allPrs);
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ keys: ['TRIPS-1'], limit: 5, cursor: '10' });
+    const result = await handler({ keys: ['TAP-1'], limit: 5, cursor: '10' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(5);
@@ -441,8 +441,8 @@ describe('githubGetCodeReviewReadyHandler', () => {
   }
 
   it('reports tickets where every PR is approved by a human', async () => {
-    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-100', 'One PR')]);
-    const grouped = new Map([['TRIPS-100', [makePr(1, 'Org/Repo')]]]);
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TAP-100', 'One PR')]);
+    const grouped = new Map([['TAP-100', [makePr(1, 'Org/Repo')]]]);
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
     mockGitHub.isPrApprovedByHuman.mockResolvedValue(true);
 
@@ -450,21 +450,21 @@ describe('githubGetCodeReviewReadyHandler', () => {
     const result = await handler({});
 
     expect(mockJira.searchAllSlim).toHaveBeenCalledWith(
-      "project = TRIPS AND assignee = currentUser() AND status = 'Ready For Code Review'",
+      "project = TAP AND assignee = currentUser() AND status = 'Ready For Code Review'",
     );
-    expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(['TRIPS-100'], 'open');
+    expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(['TAP-100'], 'open');
     expect(mockGitHub.isPrApprovedByHuman).toHaveBeenCalledWith('Org/Repo', 1, 'jommar');
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.tickets[0].key).toBe('TRIPS-100');
+    expect(parsed.tickets[0].key).toBe('TAP-100');
     expect(parsed.tickets[0].allApproved).toBe(true);
     expect(parsed.tickets[0].prs[0].approved).toBe(true);
     expect(parsed.summary).toBe('1 of 1 tickets with PRs have every PR approved by a human.');
   });
 
   it('marks a ticket pending when any PR lacks a human approval', async () => {
-    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-200', 'Two PRs')]);
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TAP-200', 'Two PRs')]);
     const grouped = new Map([
-      ['TRIPS-200', [makePr(2, 'Org/Repo'), makePr(3, 'Org/Other')]],
+      ['TAP-200', [makePr(2, 'Org/Repo'), makePr(3, 'Org/Other')]],
     ]);
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
     mockGitHub.isPrApprovedByHuman
@@ -481,8 +481,8 @@ describe('githubGetCodeReviewReadyHandler', () => {
   });
 
   it('does not mark a ticket with no PRs as approved', async () => {
-    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-300', 'No PRs')]);
-    mockGitHub.findPrsForIssueKeys.mockResolvedValue(new Map([['TRIPS-300', []]]));
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TAP-300', 'No PRs')]);
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(new Map([['TAP-300', []]]));
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
     const parsed = JSON.parse((await handler({})).content[0].text);
@@ -493,8 +493,8 @@ describe('githubGetCodeReviewReadyHandler', () => {
   });
 
   it('flags a PR with a failed approval check instead of failing the whole call', async () => {
-    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TRIPS-400', 'Flaky')]);
-    const grouped = new Map([['TRIPS-400', [makePr(4, 'Org/Repo')]]]);
+    mockJira.searchAllSlim.mockResolvedValue([makeIssue('TAP-400', 'Flaky')]);
+    const grouped = new Map([['TAP-400', [makePr(4, 'Org/Repo')]]]);
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
     mockGitHub.isPrApprovedByHuman.mockRejectedValue(new Error('rate limited'));
 
@@ -536,7 +536,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
     expect(() => githubGetCodeReviewReadySchema.parse({ prState: 'bogus' })).toThrow();
     expect(githubGetCodeReviewReadySchema.parse({})).toMatchObject({
       status: 'Ready For Code Review',
-      project: 'TRIPS',
+      project: 'TAP',
       assignee: 'currentUser()',
       prState: 'open',
     });

@@ -193,7 +193,7 @@ All list-style tools return a uniform envelope:
 | `jira://myself` | Jira | Current authenticated Jira user profile | Jira user as JSON |
 | `github://prs/{issueKey}` | GitHub | Pull requests for an issue key | `PrInfo[]` as JSON |
 
-JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%20TRIPS`). Restricted keywords (DELETE, UPDATE, CREATE, INSERT, DROP, ALTER, EXEC, ADMIN) are rejected for safety.
+JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%20TAP`). Restricted keywords (DELETE, UPDATE, CREATE, INSERT, DROP, ALTER, EXEC, ADMIN) are rejected for safety.
 
 ---
 

@@ -87,14 +87,14 @@ describe('jiraGetIssuesHandler', () => {
   });
 
   it('fetches a single issue by key, always slimmed', async () => {
-    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Test' } };
+    const rawIssue = { id: '1', key: 'TAP-1', fields: { summary: 'Test' } };
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1' });
+    const result = await handler({ key: 'TAP-1' });
 
     // Now calls getIssue + toSlimIssue rather than getIssueSlim
-    expect(mockJira.getIssue).toHaveBeenCalledWith('TRIPS-1', expect.any(Array));
+    expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', expect.any(Array));
     expect(mockJira.getIssueSlim).not.toHaveBeenCalled();
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual([rawIssue]);
@@ -103,8 +103,8 @@ describe('jiraGetIssuesHandler', () => {
 
   it('searches issues by JQL', async () => {
     const rawIssues = [
-      { id: '1', key: 'TRIPS-1', fields: { summary: 'Issue 1' } },
-      { id: '2', key: 'TRIPS-2', fields: { summary: 'Issue 2' } },
+      { id: '1', key: 'TAP-1', fields: { summary: 'Issue 1' } },
+      { id: '2', key: 'TAP-2', fields: { summary: 'Issue 2' } },
     ];
     mockJira.search.mockResolvedValue({
       issues: rawIssues,
@@ -113,10 +113,10 @@ describe('jiraGetIssuesHandler', () => {
 
     // Note: limit is passed explicitly because handler receives raw args (Zod defaults not applied)
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ jql: 'project = TRIPS', limit: 20 });
+    const result = await handler({ jql: 'project = TAP', limit: 20 });
 
     // Handler does not pass fields by default in JQL path (Jira default fields suffice)
-    expect(mockJira.search).toHaveBeenCalledWith('project = TRIPS', {
+    expect(mockJira.search).toHaveBeenCalledWith('project = TAP', {
       maxResults: 20,
       nextPageToken: undefined,
     });
@@ -130,12 +130,12 @@ describe('jiraGetIssuesHandler', () => {
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
     const result = await handler({
-      jql: 'project = TRIPS',
+      jql: 'project = TAP',
       limit: 5,
       cursor: 'abc123',
     });
 
-    expect(mockJira.search).toHaveBeenCalledWith('project = TRIPS', {
+    expect(mockJira.search).toHaveBeenCalledWith('project = TAP', {
       maxResults: 5,
       nextPageToken: 'abc123',
     });
@@ -145,27 +145,27 @@ describe('jiraGetIssuesHandler', () => {
   });
 
   it('gives key priority over jql when both provided', async () => {
-    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Priority' } };
+    const rawIssue = { id: '1', key: 'TAP-1', fields: { summary: 'Priority' } };
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', jql: 'project = OTHER' });
+    const result = await handler({ key: 'TAP-1', jql: 'project = OTHER' });
 
-    expect(mockJira.getIssue).toHaveBeenCalledWith('TRIPS-1', expect.any(Array));
+    expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', expect.any(Array));
     expect(mockJira.search).not.toHaveBeenCalled();
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(1);
   });
 
   it('requests and passes through custom fields (key mode), excluding DEV_FIELDS', async () => {
-    const rawIssue = { id: '1', key: 'TRIPS-1', fields: { summary: 'Test', customfield_10058: 5 } };
+    const rawIssue = { id: '1', key: 'TAP-1', fields: { summary: 'Test', customfield_10058: 5 } };
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', fields: ['summary', 'customfield_10058'] });
+    const result = await handler({ key: 'TAP-1', fields: ['summary', 'customfield_10058'] });
 
     expect(mockJira.getIssue).toHaveBeenCalledWith(
-      'TRIPS-1',
+      'TAP-1',
       expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
     );
     expect(toSlimIssue).toHaveBeenCalledWith(rawIssue, ['customfield_10058']);
@@ -174,13 +174,13 @@ describe('jiraGetIssuesHandler', () => {
   });
 
   it('requests and passes through custom fields (JQL mode)', async () => {
-    const rawIssues = [{ id: '1', key: 'TRIPS-1', fields: { summary: 'A', customfield_10058: 5 } }];
+    const rawIssues = [{ id: '1', key: 'TAP-1', fields: { summary: 'A', customfield_10058: 5 } }];
     mockJira.search.mockResolvedValue({ issues: rawIssues, nextPageToken: undefined });
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ jql: 'project = TRIPS', limit: 20, fields: ['customfield_10058'] });
+    const result = await handler({ jql: 'project = TAP', limit: 20, fields: ['customfield_10058'] });
 
-    expect(mockJira.search).toHaveBeenCalledWith('project = TRIPS', {
+    expect(mockJira.search).toHaveBeenCalledWith('project = TAP', {
       maxResults: 20,
       nextPageToken: undefined,
       fields: expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
@@ -227,10 +227,10 @@ describe('jiraGetIssuesHandler', () => {
     });
 
     it('returns descriptionAdf for a single issue by key when adf is true', async () => {
-      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TRIPS-1', adf: true });
+      const result = await handler({ key: 'TAP-1', adf: true });
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
@@ -240,14 +240,14 @@ describe('jiraGetIssuesHandler', () => {
     it('returns descriptionAdf on every issue of a JQL search when adf is true', async () => {
       mockJira.search.mockResolvedValue({
         issues: [
-          { id: '1', key: 'TRIPS-1', fields: { summary: 'One', description: adfDescription } },
-          { id: '2', key: 'TRIPS-2', fields: { summary: 'Two', description: null } },
+          { id: '1', key: 'TAP-1', fields: { summary: 'One', description: adfDescription } },
+          { id: '2', key: 'TAP-2', fields: { summary: 'Two', description: null } },
         ],
         isLast: true,
       });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ jql: 'project = TRIPS', limit: 20, adf: true });
+      const result = await handler({ jql: 'project = TAP', limit: 20, adf: true });
 
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
@@ -255,10 +255,10 @@ describe('jiraGetIssuesHandler', () => {
     });
 
     it('omits descriptionAdf when adf is not set', async () => {
-      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TRIPS-1' });
+      const result = await handler({ key: 'TAP-1' });
 
       const parsed = JSON.parse(result.content[0].text);
       expect('descriptionAdf' in parsed.items[0]).toBe(false);
@@ -266,10 +266,10 @@ describe('jiraGetIssuesHandler', () => {
     });
 
     it('omits descriptionAdf when adf is false', async () => {
-      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TRIPS-1', fields: { summary: 'Test', description: adfDescription } });
+      mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TRIPS-1', adf: false });
+      const result = await handler({ key: 'TAP-1', adf: false });
 
       const parsed = JSON.parse(result.content[0].text);
       expect('descriptionAdf' in parsed.items[0]).toBe(false);
@@ -279,19 +279,19 @@ describe('jiraGetIssuesHandler', () => {
 
 describe('jiraGetIssuesSchema adf', () => {
   it('accepts a boolean adf', () => {
-    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1', adf: true });
+    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TAP-1', adf: true });
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.adf).toBe(true);
   });
 
   it('leaves adf undefined when omitted', () => {
-    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1' });
+    const parsed = jiraGetIssuesSchema.safeParse({ key: 'TAP-1' });
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.adf).toBeUndefined();
   });
 
   it('rejects a non-boolean adf', () => {
-    expect(jiraGetIssuesSchema.safeParse({ key: 'TRIPS-1', adf: 'yes' }).success).toBe(false);
+    expect(jiraGetIssuesSchema.safeParse({ key: 'TAP-1', adf: 'yes' }).success).toBe(false);
   });
 
   it('documents adf in the published tool input schema', () => {
@@ -309,18 +309,18 @@ describe('jiraCreateIssueHandler', () => {
   });
 
   it('creates an issue with minimal fields', async () => {
-    const created = { id: '100', key: 'TRIPS-42' };
+    const created = { id: '100', key: 'TAP-42' };
     mockJira.createIssue.mockResolvedValue(created);
 
     const handler = jiraCreateIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      projectKey: 'TRIPS',
+      projectKey: 'TAP',
       issueType: 'Task',
       summary: 'My task',
     });
 
     expect(mockJira.createIssue).toHaveBeenCalledWith({
-      projectKey: 'TRIPS',
+      projectKey: 'TAP',
       issueType: 'Task',
       summary: 'My task',
       description: undefined,
@@ -330,11 +330,11 @@ describe('jiraCreateIssueHandler', () => {
   });
 
   it('creates an issue with description', async () => {
-    mockJira.createIssue.mockResolvedValue({ key: 'TRIPS-43' });
+    mockJira.createIssue.mockResolvedValue({ key: 'TAP-43' });
 
     const handler = jiraCreateIssueHandler({ jira: mockJira as any });
     await handler({
-      projectKey: 'TRIPS',
+      projectKey: 'TAP',
       issueType: 'Bug',
       summary: 'A bug',
       description: 'Something broke',
@@ -346,11 +346,11 @@ describe('jiraCreateIssueHandler', () => {
   });
 
   it('creates an issue with extra fields', async () => {
-    mockJira.createIssue.mockResolvedValue({ key: 'TRIPS-44' });
+    mockJira.createIssue.mockResolvedValue({ key: 'TAP-44' });
 
     const handler = jiraCreateIssueHandler({ jira: mockJira as any });
     await handler({
-      projectKey: 'TRIPS',
+      projectKey: 'TAP',
       issueType: 'Story',
       summary: 'A story',
       fields: { customfield_123: 'value', priority: { name: 'High' } },
@@ -377,16 +377,16 @@ describe('jiraUpdateIssueHandler', () => {
 
     const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       fields: { summary: 'Updated title' },
     });
 
-    expect(mockJira.updateIssue).toHaveBeenCalledWith('TRIPS-1', {
+    expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', {
       summary: 'Updated title',
     });
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
     });
   });
 });
@@ -404,16 +404,16 @@ describe('jiraTransitionIssueHandler', () => {
 
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionId: '41',
     });
 
-    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TRIPS-1', '41', {
+    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '41', {
       comment: undefined,
     });
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionId: '41',
     });
   });
@@ -427,17 +427,17 @@ describe('jiraTransitionIssueHandler', () => {
 
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionName: 'In Progress',
     });
 
-    expect(mockJira.listTransitions).toHaveBeenCalledWith('TRIPS-1');
-    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TRIPS-1', '41', {
+    expect(mockJira.listTransitions).toHaveBeenCalledWith('TAP-1');
+    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '41', {
       comment: undefined,
     });
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionId: '41',
     });
   });
@@ -450,11 +450,11 @@ describe('jiraTransitionIssueHandler', () => {
 
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionName: 'in progress',
     });
 
-    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TRIPS-1', '31', {
+    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '31', {
       comment: undefined,
     });
     expect(JSON.parse(result.content[0].text).transitionId).toBe('31');
@@ -465,12 +465,12 @@ describe('jiraTransitionIssueHandler', () => {
 
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
     await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       transitionId: '41',
       comment: 'Moving along',
     });
 
-    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TRIPS-1', '41', {
+    expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '41', {
       comment: 'Moving along',
     });
   });
@@ -483,10 +483,10 @@ describe('jiraTransitionIssueHandler', () => {
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
 
     await expect(
-      handler({ key: 'TRIPS-1', transitionName: 'Unknown' }),
+      handler({ key: 'TAP-1', transitionName: 'Unknown' }),
     ).rejects.toThrow(McpError);
     await expect(
-      handler({ key: 'TRIPS-1', transitionName: 'Unknown' }),
+      handler({ key: 'TAP-1', transitionName: 'Unknown' }),
     ).rejects.toThrow(
       'Transition "Unknown" not found. Available: In Progress',
     );
@@ -495,8 +495,8 @@ describe('jiraTransitionIssueHandler', () => {
   it('throws when neither transitionId nor transitionName provided', async () => {
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
 
-    await expect(handler({ key: 'TRIPS-1' })).rejects.toThrow(McpError);
-    await expect(handler({ key: 'TRIPS-1' })).rejects.toThrow(
+    await expect(handler({ key: 'TAP-1' })).rejects.toThrow(McpError);
+    await expect(handler({ key: 'TAP-1' })).rejects.toThrow(
       'Provide either transitionId or transitionName',
     );
   });
@@ -514,12 +514,12 @@ describe('jiraAssignIssueHandler', () => {
     mockJira.assignToMe.mockResolvedValue({ displayName: 'Current User' });
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', assignee: 'me' });
+    const result = await handler({ key: 'TAP-1', assignee: 'me' });
 
-    expect(mockJira.assignToMe).toHaveBeenCalledWith('TRIPS-1');
+    expect(mockJira.assignToMe).toHaveBeenCalledWith('TAP-1');
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       assignee: 'Current User',
     });
   });
@@ -529,9 +529,9 @@ describe('jiraAssignIssueHandler', () => {
 
     // Note: handler receives raw args (Zod defaults not applied), so 'me' must be explicit
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', assignee: 'me' });
+    const result = await handler({ key: 'TAP-1', assignee: 'me' });
 
-    expect(mockJira.assignToMe).toHaveBeenCalledWith('TRIPS-1');
+    expect(mockJira.assignToMe).toHaveBeenCalledWith('TAP-1');
     expect(JSON.parse(result.content[0].text).assignee).toBe('Default User');
   });
 
@@ -539,12 +539,12 @@ describe('jiraAssignIssueHandler', () => {
     mockJira.assignIssue.mockResolvedValue(undefined);
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', assignee: 'none' });
+    const result = await handler({ key: 'TAP-1', assignee: 'none' });
 
-    expect(mockJira.assignIssue).toHaveBeenCalledWith('TRIPS-1', null);
+    expect(mockJira.assignIssue).toHaveBeenCalledWith('TAP-1', null);
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       assignee: null,
     });
   });
@@ -557,15 +557,15 @@ describe('jiraAssignIssueHandler', () => {
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
     const result = await handler({
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       assignee: 'John Doe',
     });
 
     expect(mockJira.searchUsers).toHaveBeenCalledWith('John Doe');
-    expect(mockJira.assignIssue).toHaveBeenCalledWith('TRIPS-1', 'abc-123');
+    expect(mockJira.assignIssue).toHaveBeenCalledWith('TAP-1', 'abc-123');
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       assignee: 'John Doe',
     });
   });
@@ -575,7 +575,7 @@ describe('jiraAssignIssueHandler', () => {
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
     await expect(
-      handler({ key: 'TRIPS-1', assignee: 'Unknown User' }),
+      handler({ key: 'TAP-1', assignee: 'Unknown User' }),
     ).rejects.toThrow('No user found matching "Unknown User"');
   });
 
@@ -587,7 +587,7 @@ describe('jiraAssignIssueHandler', () => {
 
     const handler = jiraAssignIssueHandler({ jira: mockJira as any });
     await expect(
-      handler({ key: 'TRIPS-1', assignee: 'John Doe' }),
+      handler({ key: 'TAP-1', assignee: 'John Doe' }),
     ).rejects.toThrow('Multiple users match');
   });
 });
@@ -605,9 +605,9 @@ describe('jiraAddCommentHandler', () => {
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', body: 'Thanks!' });
+    const result = await handler({ key: 'TAP-1', body: 'Thanks!' });
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'Thanks!');
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 
@@ -616,9 +616,9 @@ describe('jiraAddCommentHandler', () => {
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', body: 'Thanks!', parentId: '48106' });
+    const result = await handler({ key: 'TAP-1', body: 'Thanks!', parentId: '48106' });
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TRIPS-1', 'Thanks!', '48106');
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', '48106');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 });
@@ -636,15 +636,15 @@ describe('jiraUpdateCommentHandler', () => {
     mockJira.updateComment.mockResolvedValue(comment);
 
     const handler = jiraUpdateCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-799', commentId: '38560', body: 'Revised.' });
+    const result = await handler({ key: 'TAP-799', commentId: '38560', body: 'Revised.' });
 
-    expect(mockJira.updateComment).toHaveBeenCalledWith('TRIPS-799', '38560', 'Revised.');
+    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-799', '38560', 'Revised.');
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 });
 
 describe('jiraAddCommentSchema parentId', () => {
-  const base = { key: 'TRIPS-1', body: 'Thanks!' };
+  const base = { key: 'TAP-1', body: 'Thanks!' };
 
   it('accepts a numeric parentId', () => {
     expect(jiraAddCommentSchema.safeParse({ ...base, parentId: '48106' }).success).toBe(true);
@@ -693,23 +693,23 @@ describe('jiraLinkIssuesHandler', () => {
 
     const handler = jiraLinkIssuesHandler({ jira: mockJira as any });
     const result = await handler({
-      inwardKey: 'TRIPS-1',
-      outwardKey: 'TRIPS-2',
+      inwardKey: 'TAP-1',
+      outwardKey: 'TAP-2',
       type: 'Blocks',
     });
 
     expect(mockJira.listIssueLinkTypes).toHaveBeenCalled();
     expect(mockJira.linkIssues).toHaveBeenCalledWith({
       type: 'Blocks',
-      inwardKey: 'TRIPS-1',
-      outwardKey: 'TRIPS-2',
+      inwardKey: 'TAP-1',
+      outwardKey: 'TAP-2',
       comment: undefined,
     });
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
       type: 'Blocks',
-      inwardKey: 'TRIPS-1',
-      outwardKey: 'TRIPS-2',
+      inwardKey: 'TAP-1',
+      outwardKey: 'TAP-2',
     });
   });
 
@@ -721,8 +721,8 @@ describe('jiraLinkIssuesHandler', () => {
 
     const handler = jiraLinkIssuesHandler({ jira: mockJira as any });
     const result = await handler({
-      inwardKey: 'TRIPS-1',
-      outwardKey: 'TRIPS-2',
+      inwardKey: 'TAP-1',
+      outwardKey: 'TAP-2',
       type: 'blocks',
     });
 
@@ -740,8 +740,8 @@ describe('jiraLinkIssuesHandler', () => {
 
     const handler = jiraLinkIssuesHandler({ jira: mockJira as any });
     await handler({
-      inwardKey: 'TRIPS-1',
-      outwardKey: 'TRIPS-2',
+      inwardKey: 'TAP-1',
+      outwardKey: 'TAP-2',
       type: 'Relates',
       comment: 'Related feature work',
     });
@@ -760,15 +760,15 @@ describe('jiraLinkIssuesHandler', () => {
 
     await expect(
       handler({
-        inwardKey: 'TRIPS-1',
-        outwardKey: 'TRIPS-2',
+        inwardKey: 'TAP-1',
+        outwardKey: 'TAP-2',
         type: 'InvalidType',
       }),
     ).rejects.toThrow(McpError);
     await expect(
       handler({
-        inwardKey: 'TRIPS-1',
-        outwardKey: 'TRIPS-2',
+        inwardKey: 'TAP-1',
+        outwardKey: 'TAP-2',
         type: 'InvalidType',
       }),
     ).rejects.toThrow('Link type "InvalidType" not found. Available: Blocks');
@@ -794,9 +794,9 @@ describe('jiraGetCommentsHandler', () => {
     mockJira.getComments.mockResolvedValue(comments);
 
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1' });
+    const result = await handler({ key: 'TAP-1' });
 
-    expect(mockJira.getComments).toHaveBeenCalledWith('TRIPS-1');
+    expect(mockJira.getComments).toHaveBeenCalledWith('TAP-1');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
     expect(parsed.hasMore).toBe(false);
@@ -809,7 +809,7 @@ describe('jiraGetCommentsHandler', () => {
     mockJira.getComments.mockResolvedValue(comments);
 
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', limit: 10 });
+    const result = await handler({ key: 'TAP-1', limit: 10 });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
@@ -824,7 +824,7 @@ describe('jiraGetCommentsHandler', () => {
     mockJira.getComments.mockResolvedValue(comments);
 
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', limit: 10, cursor: '20' });
+    const result = await handler({ key: 'TAP-1', limit: 10, cursor: '20' });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
@@ -838,7 +838,7 @@ describe('jiraGetCommentsHandler', () => {
     mockJira.getComments.mockResolvedValue(comments);
 
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', limit: 10 });
+    const result = await handler({ key: 'TAP-1', limit: 10 });
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(5);
@@ -863,9 +863,9 @@ describe('jiraListTransitionsHandler', () => {
     mockJira.listTransitions.mockResolvedValue(transitions);
 
     const handler = jiraListTransitionsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1' });
+    const result = await handler({ key: 'TAP-1' });
 
-    expect(mockJira.listTransitions).toHaveBeenCalledWith('TRIPS-1');
+    expect(mockJira.listTransitions).toHaveBeenCalledWith('TAP-1');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(transitions);
   });
@@ -970,12 +970,12 @@ describe('jiraDeleteCommentHandler', () => {
     mockJira.deleteComment.mockResolvedValue(undefined);
 
     const handler = jiraDeleteCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TRIPS-1', commentId: '12345' });
+    const result = await handler({ key: 'TAP-1', commentId: '12345' });
 
-    expect(mockJira.deleteComment).toHaveBeenCalledWith('TRIPS-1', '12345');
+    expect(mockJira.deleteComment).toHaveBeenCalledWith('TAP-1', '12345');
     expect(JSON.parse(result.content[0].text)).toEqual({
       success: true,
-      key: 'TRIPS-1',
+      key: 'TAP-1',
       commentId: '12345',
     });
   });
@@ -999,7 +999,7 @@ describe('jiraGetAttachmentHandler', () => {
     });
 
     const handler = jiraGetAttachmentHandler({ jira: mockJira as any });
-    const result = await handler({ attachmentId: '39824', issueKey: 'TRIPS-1260' });
+    const result = await handler({ attachmentId: '39824', issueKey: 'TAP-1260' });
 
     expect(result.content).toHaveLength(2);
     expect(result.content[0]).toEqual({
@@ -1014,7 +1014,7 @@ describe('jiraGetAttachmentHandler', () => {
       filename: 'screenshot.png',
       mimeType: 'image/png',
       size: 107133,
-      issueKey: 'TRIPS-1260',
+      issueKey: 'TAP-1260',
     });
   });
 

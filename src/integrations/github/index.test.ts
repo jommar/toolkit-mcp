@@ -118,9 +118,9 @@ describe('GitHubModule', () => {
       mockGitHub.searchPrs.mockResolvedValue([{ number: 1, title: 'PR', repo: 'Org/Repo', state: 'open' }]);
 
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
-      const result = await handlers.github_get_prs({ issueKey: 'TRIPS-1' });
+      const result = await handlers.github_get_prs({ issueKey: 'TAP-1' });
 
-      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1', 20, 'open');
+      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 20, 'open');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items).toHaveLength(1);
     });
@@ -129,7 +129,7 @@ describe('GitHubModule', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
       // state must be 'open', 'closed', or 'all'
       await expect(
-        handlers.github_get_prs({ issueKey: 'TRIPS-1', state: 'invalid' }),
+        handlers.github_get_prs({ issueKey: 'TAP-1', state: 'invalid' }),
       ).rejects.toThrow();
     });
   });
@@ -181,11 +181,11 @@ describe('GitHubModule', () => {
       mockGitHub.searchPrs.mockResolvedValue(prs);
 
       const rh = mod.getResourceHandler({ github: mockGitHub as any });
-      const result = await rh('github://prs/TRIPS-1');
+      const result = await rh('github://prs/TAP-1');
 
-      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TRIPS-1');
+      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1');
       expect(result.contents).toHaveLength(1);
-      expect(result.contents[0].uri).toBe('github://prs/TRIPS-1');
+      expect(result.contents[0].uri).toBe('github://prs/TAP-1');
       expect(result.contents[0].mimeType).toBe('application/json');
     });
 
