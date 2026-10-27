@@ -48,7 +48,7 @@ export const jiraCreateIssueSchema = z.object({
     .record(z.unknown())
     .optional()
     .describe(
-      'Additional Jira fields to set. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+      'Additional Jira fields to set. Product | Feature Group | Feature is optional: omit it unless the correct selection and API format are verified; never use placeholders such as "No Value Set" or guess a classification. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
     ),
 });
 
@@ -57,7 +57,7 @@ export const jiraUpdateIssueSchema = z.object({
   fields: z
     .record(z.unknown())
     .describe(
-      'Fields to update (e.g., {"summary": "New title"}). SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+      'Fields to update (e.g., {"summary": "New title"}). Product | Feature Group | Feature is optional: omit it unless the correct selection and API format are verified; never use placeholders such as "No Value Set" or guess a classification; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
     ),
 });
 
