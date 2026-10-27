@@ -171,6 +171,37 @@ describe('JiraModule', () => {
       expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10040' }] });
     });
 
+    it('jira_update_issue changes only components when fields is omitted', async () => {
+      mockJira.listProjectComponents.mockResolvedValue([{ id: '10040', name: 'EZAT Automation' }]);
+      mockJira.updateIssue.mockResolvedValue(undefined);
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      const result = await handlers.jira_update_issue({ key: 'TAP-1', components: ['ezat automation'] });
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10040' }] });
+      expect(JSON.parse(result.content[0].text)).toEqual({ success: true, key: 'TAP-1' });
+    });
+
+    it('jira_update_issue passes fields-only updates through unchanged', async () => {
+      mockJira.updateIssue.mockResolvedValue(undefined);
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_update_issue({ key: 'TAP-1', fields: { summary: 'New' } });
+      expect(mockJira.listProjectComponents).not.toHaveBeenCalled();
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { summary: 'New' });
+    });
+
+    it('jira_update_issue still accepts an explicit empty fields object', async () => {
+      mockJira.updateIssue.mockResolvedValue(undefined);
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_update_issue({ key: 'TAP-1', fields: {} });
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', {});
+    });
+
+    it('jira_update_issue rejects neither fields nor components before any API call', async () => {
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await expect(handlers.jira_update_issue({ key: 'TAP-1' })).rejects.toThrow('Provide fields and/or components');
+      expect(mockJira.listProjectComponents).not.toHaveBeenCalled();
+      expect(mockJira.updateIssue).not.toHaveBeenCalled();
+    });
+
     it('jira_update_issue rejects an empty components array so it can never clear them', async () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
       await expect(

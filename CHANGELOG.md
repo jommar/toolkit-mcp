@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Jira: `fields` descriptions on `jira_create_issue` / `jira_update_issue`** — no longer describe Product | Feature Group | Feature as optional or tell agents to omit it; they point to the `components` param instead. The SECURITY note and "leave existing values untouched on unrelated updates" stay.
+- **Jira: `fields` is optional on `jira_update_issue`** — Changing only components no longer needs `fields: {}`: pass `components` alone. A call with neither `fields` nor `components` is rejected with "Provide fields and/or components" before any API call; an explicit `fields: {}` is still accepted as before. The `fields` description drops the "pass {} when only changing components" hint.
 - **GitHub: `github_get_code_review_ready` default `project`** — now `TAP` (was `TRIPS`). Jira JQL still resolves the old key, so passing `TRIPS` keeps working.
 
 ## [0.3.0] — 2026-07-30

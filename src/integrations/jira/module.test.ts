@@ -517,6 +517,14 @@ describe('jiraUpdateIssueHandler', () => {
       expect(mockJira.updateIssue.mock.calls[0][1]).toEqual({ summary: 'Updated title' });
       expect(mockJira.updateIssue.mock.calls[0][1]).not.toHaveProperty('components');
     });
+
+    it('sends only the resolved components when fields is omitted', async () => {
+      const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
+      const result = await handler({ key: 'TAP-1', components: ['billing'] });
+
+      expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10041' }] });
+      expect(JSON.parse(result.content[0].text)).toEqual({ success: true, key: 'TAP-1' });
+    });
   });
 });
 
@@ -580,14 +588,47 @@ describe('components schemas and descriptors', () => {
     '%s fields description drops the old Product | Feature Group | Feature wording',
     (name) => {
       const description = props(name).properties.fields.description as string;
-      expect(description).not.toMatch(/Product|Feature Group|No Value Set|optional/);
+      expect(description).not.toMatch(/Product|Feature Group|No Value Set/);
       expect(description).toContain('`components`');
       expect(description).toContain('SECURITY');
     },
   );
 
+  it('does not call the jira_create_issue fields description optional', () => {
+    expect(props('jira_create_issue').properties.fields.description).not.toMatch(/optional/);
+  });
+
   it('keeps the leave-untouched guidance on jira_update_issue fields', () => {
     expect(props('jira_update_issue').properties.fields.description).toContain('leave existing values untouched');
+  });
+
+  describe('jira_update_issue fields is optional when components is given', () => {
+    it('advertises only key as required', () => {
+      expect(props('jira_update_issue').required).toEqual(['key']);
+      expect(props('jira_update_issue').properties.fields.type).toBe('object');
+    });
+
+    it('says fields is optional when components is given, with no "pass {}" workaround', () => {
+      const description = props('jira_update_issue').properties.fields.description as string;
+      expect(description).toContain('optional when `components` is given');
+      expect(description).not.toContain('pass {}');
+    });
+
+    it('accepts components without fields, and fields without components', () => {
+      expect(jiraUpdateIssueSchema.safeParse({ key: 'TAP-1', components: ['Billing'] }).success).toBe(true);
+      expect(jiraUpdateIssueSchema.safeParse({ key: 'TAP-1', fields: { summary: 's' } }).success).toBe(true);
+      expect(jiraUpdateIssueSchema.safeParse({ key: 'TAP-1', fields: { summary: 's' }, components: ['Billing'] }).success).toBe(true);
+    });
+
+    it('still accepts an explicit empty fields object', () => {
+      expect(jiraUpdateIssueSchema.safeParse({ key: 'TAP-1', fields: {} }).success).toBe(true);
+    });
+
+    it('rejects neither fields nor components and says what to provide', () => {
+      const result = jiraUpdateIssueSchema.safeParse({ key: 'TAP-1' });
+      expect(result.success).toBe(false);
+      expect(result.success ? '' : result.error.message).toContain('Provide fields and/or components');
+    });
   });
 
   it('jiraListComponentsSchema requires a projectKey', () => {

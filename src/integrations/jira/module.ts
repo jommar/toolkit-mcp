@@ -59,21 +59,26 @@ export const jiraCreateIssueSchema = z.object({
     ),
 });
 
-export const jiraUpdateIssueSchema = z.object({
-  key: z.string().max(20).describe('Issue key to update.'),
-  fields: z
-    .record(z.unknown())
-    .describe(
-      'Fields to update (e.g., {"summary": "New title"}; pass {} when only changing components). Set Components with the `components` param, not here; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
-    ),
-  components: z
-    .array(z.string().max(255))
-    .min(1)
-    .optional()
-    .describe(
-      "Component names (case-insensitive) — REPLACES the issue's components, so list every one to keep; required by the TAP project, find valid names with `jira_list_components`. Omit to leave components untouched.",
-    ),
-});
+export const jiraUpdateIssueSchema = z
+  .object({
+    key: z.string().max(20).describe('Issue key to update.'),
+    fields: z
+      .record(z.unknown())
+      .optional()
+      .describe(
+        'Fields to update (e.g., {"summary": "New title"}); optional when `components` is given. Set Components with the `components` param, not here; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
+      ),
+    components: z
+      .array(z.string().max(255))
+      .min(1)
+      .optional()
+      .describe(
+        "Component names (case-insensitive) — REPLACES the issue's components, so list every one to keep; required by the TAP project, find valid names with `jira_list_components`. Omit to leave components untouched.",
+      ),
+  })
+  .refine((data) => data.fields !== undefined || data.components !== undefined, {
+    message: 'Provide fields and/or components',
+  });
 
 export const jiraTransitionIssueSchema = z
   .object({
@@ -315,7 +320,7 @@ export const jiraUpdateIssueHandler: ToolHandler<z.infer<typeof jiraUpdateIssueS
       key,
       components
         ? { ...fields, components: await resolveComponents(_clients.jira, projectKeyOf(key), components) }
-        : fields,
+        : fields ?? {}, // the schema guarantees fields or components; this only narrows the type
     );
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, key }) }] };
   };
