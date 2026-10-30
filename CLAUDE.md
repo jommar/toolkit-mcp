@@ -74,6 +74,7 @@ class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... 
 - **Jira module** — registered only if `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN` are all set.
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` are all set (read-only tools).
+- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. The Slack app's client id is not an env var: it lives in `~/.config/slack/toolkit-mcp/app.json` beside the token the module writes after `slack_login`. Writes (post, react, upload) go only through `slack_prepare_write` then `slack_confirm_write`. Setup, limits and error codes: `docs/slack.md`.
 - **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations.
 - The server logs which integration sets are active at startup.
 
@@ -137,6 +138,8 @@ Parameters accepted by every list tool:
 - `offset` is dropped entirely; cursors are more stable.
 - No tool auto-fetches all pages — the agent must explicitly paginate via `cursor`.
 
+**Stated exception: the Slack read tools.** Each takes an array of 1 to n items and returns `{results, truncated}`, one entry per input item in input order, each with its own `items`, `hasMore` and `nextPageToken`. The `cursor` is a per-item field, not a top-level parameter: a continuation is an item holding only `{cursor}`, and a cursor is bound to the tool and target that issued it (`invalid_cursor` otherwise). `limit` applies per target. The no-auto-fetch rule still holds. See `docs/slack.md` (Batches and results, Pagination).
+
 ### Polymorphic Tools (Always Return PaginatedResponse)
 
 `jira_get_issues` accepts `key` (single issue) OR `jql` (search). **Always returns `PaginatedResponse<SlimIssue>`** — even a single-issue lookup returns a one-item array with `hasMore: false`. This gives LLMs a consistent response shape regardless of the input mode.
@@ -168,6 +171,8 @@ Exactly one sentence. Concise. No filler.
 | `github_update_pr` | "Update an existing pull request (title, body, state, base branch, or maintainer settings)." |
 | `github_list_branches` | "List branches in a GitHub repository." |
 | `mcp_get_health` | "Report which integrations are active." |
+
+**Stated exception: the Slack tools.** Each description is still one sentence, but 135 to 359 characters, because it carries what an agent needs on first read: the item cap, how to page (`nextPageToken` as `{cursor}` items), which `fields` opt in to text, and for `slack_prepare_write` the show-then-confirm rule. They live in `src/integrations/slack/module.ts`.
 
 ### JSON Serialization
 
@@ -209,6 +214,7 @@ All optional — tools only register if their env vars are present:
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools |
 | `GH_TOKEN` | GitHub | All GitHub tools / PR search |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (read-only) |
+| `SLACK_ENABLED` | Slack | All 10 Slack tools (exact value `true`); client id in `~/.config/slack/toolkit-mcp/app.json`, see `docs/slack.md` |
 | `MCP_TRANSPORT` | Server | Transport mode (`stdio` default, `http`) |
 | `MCP_PORT` | Server | HTTP port (default `3000`) |
 | `MCP_LOG_LEVEL` | Server | `silent` | `info` | `debug` |
@@ -273,6 +279,10 @@ This avoids needing real credentials or network calls.
 | `src/mcp-server.test.ts` | Module discovery, conditional registration, health tool |
 | `src/mcp-config.test.ts` | Config loading logic |
 | `src/mcp-health.test.ts` | Health handler |
+| `src/services/slack/*.test.ts` | Slack service layer — credential store, app config, login and loopback listener, client, model, links, cursors, batch runner, upload source, scope table |
+| `src/integrations/slack/*.test.ts` | Slack module — session, read and write tools, write gate, registration; plus the cross-cutting `secrets`, `privacy`, `write-gating` and `workspace-neutral` suites |
+
+Slack tests keep their synthetic builders and fakes in `__fixtures__/` folders beside them (`src/services/slack/__fixtures__/`, `src/integrations/slack/__fixtures__/`). Fixtures use only synthetic ids that carry the `EXAMPLE` marker and the placeholder workspaces `example-team` and `other-team`, never a real workspace, and the tests use a temp home with HTTP and the loopback client mocked. The `workspace-neutral` suite fails the test run if a shipped doc or the module names a real workspace. Fixtures are compiled into `dist` and counted in coverage, since `tsconfig.json` excludes only `*.test.ts`.
 
 Coverage includes: `src/mcp-server.ts`, `src/mcp-config.ts`, `src/mcp-health.ts`, `src/integrations/**/*.ts`, `src/services/**/*.ts`.
 

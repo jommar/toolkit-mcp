@@ -8,6 +8,7 @@ export interface HealthResult {
     figma: boolean;
     confluence: boolean;
     jenkins: boolean;
+    slack: boolean;
   };
 }
 
@@ -17,6 +18,7 @@ export function createHealthHandler(
   figmaActive: boolean,
   confluenceActive = false,
   jenkinsActive = false,
+  slackActive = false,
 ) {
   return async (args: unknown): Promise<{ content: { type: 'text'; text: string }[] }> => {
     if (args != null && typeof args === 'object' && Object.keys(args as Record<string, unknown>).length > 0) {
@@ -30,6 +32,7 @@ export function createHealthHandler(
         figma: figmaActive,
         confluence: confluenceActive,
         jenkins: jenkinsActive,
+        slack: slackActive,
       },
     };
     return { content: [{ type: 'text', text: JSON.stringify(result) }] };

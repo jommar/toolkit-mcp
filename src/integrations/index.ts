@@ -80,6 +80,7 @@ import { GitHubModule } from './github/index.js';
 import { FigmaModule } from './figma/index.js';
 import { ConfluenceModule } from './confluence/index.js';
 import { JenkinsModule } from './jenkins/index.js';
+import { SlackModule } from './slack/index.js';
 
 /**
  * Module registry — explicitly import and export all module implementations.
@@ -91,4 +92,5 @@ export const modules: IntegrationModule<any>[] = [
   new FigmaModule(),
   new ConfluenceModule(),
   new JenkinsModule(),
+  new SlackModule(),
 ];

@@ -1,0 +1,31 @@
+{
+  "display_information": {
+    "name": "toolkit-mcp",
+    "description": "Lets the toolkit-mcp server search, read and send Slack messages as the user who approves it."
+  },
+  "oauth_config": {
+    "redirect_urls": ["http://localhost:53682/slack/oauth/callback"],
+    "scopes": {
+      "user": [
+        "search:read",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+        "channels:read",
+        "groups:read",
+        "im:read",
+        "mpim:read",
+        "users:read",
+        "users:read.email",
+        "chat:write",
+        "reactions:write",
+        "files:write"
+      ]
+    },
+    "pkce_enabled": true
+  },
+  "settings": {
+    "token_rotation_enabled": false
+  }
+}

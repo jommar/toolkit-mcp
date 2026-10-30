@@ -3,6 +3,7 @@ export { GitHubClient, ISSUE_KEY_PATTERN, describeGitHubError } from './github/g
 export { FigmaClient } from './figma/figma-client.js';
 export { ConfluenceClient, describeConfluenceError, storageToText, markdownToStorage } from './confluence/confluence-client.js';
 export { JenkinsClient, describeJenkinsError } from './jenkins/jenkins-client.js';
+export { SlackClient } from './slack/slack-client.js';
 export type { JiraConfig, ConfluenceConfig } from './config.js';
 export { loadConfig, loadConfluenceConfig } from './config.js';
 export type {

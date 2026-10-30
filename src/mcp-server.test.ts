@@ -24,6 +24,7 @@ vi.hoisted(() => {
   delete process.env.JENKINS_URL;
   delete process.env.JENKINS_USER;
   delete process.env.JENKINS_TOKEN;
+  delete process.env.SLACK_ENABLED;
 });
 
 // Mock SDK transport so server.connect() doesn't actually connect
@@ -72,6 +73,7 @@ vi.mock('./services/index.js', () => ({
   GitHubClient: class MockGitHubClient {},
   FigmaClient: class MockFigmaClient {},
   JenkinsClient: class MockJenkinsClient {},
+  SlackClient: class MockSlackClient {},
   ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
@@ -86,6 +88,24 @@ vi.mock('./mcp-config.js', () => ({
 
 // Import main() explicitly (module side-effect is guarded by VITEST env var)
 import { main } from './mcp-server.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+
+function registeredHandler(schema: unknown): (request: unknown) => Promise<any> {
+  const call = mockSetRequestHandler.mock.calls.find(([registered]) => registered === schema);
+  return call![1];
+}
+
+async function listedToolNames(): Promise<string[]> {
+  const listed = await registeredHandler(ListToolsRequestSchema)({});
+  return listed.tools.map((tool: { name: string }) => tool.name);
+}
+
+async function reportedIntegrations(): Promise<Record<string, boolean>> {
+  const result = await registeredHandler(CallToolRequestSchema)({
+    params: { name: 'mcp_get_health', arguments: {} },
+  });
+  return JSON.parse(result.content[0].text).integrations;
+}
 
 describe('mcp-server bootstrap', () => {
   // Call main() to trigger server initialization
@@ -110,5 +130,43 @@ describe('mcp-server bootstrap', () => {
     // both return false. Only mcp_get_health should be registered.
     // We can verify this indirectly — the server started without error.
     expect(true).toBe(true);
+  });
+
+  it('registers no slack tool and reports slack inactive when SLACK_ENABLED is unset', async () => {
+    const slackToolNames = (await listedToolNames()).filter((name) => name.startsWith('slack_'));
+    expect(slackToolNames).toEqual([]);
+    expect((await reportedIntegrations()).slack).toBe(false);
+  });
+});
+
+describe('mcp-server bootstrap with SLACK_ENABLED=true', () => {
+  beforeAll(async () => {
+    vi.stubEnv('SLACK_ENABLED', 'true');
+    mockSetRequestHandler.mockClear();
+    await main();
+  });
+
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('registers exactly the ten slack tools', async () => {
+    const slackToolNames = (await listedToolNames()).filter((name) => name.startsWith('slack_'));
+    expect(slackToolNames.sort()).toEqual([
+      'slack_confirm_write',
+      'slack_get_channels',
+      'slack_get_messages',
+      'slack_get_status',
+      'slack_get_threads',
+      'slack_get_users',
+      'slack_login',
+      'slack_logout',
+      'slack_prepare_write',
+      'slack_search_messages',
+    ]);
+  });
+
+  it('reports slack active in the health tool', async () => {
+    expect((await reportedIntegrations()).slack).toBe(true);
   });
 });

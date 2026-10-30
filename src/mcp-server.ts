@@ -9,7 +9,9 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { isAxiosError } from 'axios';
-import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient } from './services/index.js';
+import os from 'node:os';
+import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient, SlackClient } from './services/index.js';
+import { slackPaths } from './services/slack/credential-store.js';
 import { z } from 'zod';
 import { loadMcpConfig } from './mcp-config.js';
 import { createHealthHandler } from './mcp-health.js';
@@ -36,12 +38,14 @@ export async function main(): Promise<void> {
     (process.env.CONFLUENCE_TOKEN || process.env.JIRA_TOKEN)
   );
   const jenkinsActive = !!(process.env.JENKINS_URL && process.env.JENKINS_USER && process.env.JENKINS_TOKEN);
+  const slackActive = process.env.SLACK_ENABLED === 'true';
 
   log(`Jira integration: ${jiraActive ? 'active' : 'inactive'}`);
   log(`GitHub integration: ${githubActive ? 'active' : 'inactive'}`);
   log(`Figma integration: ${figmaActive ? 'active' : 'inactive'}`);
   log(`Confluence integration: ${confluenceActive ? 'active' : 'inactive'}`);
   log(`Jenkins integration: ${jenkinsActive ? 'active' : 'inactive'}`);
+  log(`Slack integration: ${slackActive ? 'active' : 'inactive'}`);
 
   // Create client instances for active integrations only
   const clients: Record<string, unknown> = {};
@@ -90,6 +94,14 @@ export async function main(): Promise<void> {
       log(`Failed to create JenkinsClient: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  if (slackActive) {
+    try {
+      clients.slack = new SlackClient(slackPaths(os.homedir()));
+      log('SlackClient created successfully');
+    } catch (err) {
+      log(`Failed to create SlackClient: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Create server
   const server = new Server(
@@ -110,6 +122,7 @@ export async function main(): Promise<void> {
     !!clients.figma,
     !!clients.confluence,
     !!clients.jenkins,
+    !!clients.slack,
   );
   allHandlers['mcp_get_health'] = healthHandler;
   allDescriptors.push({

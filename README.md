@@ -16,16 +16,16 @@ An MCP server that exposes developer toolchain operations (Jira issue management
 │  │               (central dispatch)                 │ │
 │  └──────┬─────────────────────────────┬────────────┘ │
 │         │                             │               │
-│  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
-│  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │
-│  │  8 tools     │    │  30 tools          │   │  8 tools           │   │
-│  │  3 resources │    │  1 resource        │   │                    │   │
-│  │  2 prompts   │    │                    │   │                    │   │
-│  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   │
+│  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
+│  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │  Slack Module      │   │
+│  │  8 tools     │    │  30 tools          │   │  8 tools           │   │  10 tools          │   │
+│  │  3 resources │    │  1 resource        │   │                    │   │  (SLACK_ENABLED)   │   │
+│  │  2 prompts   │    │                    │   │                    │   │                    │   │
+│  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   └─────────┬──────────┘   │
 │         │                             │               │
 │  ┌──────┴─────────────────────────────┴──────────┐   │
 │  │       Service Layer: src/services/               │   │
-│  │  JiraClient │ GitHubClient │ slim │ config        │   │
+│  │  JiraClient │ GitHubClient │ SlackClient │ slim │ config  │   │
 │  └─────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -60,6 +60,7 @@ All variables are optional — tools only register if their required env vars ar
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
+| `SLACK_ENABLED` | Slack | All 10 Slack tools, when set to exactly `true`. The Slack app's client id lives in `~/.config/slack/toolkit-mcp/app.json`, not in the environment — see [`docs/slack.md`](docs/slack.md) |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
 | `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
 | `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
@@ -153,11 +154,30 @@ Read-only. All list tools return the paginated response shape (`items`, `nextPag
 | `jenkins_get_console` | Get a build console log, paginated by line; omit `buildNumber` for the most recent. | `job`, `buildNumber`, `limit`, `cursor` |
 | `jenkins_healthcheck` | Report whether the last build of each requested job succeeded; omit `jobs` to check all visible jobs. | `jobs` |
 
+### Slack Tools (registered when `SLACK_ENABLED=true`)
+
+Ten tools that read Slack as you and, behind a preview-then-confirm gate, post, react and upload. Setup (creating the Slack app from the shipped manifest `docs/slack-app-manifest.json`, the one-time config file, and logging in by link) and every limit and error code are in [`docs/slack.md`](docs/slack.md). Every read tool and `slack_prepare_write` takes an array of 1 to n items and returns one result per item.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `slack_login` | Start a login: returns a link to open in your own browser, or finishes a login from the pasted redirect address. | `workspace`, `redirected_url` |
+| `slack_logout` | Revoke the stored token at Slack and remove it locally. | `revoke` |
+| `slack_get_status` | Report the connection state with the next step. | `verify` |
+| `slack_search_messages` | Search messages, newest first. | `queries[]` (`query`, `exact_phrases`, `in_channels`, `from_users`, `after`, `before`), `fields`, `limit` |
+| `slack_get_messages` | Read one message, or a conversation's history. | `messages[]` (`message` or `channel`), `fields`, `limit` |
+| `slack_get_threads` | Read threads by message, reply or thread link. | `threads[]`, `fields`, `limit` |
+| `slack_get_channels` | Look up channels by id, link, name or membership. | `channels[]`, `limit` |
+| `slack_get_users` | Look up users by id, link, name, channel members or `me`. | `users[]`, `fields`, `limit` |
+| `slack_prepare_write` | Preview up to 10 posts, reactions or file uploads and get one confirmation token. | `items[]` (`action`, `destination`, `text`, `path`, `emoji`) |
+| `slack_confirm_write` | Send exactly what was previewed under that token. | `confirmation_token` |
+
+Message text, author names and emails are omitted unless asked for through `fields`. Slack's list-shaped results do not use the single envelope below: each input item gets its own result with its own `nextPageToken`, and a continuation is a new item holding only `{cursor}`.
+
 ### Built-in (always registered)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `mcp_get_health` | Report which integrations are active. | *(none)* |
+| `mcp_get_health` | Report which integrations are active (`jira`, `github`, `figma`, `confluence`, `jenkins`, `slack`). | *(none)* |
 
 ### Paginated Response Shape
 
@@ -180,6 +200,7 @@ All list-style tools return a uniform envelope:
 - `jira_get_issues` flattens `description` to plain text; pass `adf: true` to also get the raw ADF document as `descriptionAdf` (omitted when the issue has no description), e.g. to append to a description via `jira_update_issue` without losing its structure.
 - `jira_create_issue` / `jira_update_issue` take `components` as names (case-insensitive), resolved to ids against `jira_list_components`; an unknown name is rejected with the project's valid names. On update it replaces the issue's components, and omitting it leaves them untouched; `fields` is optional there when `components` is given, but a call with neither is rejected. `jira_list_components` returns every component in one page (`hasMore: false`).
 - `github_get_copilot_unresolved_prs` limits candidate PRs rather than matches; sparse or empty pages may still have `hasMore: true`.
+- The Slack read tools are the one exception to the single envelope and to a top-level `cursor`: they return `{results, truncated}` with one entry per input item, each carrying its own `items`, `hasMore` and `nextPageToken`, and a continuation is an item holding only `{cursor}`. Details in [`docs/slack.md`](docs/slack.md).
 - No tool auto-fetches all pages; the agent must explicitly paginate via `cursor`.
 
 ---
@@ -216,14 +237,16 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Figma module** — registered only if `FIGMA_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_TOKEN` are all set.
+- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. It needs no other environment variable, but `slack_login` answers `app_not_configured` until the Slack app's client id is in `~/.config/slack/toolkit-mcp/app.json` (see [`docs/slack.md`](docs/slack.md)).
 - **Fallback** — if no env vars are set, the server starts with only `mcp_get_health`. No crashes.
 - The server logs active integrations at startup: `[mcp] Jira integration: active`.
+- `mcp_get_health` reports each integration, including `slack`, as a boolean.
 
 ---
 
 ## Testing
 
-335 tests across 17 test files using **vitest**:
+More than 1,200 tests across 48 test files using **vitest**:
 
 ```bash
 npm run test                 # Run all tests
@@ -305,17 +328,31 @@ src/
 │   ├── slim.ts                # SlimIssue, toSlimIssue, adfToText
 │   ├── jira/
 │   │   └── jira-client.ts     # JiraClient class
-│   └── github/
-│       └── github-client.ts   # GitHubClient class
+│   ├── github/
+│   │   └── github-client.ts   # GitHubClient class
+│   └── slack/                 # SlackClient, login by link, token store, links, cursors, batching, upload source
+│       └── __fixtures__/      # Synthetic test fixtures (compiled with the source, imported only by tests)
 ├── integrations/
 │   ├── index.ts               # Module registry + IntegrationModule interface
 │   ├── helpers.ts             # PaginatedResponse helper, zodToJsonSchema
 │   ├── jira/
 │   │   ├── index.ts           # JiraModule: needsEnv, createToolHandlers, resources, prompts
 │   │   └── module.ts          # Jira tool handlers, Zod schemas, descriptors
-│   └── github/
-│       ├── index.ts           # GitHubModule: needsEnv, createToolHandlers, resources
-│       └── module.ts          # GitHub tool handlers, Zod schemas, descriptors
+│   ├── github/
+│   │   ├── index.ts           # GitHubModule: needsEnv, createToolHandlers, resources
+│   │   └── module.ts          # GitHub tool handlers, Zod schemas, descriptors
+│   └── slack/
+│       ├── index.ts           # SlackModule: needsEnv (SLACK_ENABLED), createToolHandlers
+│       ├── module.ts          # Slack Zod schemas and tool descriptors
+│       ├── session-tools.ts   # slack_login, slack_logout, slack_get_status
+│       ├── read-tools.ts      # search, messages, threads, channels, users
+│       ├── write-tools.ts     # slack_prepare_write, slack_confirm_write
+│       ├── write-gate.ts      # Confirmation tokens over a frozen list of writes
+│       └── __fixtures__/      # Synthetic test fixtures
+docs/
+├── slack.md                   # Slack setup, tools, limits and error codes
+└── slack-app-manifest.json    # Manifest to create the Slack app from (user scopes, PKCE, redirect URL)
+```
 
 ---
 
@@ -325,6 +362,8 @@ src/
 - **zod** — Schema validation for tool input parameters.
 - **axios** — HTTP client for Jira and GitHub API calls.
 - **dotenv** — Environment variable loading from `.env`.
+
+The Slack module adds no dependency: it uses axios for the Web API and Node's built-ins (`node:http` for the loopback login listener, `node:crypto`, `node:fs`).
 
 > **Note:** The `jira-cli` library has been absorbed into `src/services/` as an internal service layer. No external dependency is needed — JiraClient, GitHubClient, and their utilities live directly in the toolkit-mcp codebase.
 

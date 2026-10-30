@@ -6,19 +6,20 @@ vi.mock('../services/index.js', () => ({
   FigmaClient: class MockFigmaClient {},
   ConfluenceClient: class MockConfluenceClient {},
   JenkinsClient: class MockJenkinsClient {},
+  SlackClient: class MockSlackClient {},
   ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
 import { modules, IntegrationModule } from './index.js';
 
 describe('Module Registry', () => {
-  it('exports exactly 5 modules', () => {
-    expect(modules).toHaveLength(5);
+  it('exports exactly 6 modules', () => {
+    expect(modules).toHaveLength(6);
   });
 
   it('all modules have correct ids', () => {
     const ids = modules.map((m) => m.id).sort();
-    expect(ids).toEqual(['confluence', 'figma', 'github', 'jenkins', 'jira']);
+    expect(ids).toEqual(['confluence', 'figma', 'github', 'jenkins', 'jira', 'slack']);
   });
 
   it('each module implements IntegrationModule interface', () => {
@@ -47,6 +48,7 @@ describe('Module Registry', () => {
       if (mod.id === 'figma') clients.figma = {};
       if (mod.id === 'confluence') clients.confluence = {};
       if (mod.id === 'jenkins') clients.jenkins = {};
+      if (mod.id === 'slack') clients.slack = {};
 
       const handlers = mod.createToolHandlers(clients);
       expect(typeof handlers).toBe('object');
