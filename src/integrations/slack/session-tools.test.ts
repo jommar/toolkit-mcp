@@ -2,15 +2,19 @@ import './__fixtures__/tools/home-sandbox.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ALL_SCOPES,
+  CAPTURED_COOKIE,
+  CAPTURED_TOKEN,
   SEEDED_SAVED_AT,
   TOKEN_SENTINEL,
   dashboardSessionIntact,
   modeOf,
+  readCapturedSessionFile,
   readTokenFile,
   removeSandbox,
   resetSandbox,
   sandbox,
   seedAppConfig,
+  seedCapturedSession,
   seedDashboardSession,
   seedToken,
   tokenFileExists,
@@ -311,6 +315,100 @@ describe('session tools', () => {
       expect(tokenFileExists()).toBe(false);
       expect(result.state).toBe('not_connected');
       expect(result.revoked).toBe(false);
+    });
+  });
+
+  describe('the dev-dashboard session', () => {
+    it('is adopted by slack_login, verified with Slack and copied into the module store', async () => {
+      seedCapturedSession();
+      const { ctx, slack } = createHarness();
+      const before = readCapturedSessionFile();
+
+      const status = parseResult(await slackLoginHandler(ctx)({}));
+
+      expect(status.state).toBe('connected');
+      expect(status.user_id).toBe(USER_ME);
+      expect(status.team_id).toBe('T0EXAMPLE1');
+      expect(status.team_domain).toBe(EXAMPLE_TEAM.domain);
+      expect(status.scopes_missing).toBeUndefined();
+      expect(modeOf(sandbox.tokenFile)).toBe(0o600);
+      expect(readTokenFile()).toMatchObject({
+        access_token: CAPTURED_TOKEN,
+        cookie: CAPTURED_COOKIE,
+        team_id: EXAMPLE_TEAM.id,
+        team_domain: EXAMPLE_TEAM.domain,
+        user_id: USER_ME,
+      });
+      expect(readCapturedSessionFile()).toBe(before);
+      expect(slack.client.authTest).toHaveBeenCalled();
+    });
+
+    it('is reported as available while nothing is connected', async () => {
+      seedCapturedSession();
+      const { ctx } = createHarness();
+
+      const status = await statusOf(ctx);
+
+      expect(status.state).toBe('not_connected');
+      expect(status.dashboard_session_available).toBe(true);
+      expect(status.next_step).toContain('slack_login');
+    });
+
+    it('removes the copy and reports expired when Slack rejects the captured token', async () => {
+      seedCapturedSession();
+      const { ctx, slack } = createHarness();
+      slack.setRoute('auth.test', () => {
+        throw slackFailure('session_rejected', { slack_code: 'invalid_auth' });
+      });
+
+      const status = parseResult(await slackLoginHandler(ctx)({}));
+
+      expect(status.state).toBe('expired');
+      expect(status.reason).toBe('invalid_auth');
+      expect(status.next_step).toContain('dev-dashboard');
+      expect(tokenFileExists()).toBe(false);
+    });
+
+    it('keeps the copy and reports unverified when Slack cannot be reached', async () => {
+      seedCapturedSession();
+      const { ctx, slack } = createHarness();
+      slack.setRoute('auth.test', () => {
+        throw slackFailure('unreachable');
+      });
+
+      const status = parseResult(await slackLoginHandler(ctx)({}));
+
+      expect(status.state).toBe('unverified');
+      expect(tokenFileExists()).toBe(true);
+    });
+
+    it('fails signed_in_elsewhere, storing nothing, when the captured session is another workspace', async () => {
+      seedCapturedSession();
+      const { ctx, slack } = createHarness();
+
+      const error = await expectSlackError(
+        () => slackLoginHandler(ctx)({ workspace: OTHER_TEAM.domain }),
+        'signed_in_elsewhere',
+      );
+
+      expect(error.message).toContain(EXAMPLE_TEAM.domain);
+      expect(slack.client.authTest).not.toHaveBeenCalled();
+      expect(tokenFileExists()).toBe(false);
+    });
+
+    it('is never revoked on logout, and the captured file survives untouched', async () => {
+      seedCapturedSession();
+      const before = readCapturedSessionFile();
+      const { ctx, slack } = createHarness();
+      await slackLoginHandler(ctx)({});
+
+      const result = parseResult(await slackLogoutHandler(ctx)({}));
+
+      expect(slack.client.authRevoke).not.toHaveBeenCalled();
+      expect(result.revoked).toBe(false);
+      expect(result.removed).toContain('token.json');
+      expect(tokenFileExists()).toBe(false);
+      expect(readCapturedSessionFile()).toBe(before);
     });
   });
 

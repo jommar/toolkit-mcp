@@ -1,4 +1,6 @@
 export const TOKEN_SENTINEL = ['xoxp', 'synthetic', 'sentinel'].join('-');
+export const CAPTURED_TOKEN_SENTINEL = ['xoxc', 'captured', 'sentinel'].join('-');
+export const CAPTURED_COOKIE_SENTINEL = ['xoxd', 'captured', 'sentinel'].join('-');
 export const CLIENT_SECRET_SENTINEL = 'CLIENT-SECRET-SENTINEL';
 export const AUTH_CODE_SENTINEL = 'AUTH-CODE-SENTINEL';
 export const FILE_BYTES_SENTINEL = 'FILE-BYTES-SENTINEL';

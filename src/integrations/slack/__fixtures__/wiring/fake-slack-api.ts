@@ -35,7 +35,7 @@ export type Reply =
 
 export type Handler = (fields: SlackFields, request: RecordedRequest) => Reply;
 
-const SLACK_API_HOST = 'slack.com';
+const SLACK_API_HOSTS = new Set(['slack.com', 'app.slack.com']);
 const UPLOAD_HANDLER_KEY = 'upload-host';
 
 function slackOk(extra: Record<string, unknown> = {}): Reply {
@@ -420,7 +420,7 @@ export class FakeSlackApi {
       url,
       host: parsedUrl.hostname,
       path: parsedUrl.pathname,
-      apiMethod: parsedUrl.hostname === SLACK_API_HOST && apiMatch ? apiMatch[1] : undefined,
+      apiMethod: SLACK_API_HOSTS.has(parsedUrl.hostname) && apiMatch ? apiMatch[1] : undefined,
       headers,
       body: body.text,
       bodyWasStream: body.wasStream,

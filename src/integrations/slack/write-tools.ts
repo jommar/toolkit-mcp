@@ -29,7 +29,7 @@ const expectedDestinationField = z
   .min(1)
   .optional()
   .describe(
-    "Required with an id: the channel name, the DM partner's user id or handle, or the group-DM handles.",
+    "Required with an id: the channel name, the DM partner's user id or handle, or the other members' handles for a group DM.",
   );
 const threadField = z.string().min(1).optional().describe('Thread to reply in: a Slack ts or a message link.');
 
@@ -266,7 +266,7 @@ function requireExpectedForConversationId(item: WriteItem): void {
     throw new McpError(
       ErrorCode.InvalidParams,
       'expected_destination is required with a conversation id. Give the channel name, the DM partner or ' +
-        'the group-DM handles, or send the Slack link instead.',
+        "the other members' handles for a group DM, or send the Slack link instead.",
     );
   }
 }

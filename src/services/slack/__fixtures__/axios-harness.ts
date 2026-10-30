@@ -21,6 +21,8 @@ export interface HarnessReply {
 type Responder = (request: RecordedRequest) => HarnessReply | Promise<HarnessReply>;
 
 const SLACK_API_PREFIX = 'https://slack.com/api/';
+// A session adopted from the web client is called on the host that issued it.
+const SLACK_WEB_API_PREFIX = 'https://app.slack.com/api/';
 
 const state = {
   requests: [] as RecordedRequest[],
@@ -33,6 +35,13 @@ function joinUrl(baseURL: string, url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
   if (!baseURL) return url;
   return `${baseURL.replace(/\/+$/, '')}/${url.replace(/^\/+/, '')}`;
+}
+
+function slackMethodOf(url: string): string {
+  for (const prefix of [SLACK_API_PREFIX, SLACK_WEB_API_PREFIX]) {
+    if (url.startsWith(prefix)) return url.slice(prefix.length).split('?')[0];
+  }
+  return '';
 }
 
 function plainHeaders(source: any): Record<string, unknown> {
@@ -110,7 +119,7 @@ async function dispatch(instance: any, createConfig: any, requested: any): Promi
   const record: RecordedRequest = {
     method,
     url,
-    slackMethod: url.startsWith(SLACK_API_PREFIX) ? url.slice(SLACK_API_PREFIX.length).split('?')[0] : '',
+    slackMethod: slackMethodOf(url),
     headers,
     params: { ...(config.params ?? {}) },
     body,

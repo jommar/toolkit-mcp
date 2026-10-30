@@ -5,6 +5,8 @@ import { installRetry } from '../http-retry.js';
 import { readToken, slackPaths, type SlackPaths, type TokenRecord } from './credential-store.js';
 
 const SLACK_API_BASE_URL = 'https://slack.com/api';
+// A web session (xoxc token + d cookie) is issued to the Slack web client, so it is called on that host.
+const SLACK_WEB_API_BASE_URL = 'https://app.slack.com/api';
 const SLACK_HOST_SUFFIX = '.slack.com';
 const REQUEST_TIMEOUT_MS = 30_000;
 const DIRECTORY_PAGE_SIZE = 200;
@@ -169,12 +171,16 @@ export class SlackClient {
 
   private async get<T extends SlackResponse>(slackMethod: string, params: SlackArguments = {}): Promise<T> {
     const token = await this.storedToken();
-    return this.send(() => this.http.get<T>(slackMethod, { params, headers: bearerHeader(token) }));
+    return this.send(() =>
+      this.http.get<T>(slackMethod, { params, headers: authHeaders(token), baseURL: baseUrlFor(token) }),
+    );
   }
 
   private async post<T extends SlackResponse>(slackMethod: string, data?: SlackArguments): Promise<T> {
     const token = await this.storedToken();
-    return this.send(() => this.http.post<T>(slackMethod, data, { headers: bearerHeader(token) }));
+    return this.send(() =>
+      this.http.post<T>(slackMethod, data, { headers: authHeaders(token), baseURL: baseUrlFor(token) }),
+    );
   }
 
   private async send<T extends SlackResponse>(request: () => Promise<AxiosResponse<T>>): Promise<T> {
@@ -197,8 +203,14 @@ export class SlackClient {
   }
 }
 
-function bearerHeader(token: TokenRecord): Record<string, string> {
-  return { Authorization: `Bearer ${token.access_token}` };
+// A web session needs the `d` cookie beside its token; neither works alone. An app token carries no cookie.
+function authHeaders(token: TokenRecord): Record<string, string> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token.access_token}` };
+  return token.cookie ? { ...headers, Cookie: `d=${token.cookie}` } : headers;
+}
+
+function baseUrlFor(token: TokenRecord): string {
+  return token.cookie ? SLACK_WEB_API_BASE_URL : SLACK_API_BASE_URL;
 }
 
 // A write that Slack answered late may already be applied, so a timeout or reset never resends it.

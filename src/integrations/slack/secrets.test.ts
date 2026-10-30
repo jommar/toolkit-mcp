@@ -28,6 +28,8 @@ import {
   resetSandbox,
   tokenFileExists,
   writeAppConfig,
+  writeCapturedSession,
+  readCapturedSessionText,
   writeToken,
   writeUploadFile,
 } from './__fixtures__/wiring/sandbox.js';
@@ -48,6 +50,8 @@ import { READ_CALLS, postItem, reactItem, uploadItem } from './__fixtures__/wiri
 import { PRODUCTION_CALLBACK_PORT, holdProductionPort } from './__fixtures__/wiring/fix1-ports.js';
 import {
   AUTH_CODE_SENTINEL,
+  CAPTURED_COOKIE_SENTINEL,
+  CAPTURED_TOKEN_SENTINEL,
   CLIENT_SECRET_SENTINEL,
   EXAMPLE,
   FILE_BYTES_SENTINEL,
@@ -58,6 +62,8 @@ import { SlackClient } from '../../services/slack/slack-client.js';
 
 const SECRETS: Array<[string, string]> = [
   ['access token', TOKEN_SENTINEL],
+  ['captured token', CAPTURED_TOKEN_SENTINEL],
+  ['captured cookie', CAPTURED_COOKIE_SENTINEL],
   ['client secret', CLIENT_SECRET_SENTINEL],
   ['authorization code', AUTH_CODE_SENTINEL],
   ['file bytes', FILE_BYTES_SENTINEL],
@@ -94,13 +100,25 @@ function expectSecretsOnlyWhereTheyBelong(requests: RecordedRequest[]): void {
     const rendered = renderRequest(request);
 
     expect(`${request.url}\n${request.body}`.includes(TOKEN_SENTINEL), `${where}: token in url or body`).toBe(false);
+    expect(`${request.url}\n${request.body}`.includes(CAPTURED_TOKEN_SENTINEL), `${where}: captured token in url or body`).toBe(false);
     const headersWithToken = Object.entries(request.headers)
-      .filter(([, value]) => value.includes(TOKEN_SENTINEL))
+      .filter(([, value]) => value.includes(TOKEN_SENTINEL) || value.includes(CAPTURED_TOKEN_SENTINEL))
       .map(([name]) => name);
     if (headersWithToken.length > 0) {
       expect(headersWithToken, `${where}: token header`).toEqual(['authorization']);
       expect(isUploadHostRequest(request), `${where}: token sent to a non-api host`).toBe(false);
     }
+
+    // A web session's cookie travels only beside its token, only to the host that issued it.
+    const cookieHeaders = Object.entries(request.headers).filter(([name]) => name.toLowerCase() === 'cookie');
+    if (cookieHeaders.length > 0) {
+      expect(request.host, `${where}: cookie sent to another host`).toBe('app.slack.com');
+      expect(headersWithToken, `${where}: cookie without its token`).toEqual(['authorization']);
+      expect(cookieHeaders, `${where}: cookie header`).toEqual([['cookie', `d=${CAPTURED_COOKIE_SENTINEL}`]]);
+    }
+    expect(`${request.url}\n${request.body}`.includes(CAPTURED_COOKIE_SENTINEL), `${where}: cookie in url or body`).toBe(
+      false,
+    );
 
     expect(rendered.includes(CLIENT_SECRET_SENTINEL), `${where}: client secret`).toBe(false);
     if (request.apiMethod !== 'oauth.v2.access') {
@@ -109,7 +127,6 @@ function expectSecretsOnlyWhereTheyBelong(requests: RecordedRequest[]): void {
     if (!isUploadHostRequest(request)) {
       expect(rendered.includes(FILE_BYTES_SENTINEL), `${where}: file bytes`).toBe(false);
     }
-    expect(Object.keys(request.headers), `${where}: cookie header`).not.toContain('cookie');
   }
 }
 
@@ -306,6 +323,37 @@ describe('login by link', () => {
     expect(resultJson(status).state).toBe('not_connected');
     expect(resultJson(status).app_configured).toBe(false);
     expectCleanRun('unsafe app config');
+  });
+});
+
+describe('login from the dev-dashboard session', () => {
+  it('adopts the captured pair, sends it only to the web host, and keeps it out of results and logs', async () => {
+    writeCapturedSession();
+    const before = readCapturedSessionText();
+
+    const login = await call('slack_login');
+    const status = await call('slack_get_status');
+    const read = await call('slack_get_messages', { messages: [{ channel: EXAMPLE.channelId }] });
+
+    expect(resultJson(login).state).toBe('connected');
+    expect(resultJson(status).state).toBe('connected');
+    expect(resultJson(status).scopes_missing).toBeUndefined();
+    expect(read.thrown).toBeUndefined();
+    expect(readCapturedSessionText()).toBe(before);
+    expectCleanRun('adopted session');
+
+    const webRequests = fakeSlackApi.requests.filter((request) => request.host === 'app.slack.com');
+    expect(webRequests.length).toBeGreaterThan(0);
+    for (const request of webRequests) {
+      expect(request.headers.authorization).toBe(`Bearer ${CAPTURED_TOKEN_SENTINEL}`);
+      expect(request.headers.cookie).toBe(`d=${CAPTURED_COOKIE_SENTINEL}`);
+    }
+
+    const logout = await call('slack_logout');
+    expect(resultJson(logout).revoked).toBe(false);
+    expect(tokenFileExists()).toBe(false);
+    expect(readCapturedSessionText()).toBe(before);
+    expectCleanRun('adopted logout');
   });
 });
 

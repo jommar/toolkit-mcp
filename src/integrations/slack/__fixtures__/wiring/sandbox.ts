@@ -1,7 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ALL_USER_SCOPES, CLIENT_ID, CLIENT_SECRET_SENTINEL, EXAMPLE, TOKEN_SENTINEL } from './sentinels.js';
+import {
+  ALL_USER_SCOPES,
+  CAPTURED_COOKIE_SENTINEL,
+  CAPTURED_TOKEN_SENTINEL,
+  CLIENT_ID,
+  CLIENT_SECRET_SENTINEL,
+  EXAMPLE,
+  TOKEN_SENTINEL,
+} from './sentinels.js';
 
 const sandboxRoot = mkdtempSync(join(tmpdir(), 'slack-wiring-'));
 
@@ -72,6 +80,27 @@ export function writeToken(options: TokenOptions = {}): void {
 
 export function tokenFileExists(): boolean {
   return existsSync(tokenPath);
+}
+
+/** Writes the Slack web session dev-dashboard captures: an xoxc token and its xoxd cookie. */
+export function writeCapturedSession(): void {
+  mkdirSync(slackConfigRoot, { recursive: true });
+  chmodSync(slackConfigRoot, 0o700);
+  writeFileSync(
+    dashboardSessionPath,
+    JSON.stringify({
+      token: CAPTURED_TOKEN_SENTINEL,
+      cookie: CAPTURED_COOKIE_SENTINEL,
+      teamId: EXAMPLE.teamId,
+      teamDomain: EXAMPLE.teamDomain,
+      savedAt: new Date().toISOString(),
+    }),
+  );
+  chmodSync(dashboardSessionPath, 0o600);
+}
+
+export function readCapturedSessionText(): string {
+  return readFileSync(dashboardSessionPath, 'utf8');
 }
 
 export function readTokenFileText(): string {

@@ -186,7 +186,7 @@ const WRITE_ITEM_JSON = {
     },
     expected_destination: {
       type: 'string',
-      description: 'Required with a destination id: the channel name, the DM partner id or handle, or the group-DM handles.',
+      description: 'Required with a destination id: the channel name, the DM partner id or handle, or the other members\' handles for a group DM.',
     },
     text: { type: 'string', maxLength: 40000, description: 'post: message text, sent with link_names off.' },
     thread: { type: 'string', description: 'post and upload: a Slack ts or a message link to reply in.' },
@@ -204,19 +204,19 @@ export const slackToolDescriptors: ToolDescriptor[] = [
   {
     name: 'slack_login',
     description:
-      'Start a Slack login: returns an authorize_url to open in your own browser; on the paste route, call again with redirected_url (the address the browser landed on) to finish.',
+      'Connect Slack. If dev-dashboard has captured a web session (~/.config/slack/session.json), this adopts it and verifies against Slack; otherwise it returns an authorize_url to open in your own browser, and on the paste route call again with redirected_url to finish.',
     inputSchema: zodToJsonSchema(slackLoginSchema),
   },
   {
     name: 'slack_logout',
     description:
-      'Disconnect Slack: by default revokes the stored token at Slack, then removes it locally; revoke:false removes it without calling Slack.',
+      'Disconnect Slack: revokes an app token at Slack when it can, then removes the stored login; revoke:false removes it without calling Slack. A session adopted from dev-dashboard is only removed here, never revoked, and the captured file is left untouched.',
     inputSchema: zodToJsonSchema(slackLogoutSchema),
   },
   {
     name: 'slack_get_status',
     description:
-      'Report the Slack connection state (not_connected, pending, connected, expired or unverified) with the next step; verify:false skips the Slack check.',
+      'Report the Slack connection state (not_connected, pending, connected, expired or unverified) with the next step, and whether a dev-dashboard session is available to adopt; verify:false skips the Slack check.',
     inputSchema: zodToJsonSchema(slackGetStatusSchema),
   },
   {

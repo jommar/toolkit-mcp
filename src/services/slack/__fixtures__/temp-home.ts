@@ -1,12 +1,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CLIENT_ID_FIXTURE, DASHBOARD_SESSION_SENTINEL, tokenRecord, type TokenRecordFixture } from './synthetic.js';
+import {
+  CLIENT_ID_FIXTURE,
+  DASHBOARD_SESSION_SENTINEL,
+  capturedSession,
+  tokenRecord,
+  type TokenRecordFixture,
+} from './synthetic.js';
 
 export interface TempSlackPaths {
   dir: string;
   tokenFile: string;
   appFile: string;
+  sourceFile: string;
 }
 
 export interface TempHome {
@@ -22,11 +29,17 @@ export function createTempHome(): TempHome {
   const home = fs.mkdtempSync(path.join(base, 'slack-mcp-home-'));
   const slackConfigDir = path.join(home, '.config', 'slack');
   const dir = path.join(slackConfigDir, 'toolkit-mcp');
+  const dashboardSessionFile = path.join(slackConfigDir, 'session.json');
   return {
     home,
-    paths: { dir, tokenFile: path.join(dir, 'token.json'), appFile: path.join(dir, 'app.json') },
+    paths: {
+      dir,
+      tokenFile: path.join(dir, 'token.json'),
+      appFile: path.join(dir, 'app.json'),
+      sourceFile: dashboardSessionFile,
+    },
     slackConfigDir,
-    dashboardSessionFile: path.join(slackConfigDir, 'session.json'),
+    dashboardSessionFile,
     cleanup: () => fs.rmSync(home, { recursive: true, force: true }),
   };
 }
@@ -36,6 +49,12 @@ export function writeDashboardSession(temp: TempHome): void {
   fs.writeFileSync(temp.dashboardSessionFile, JSON.stringify({ session: DASHBOARD_SESSION_SENTINEL }), {
     mode: 0o600,
   });
+}
+
+/** Writes the session dev-dashboard captures: an xoxc token and an xoxd cookie. */
+export function writeCapturedSession(temp: TempHome, overrides: Record<string, unknown> = {}): void {
+  fs.mkdirSync(temp.slackConfigDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(temp.dashboardSessionFile, JSON.stringify(capturedSession(overrides)), { mode: 0o600 });
 }
 
 export function writeAppConfigFile(

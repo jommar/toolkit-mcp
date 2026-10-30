@@ -60,7 +60,7 @@ All variables are optional — tools only register if their required env vars ar
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
-| `SLACK_ENABLED` | Slack | All 10 Slack tools, when set to exactly `true`. The Slack app's client id lives in `~/.config/slack/toolkit-mcp/app.json`, not in the environment — see [`docs/slack.md`](docs/slack.md) |
+| `SLACK_ENABLED` | Slack | All 10 Slack tools, when set to exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json`; without one, the Slack app's client id is read from `~/.config/slack/toolkit-mcp/app.json`, not the environment — see [`docs/slack.md`](docs/slack.md) |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
 | `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
 | `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
@@ -156,13 +156,13 @@ Read-only. All list tools return the paginated response shape (`items`, `nextPag
 
 ### Slack Tools (registered when `SLACK_ENABLED=true`)
 
-Ten tools that read Slack as you and, behind a preview-then-confirm gate, post, react and upload. Setup (creating the Slack app from the shipped manifest `docs/slack-app-manifest.json`, the one-time config file, and logging in by link) and every limit and error code are in [`docs/slack.md`](docs/slack.md). Every read tool and `slack_prepare_write` takes an array of 1 to n items and returns one result per item.
+Ten tools that read Slack as you and, behind a preview-then-confirm gate, post, react and upload. Login takes the shortest route available: if dev-dashboard has captured your Slack web session in `~/.config/slack/session.json`, `slack_login` adopts it and no Slack app is needed; otherwise create the app from the shipped manifest `docs/slack-app-manifest.json`, write the one-time config file and log in by link. Both routes, every limit and every error code are in [`docs/slack.md`](docs/slack.md). Every read tool and `slack_prepare_write` takes an array of 1 to n items and returns one result per item.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `slack_login` | Start a login: returns a link to open in your own browser, or finishes a login from the pasted redirect address. | `workspace`, `redirected_url` |
-| `slack_logout` | Revoke the stored token at Slack and remove it locally. | `revoke` |
-| `slack_get_status` | Report the connection state with the next step. | `verify` |
+| `slack_login` | Connect: adopt the dev-dashboard web session when there is one, otherwise return a link to open in your own browser or finish a login from the pasted redirect address. | `workspace`, `redirected_url` |
+| `slack_logout` | Revoke an app token at Slack and remove the stored login; an adopted web session is only removed locally. | `revoke` |
+| `slack_get_status` | Report the connection state with the next step, and whether a dev-dashboard session is available. | `verify` |
 | `slack_search_messages` | Search messages, newest first. | `queries[]` (`query`, `exact_phrases`, `in_channels`, `from_users`, `after`, `before`), `fields`, `limit` |
 | `slack_get_messages` | Read one message, or a conversation's history. | `messages[]` (`message` or `channel`), `fields`, `limit` |
 | `slack_get_threads` | Read threads by message, reply or thread link. | `threads[]`, `fields`, `limit` |
@@ -237,7 +237,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Figma module** — registered only if `FIGMA_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, and `JENKINS_TOKEN` are all set.
-- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. It needs no other environment variable, but `slack_login` answers `app_not_configured` until the Slack app's client id is in `~/.config/slack/toolkit-mcp/app.json` (see [`docs/slack.md`](docs/slack.md)).
+- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. It needs no other environment variable: `slack_login` adopts the web session dev-dashboard captured in `~/.config/slack/session.json` (or `SLACK_SESSION_FILE`), and only falls back to the Slack app login — which answers `app_not_configured` until the client id is in `~/.config/slack/toolkit-mcp/app.json` — when no captured session exists (see [`docs/slack.md`](docs/slack.md)).
 - **Fallback** — if no env vars are set, the server starts with only `mcp_get_health`. No crashes.
 - The server logs active integrations at startup: `[mcp] Jira integration: active`.
 - `mcp_get_health` reports each integration, including `slack`, as a boolean.
@@ -330,7 +330,7 @@ src/
 │   │   └── jira-client.ts     # JiraClient class
 │   ├── github/
 │   │   └── github-client.ts   # GitHubClient class
-│   └── slack/                 # SlackClient, login by link, token store, links, cursors, batching, upload source
+│   └── slack/                 # SlackClient, login by link, dev-dashboard session adoption, token store, links, cursors, batching, upload source
 │       └── __fixtures__/      # Synthetic test fixtures (compiled with the source, imported only by tests)
 ├── integrations/
 │   ├── index.ts               # Module registry + IntegrationModule interface

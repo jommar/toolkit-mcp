@@ -6,21 +6,76 @@ export interface SlackPaths {
   dir: string;
   tokenFile: string;
   appFile: string;
+  /** The web session another local tool captured: dev-dashboard's ~/.config/slack/session.json. */
+  sourceFile: string;
 }
 
 export interface TokenRecord {
   access_token: string;
-  scopes: string[];
+  scopes?: string[];
   team_id: string;
   team_domain: string;
   team_url: string;
   user_id: string;
   saved_at: string;
+  /** The `d` cookie a web session needs; present only on a session adopted from another tool's login. */
+  cookie?: string;
+}
+
+/** The Slack web client's own credentials, as dev-dashboard leaves them: xoxc token plus the `d` cookie. */
+export interface CapturedSession {
+  token: string;
+  cookie: string;
+  team_id: string;
+  team_domain: string;
+  saved_at: string;
 }
 
 export function slackPaths(home: string): SlackPaths {
   const dir = path.join(home, '.config', 'slack', 'toolkit-mcp');
-  return { dir, tokenFile: path.join(dir, 'token.json'), appFile: path.join(dir, 'app.json') };
+  return {
+    dir,
+    tokenFile: path.join(dir, 'token.json'),
+    appFile: path.join(dir, 'app.json'),
+    sourceFile: process.env.SLACK_SESSION_FILE || path.join(home, '.config', 'slack', 'session.json'),
+  };
+}
+
+/**
+ * Reads the session dev-dashboard captured. Returns null when the file is absent or is not a Slack web
+ * session, so a stale or unrelated file there can never be mistaken for a login.
+ */
+export async function readCapturedSession(paths: SlackPaths): Promise<CapturedSession | null> {
+  await refuseSymlinkedPath(paths.sourceFile);
+  let contents: string;
+  try {
+    contents = await readFile(paths.sourceFile, 'utf8');
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+  return parseCapturedSession(contents);
+}
+
+function parseCapturedSession(contents: string): CapturedSession | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    // The parser's own message quotes the input, which here would be the token and cookie.
+    return null;
+  }
+  const value = (parsed ?? {}) as Record<string, unknown>;
+  const token = typeof value.token === 'string' ? value.token : '';
+  const cookie = typeof value.cookie === 'string' ? value.cookie : '';
+  if (!token.startsWith('xoxc-') || !cookie.startsWith('xoxd-')) return null;
+  return {
+    token,
+    cookie,
+    team_id: typeof value.teamId === 'string' ? value.teamId : '',
+    team_domain: typeof value.teamDomain === 'string' ? value.teamDomain : '',
+    saved_at: typeof value.savedAt === 'string' ? value.savedAt : new Date().toISOString(),
+  };
 }
 
 export async function readToken(paths: SlackPaths): Promise<TokenRecord | null> {

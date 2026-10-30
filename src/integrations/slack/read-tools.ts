@@ -795,9 +795,12 @@ function userEntry(raw: UserRecord, run: ReadRun): Shaped {
   return entry;
 }
 
-// An address is shown only when the token was granted the scope that reads it.
+// An address is shown only when the token was granted the scope that reads it. A web session carries no
+// scope list, so Slack's own answer decides and a missing address is reported as not set.
 function emailFields(raw: UserRecord, team: TokenRecord): Shaped {
-  if (!team.scopes.includes(EMAIL_SCOPE)) return { email: null, email_unavailable: 'scope_missing' };
+  if (team.scopes && !team.scopes.includes(EMAIL_SCOPE)) {
+    return { email: null, email_unavailable: 'scope_missing' };
+  }
   const address = raw.profile?.email;
   return address ? { email: address, email_unavailable: undefined } : { email: null, email_unavailable: 'not_set' };
 }

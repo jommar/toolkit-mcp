@@ -74,7 +74,7 @@ class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... 
 - **Jira module** — registered only if `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_TOKEN` are all set.
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` are all set (read-only tools).
-- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. The Slack app's client id is not an env var: it lives in `~/.config/slack/toolkit-mcp/app.json` beside the token the module writes after `slack_login`. Writes (post, react, upload) go only through `slack_prepare_write` then `slack_confirm_write`. Setup, limits and error codes: `docs/slack.md`.
+- **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json` (`SLACK_SESSION_FILE` overrides) and keeps its own copy in `~/.config/slack/toolkit-mcp/token.json`; without one it falls back to the app login, whose client id is not an env var but `~/.config/slack/toolkit-mcp/app.json`. Writes (post, react, upload) go only through `slack_prepare_write` then `slack_confirm_write`. Setup, limits and error codes: `docs/slack.md`.
 - **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations.
 - The server logs which integration sets are active at startup.
 

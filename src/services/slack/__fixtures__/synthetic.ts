@@ -24,6 +24,8 @@ export const ROOT_TS_PERMALINK_SEGMENT = 'p1700000000000100';
 export const REPLY_TS_PERMALINK_SEGMENT = 'p1700000000000200';
 
 export const TOKEN_SENTINEL = ['xox', 'p-synthetic-sentinel'].join('');
+export const CAPTURED_TOKEN_SENTINEL = ['xox', 'c-captured-sentinel'].join('');
+export const CAPTURED_COOKIE_SENTINEL = ['xox', 'd-captured-sentinel'].join('');
 export const CLIENT_SECRET_SENTINEL = 'CLIENT-SECRET-SENTINEL';
 export const AUTH_CODE_SENTINEL = 'AUTH-CODE-SENTINEL';
 export const FILE_BYTES_SENTINEL = 'FILE-BYTES-SENTINEL';
@@ -56,6 +58,7 @@ export interface TokenRecordFixture {
   team_url: string;
   user_id: string;
   saved_at: string;
+  cookie?: string;
 }
 
 export function tokenRecord(overrides: Partial<TokenRecordFixture> = {}): TokenRecordFixture {
@@ -67,6 +70,18 @@ export function tokenRecord(overrides: Partial<TokenRecordFixture> = {}): TokenR
     team_url: EXAMPLE_TEAM.team_url,
     user_id: EXAMPLE_TEAM.user_id,
     saved_at: '2026-10-30T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** The shape dev-dashboard writes: the Slack web client's own xoxc token and d cookie. */
+export function capturedSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    token: CAPTURED_TOKEN_SENTINEL,
+    cookie: CAPTURED_COOKIE_SENTINEL,
+    teamId: EXAMPLE_TEAM.team_id,
+    teamDomain: EXAMPLE_TEAM.team_domain,
+    savedAt: '2026-10-30T12:00:00.000Z',
     ...overrides,
   };
 }

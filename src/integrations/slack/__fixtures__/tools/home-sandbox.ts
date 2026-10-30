@@ -12,6 +12,8 @@ delete process.env.XDG_CONFIG_HOME;
 process.on('exit', () => fs.rmSync(sandboxHome, { recursive: true, force: true }));
 
 export const TOKEN_SENTINEL = ['xoxp', 'synthetic', 'sentinel'].join('-');
+export const CAPTURED_TOKEN = ['xoxc', 'captured', 'sentinel'].join('-');
+export const CAPTURED_COOKIE = ['xoxd', 'captured', 'sentinel'].join('-');
 export const CLIENT_ID_FIXTURE = 'CLIENT-ID-FIXTURE';
 export const DASHBOARD_SESSION_CONTENT = '{"session":"OTHER-TOOL-SESSION-SENTINEL"}\n';
 
@@ -101,6 +103,32 @@ export function seedDashboardSession(): void {
   assertSandboxed();
   fs.mkdirSync(sandbox.slackDir, { recursive: true });
   fs.writeFileSync(sandbox.dashboardSessionFile, DASHBOARD_SESSION_CONTENT, { mode: 0o600 });
+}
+
+export interface SeedCapturedSessionOptions {
+  team?: FixtureTeam;
+  token?: string;
+  cookie?: string;
+}
+
+/** Writes the session dev-dashboard captures: the Slack web client's xoxc token and d cookie. */
+export function seedCapturedSession(options: SeedCapturedSessionOptions = {}): void {
+  assertSandboxed();
+  const team = options.team ?? EXAMPLE_TEAM;
+  fs.mkdirSync(sandbox.slackDir, { recursive: true, mode: 0o700 });
+  const record = {
+    token: options.token ?? CAPTURED_TOKEN,
+    cookie: options.cookie ?? CAPTURED_COOKIE,
+    teamId: team.id,
+    teamDomain: team.domain,
+    savedAt: SEEDED_SAVED_AT,
+  };
+  fs.writeFileSync(sandbox.dashboardSessionFile, JSON.stringify(record, null, 2), { mode: 0o600 });
+  fs.chmodSync(sandbox.dashboardSessionFile, 0o600);
+}
+
+export function readCapturedSessionFile(): string {
+  return fs.readFileSync(sandbox.dashboardSessionFile, 'utf8');
 }
 
 export function dashboardSessionIntact(): boolean {

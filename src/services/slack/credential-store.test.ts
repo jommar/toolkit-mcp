@@ -2,9 +2,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readToken, writeToken, removeToken, slackPaths } from './credential-store.js';
-import { createTempHome, permissionBits, writeDashboardSession, type TempHome } from './__fixtures__/temp-home.js';
-import { DASHBOARD_SESSION_SENTINEL, tokenRecord, TOKEN_SENTINEL } from './__fixtures__/synthetic.js';
+import { readCapturedSession, readToken, writeToken, removeToken, slackPaths } from './credential-store.js';
+import {
+  createTempHome,
+  permissionBits,
+  writeCapturedSession,
+  writeDashboardSession,
+  type TempHome,
+} from './__fixtures__/temp-home.js';
+import {
+  CAPTURED_COOKIE_SENTINEL,
+  CAPTURED_TOKEN_SENTINEL,
+  DASHBOARD_SESSION_SENTINEL,
+  tokenRecord,
+  TOKEN_SENTINEL,
+} from './__fixtures__/synthetic.js';
 import { settle } from './__fixtures__/settle.js';
 
 describe('credential store', () => {
@@ -153,8 +165,71 @@ describe('credential store', () => {
     });
   });
 
+  describe('the session dev-dashboard captured', () => {
+    it('is read as a token and cookie pair with its workspace', async () => {
+      writeCapturedSession(temp);
+
+      const captured = await readCapturedSession(temp.paths);
+
+      expect(captured).toMatchObject({
+        token: CAPTURED_TOKEN_SENTINEL,
+        cookie: CAPTURED_COOKIE_SENTINEL,
+        team_id: 'T0EXAMPLE1',
+        team_domain: 'example-team',
+      });
+    });
+
+    it('is absent when there is no file', async () => {
+      expect(await readCapturedSession(temp.paths)).toBeNull();
+    });
+
+    it('is refused when the token is an app token rather than a web-session token', async () => {
+      writeCapturedSession(temp, { token: TOKEN_SENTINEL });
+
+      expect(await readCapturedSession(temp.paths)).toBeNull();
+    });
+
+    it('is refused when the cookie is not a session cookie', async () => {
+      writeCapturedSession(temp, { cookie: 'not-a-session-cookie' });
+
+      expect(await readCapturedSession(temp.paths)).toBeNull();
+    });
+
+    it('is refused when the file is not valid JSON, and its contents stay out of the error', async () => {
+      fs.mkdirSync(temp.slackConfigDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(temp.dashboardSessionFile, `{"token": ${CAPTURED_TOKEN_SENTINEL}`, { mode: 0o600 });
+
+      const result = await settle(() => readCapturedSession(temp.paths));
+
+      expect(result.threw).toBe(false);
+      expect(result.value).toBeNull();
+    });
+
+    it('is never modified by the module store operations', async () => {
+      writeCapturedSession(temp);
+      const before = fs.readFileSync(temp.dashboardSessionFile, 'utf8');
+
+      await writeToken(temp.paths, tokenRecord());
+      await removeToken(temp.paths);
+
+      expect(fs.readFileSync(temp.dashboardSessionFile, 'utf8')).toBe(before);
+    });
+
+    it('is refused on read when it is a symbolic link', async () => {
+      const target = path.join(outside, 'captured.json');
+      fs.writeFileSync(target, JSON.stringify({ token: 'x', cookie: 'y' }), { mode: 0o600 });
+      fs.mkdirSync(temp.slackConfigDir, { recursive: true });
+      fs.symlinkSync(target, temp.dashboardSessionFile);
+
+      const result = await settle(() => readCapturedSession(temp.paths));
+
+      expect(result.threw).toBe(true);
+      expect(result.value ?? null).toBeNull();
+    });
+  });
+
   describe('the dashboard session file in the parent directory', () => {
-    it('is never read, rewritten or removed by any operation', async () => {
+    it('is never mistaken for this module\'s token, rewritten or removed', async () => {
       writeDashboardSession(temp);
       const before = fs.readFileSync(temp.dashboardSessionFile, 'utf8');
       const mtimeBefore = fs.statSync(temp.dashboardSessionFile).mtimeMs;

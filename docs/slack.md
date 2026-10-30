@@ -1,16 +1,23 @@
 # Slack module
 
-The Slack module gives AI agents ten tools to read Slack and, behind a preview-then-confirm gate, to post messages, add reactions and upload files. It runs as you: you create a small Slack app from a manifest shipped in this repo, approve it once in your own browser, and the module keeps a Slack user token. It can read only what you can read, and what it posts appears as sent by you. Nothing in the module names a workspace, so it works in any workspace.
+The Slack module gives AI agents ten tools to read Slack and, behind a preview-then-confirm gate, to post messages, add reactions and upload files. It runs as you, and there are two ways to give it your Slack identity:
 
-This guide is for the person setting it up and for agents using it. Setup takes four steps: create the app, write one config file, turn the module on, run `slack_login`.
+- **Reuse dev-dashboard's login (no Slack app).** `dev-dashboard` signs in to the Slack web client once and writes `~/.config/slack/session.json` — the web client's own `xoxc` token plus its `d` session cookie. `slack_login` adopts that pair, verifies it with `auth.test` and keeps its own copy. Nothing to register, and no browser step in this module.
+- **Log in with your own Slack app.** Create a small app from a manifest shipped in this repo and approve it once in your browser; the module keeps the resulting user token. Use this when there is no dev-dashboard session, or when you want a token Slack can revoke and whose scopes are fixed.
+
+Either way it can read only what you can read, and what it posts appears as sent by you. Nothing in the module names a workspace, so it works in any workspace.
+
+This guide is for the person setting it up and for agents using it. Choose a route in section 4; the app route also needs sections 2 and 3.
 
 ## 1. Turning it on
 
 The module is off by default. Set `SLACK_ENABLED=true` in the server's environment (the `.env` file, or the `env` block of your MCP client config) and restart the MCP client. Only the exact value `true` turns it on; unset, `false` or anything else registers no `slack_*` tool. When it is on, `mcp_get_health` reports `slack` as active.
 
-`SLACK_ENABLED` is the only Slack setting in the environment. The app's client id lives in its own file (section 3), never in `.env`.
+`SLACK_ENABLED` is the only required Slack setting in the environment. The app's client id lives in its own file (section 3), never in `.env`. `SLACK_SESSION_FILE` is optional: it moves the captured session the module reads from its default `~/.config/slack/session.json`.
 
 ## 2. Create and install the Slack app
+
+Skip this section and section 3 if you are using the dev-dashboard session (section 4).
 
 Slack only lets a login link return to `http://localhost` for an app that has PKCE turned on, so the manifest turns it on. Nothing in the manifest names a workspace.
 
@@ -47,9 +54,22 @@ chmod 600 ~/.config/slack/toolkit-mcp/app.json
 - The file holds the client id only, and nothing else is read from it.
 - It must be a regular file, not a symlink, with no group or world access (mode 600 in a directory of mode 700). Anything else makes the module answer `app_not_configured` and name the path.
 - It is never an environment variable, never in `.env`, and never committed.
-- The same directory holds `token.json`, the user token the module writes after login (mode 600, written atomically). Other files under `~/.config/slack/` belong to other tools and are never read, written or removed by this module.
+- The same directory holds `token.json`, the login the module writes after `slack_login` (mode 600, written atomically). Its parent also holds the session dev-dashboard captures, `~/.config/slack/session.json`, which the module reads when adopting that login and never writes, moves or removes.
 
 ## 4. Log in, check status, log out
+
+`slack_login` chooses the route by what it finds: nothing stored and a Slack web session in `~/.config/slack/session.json` means it adopts that; anything else starts the app login below.
+
+### Login from dev-dashboard's session
+
+1. In `dev-dashboard`, connect Slack once (its Settings, Slack, Connect). You sign in to the Slack web client in a browser and it writes `~/.config/slack/session.json` (mode 600) with the web client's `xoxc` token and its `d` cookie.
+2. Call `slack_login`, optionally with `workspace`. The module reads that file, copies the pair into `~/.config/slack/toolkit-mcp/token.json` (mode 600), and verifies it with `auth.test`. It returns `{state: "connected", user_id, team_id, team_domain, saved_at, next_step}`.
+3. The captured file is only ever read: never rewritten, moved or removed, so dev-dashboard keeps working.
+
+- Slack issued this pair to its web client, so calls go to `https://app.slack.com/api` with both `Authorization: Bearer <xoxc-token>` and `Cookie: d=<xoxd-cookie>`. Neither header works alone.
+- The session carries exactly your account's access, so there is no granted-scope list: a connected adopted session has no `scopes_missing`, and `slack_get_users` answers `email_unavailable: "not_set"` when Slack returns no address.
+- If Slack rejects the pair, the copy is removed immediately and the call reports `expired` with `invalid_auth`-style `reason`. Reconnect in dev-dashboard, then `slack_login` again.
+- `SLACK_SESSION_FILE` points the module at a different captured file; give it an absolute path, because a leading `~` is not expanded.
 
 ### Login by link
 
@@ -76,9 +96,9 @@ Other behavior:
 
 | `state` | Meaning | What comes with it |
 | --- | --- | --- |
-| `not_connected` | no token and no pending login | `app_configured`, plus the step: write the config file, or run `slack_login` |
-| `pending` | a login is waiting | `authorize_url`, `expires_at`, `completion` |
-| `connected` | a token is stored (and, with `verify`, accepted) | `user_id`, `team_id`, `team_domain`, `saved_at`, `scopes_missing` (normally empty) |
+| `not_connected` | nothing stored, no pending login | `app_configured`, `dashboard_session_available`, plus the step: run `slack_login` (or write the app config file, when no session is available) |
+| `pending` | an app login is waiting | `authorize_url`, `expires_at`, `completion` |
+| `connected` | a login is stored (and, with `verify`, accepted) | `user_id`, `team_id`, `team_domain`, `saved_at`, and `scopes_missing` only when the login was by app |
 | `expired` | Slack rejected the token, or the token file could not be read | `reason` (Slack's code, or a local one such as `symlink_refused`); the step is logout, then login |
 | `unverified` | a token is stored but Slack could not be reached | the step is to try again |
 
@@ -86,9 +106,10 @@ Every state carries a `next_step`.
 
 ### Logout
 
-`slack_logout` revokes the token with Slack and then deletes `token.json`. It also cancels any pending login. It returns `{state: "not_connected", revoked, removed, next_step}` and is safe to repeat.
+`slack_logout` deletes `token.json` and cancels any pending login. For an app token it revokes it at Slack first. It returns `{state: "not_connected", revoked, removed, next_step}` and is safe to repeat.
 
-- `revoke: false` keeps the token valid at Slack: no Slack call is made and only the local file is removed. Use it only if you want the token to keep working elsewhere.
+- A session adopted from dev-dashboard is only removed locally: Slack has no revoke endpoint for a web session, so `revoked` is `false` and the captured file is untouched. Reconnect in dev-dashboard to invalidate it there.
+- `revoke: false` keeps an app token valid at Slack: no Slack call is made and only the local file is removed. Use it only if you want the token to keep working elsewhere.
 - If the revoke call fails, the local file is still removed and the result has `revoked: false`. The `next_step` then tells you to remove the app in Slack's settings if the token should stop working.
 - `app.json` is never touched.
 
@@ -182,7 +203,7 @@ Each item may add `ref`. `destination` is a conversation id (`C`, `G` or `D` pre
 
 **Where it goes.** A conversation link means a top-level post. A message or thread link means a reply in that thread's root. A user link fails `wrong_link_kind`: paste the DM link instead, because opening a DM is itself a write.
 
-**Destination guard.** With a conversation id, `expected_destination` is required, or the call is refused as invalid input before anything is looked up. It is the channel name for a channel, the other person's user id or handle for a DM (yourself, for a DM with yourself), and the set of handles for a group DM, in any order. With a link it is optional because the link is your own pointer, but when given it is still checked. A mismatch fails the item `target_mismatch`.
+**Destination guard.** With a conversation id, `expected_destination` is required, or the call is refused as invalid input before anything is looked up. It is the channel name for a channel, the other person's user id or handle for a DM (yourself, for a DM with yourself), and the handles of the *other* members for a group DM, in any order — your own handle is not part of the set. A group DM reached by an id also reports its `type` as `mpim` in the preview, whatever its name. With a link it is optional because the link is your own pointer, but when given it is still checked. A mismatch fails the item `target_mismatch`.
 
 **Per-item checks.** The conversation must exist and not be archived (`channel_archived`), and a thread root must resolve (`thread_not_found`). Sends use `link_names` off, so only explicit `<@U0EXAMPLE01>`, `<!subteam^S0EXAMPLE01>`, `<!here>`, `<!channel>` and `<!everyone>` notify anyone.
 
@@ -227,7 +248,7 @@ The upload address Slack names in `get_upload_url` is checked before any byte is
 
 ## 8. Scopes per tool
 
-These are user-token scopes. The manifest requests exactly their union, and a test keeps the two equal.
+These are user-token scopes, and they apply to the app login only: an adopted web session carries your account's own access and has no scope list. For an app token, the manifest requests exactly their union, and a test keeps the two equal.
 
 | Tool | User scopes |
 | --- | --- |
@@ -286,20 +307,24 @@ Per-item errors appear in a result's `error` field, and the rest of the batch is
 
 Only you run this; agents never log in to a live Slack. It exercises every part once, against a place where a test post does no harm. Use a direct message only you will see, such as the conversation with yourself, and copy its link: copy the link of any message in it and remove everything from `/p` onward to get the conversation link (`https://example-team.slack.com/archives/D0EXAMPLE01` has that shape). The steps below call it "your own DM link".
 
-1. Create the app (section 2), write `app.json` (section 3), set `SLACK_ENABLED=true`, restart the MCP client.
-2. `slack_get_status` reports `not_connected` with `app_configured: true`.
-3. `slack_login`, open the link in your own browser, approve. The tab says the login finished. `slack_get_status` reports `connected` with an empty `scopes_missing`. This also confirms Slack accepted the localhost redirect.
+1. Connect either route: with dev-dashboard, connect Slack there once so `~/.config/slack/session.json` exists; otherwise create the app (section 2) and write `app.json` (section 3). Then set `SLACK_ENABLED=true` and restart the MCP client.
+2. `slack_get_status` reports `not_connected`, with `dashboard_session_available: true` on the dev-dashboard route or `app_configured: true` on the app route.
+3. `slack_login`. On the dev-dashboard route it returns `connected` at once and a stored `token.json` holds `access_token` (xoxc) and `cookie` (xoxd). On the app route, open the link in your own browser and approve; the tab says the login finished. Either way `slack_get_status` then reports `connected`, and the app route also shows an empty `scopes_missing`. The app route confirms Slack accepted the localhost redirect.
 4. Read: send `slack_get_threads` the link of a thread's root message and the link of one of its replies, from your own DM (or any thread you can read), in one call; both entries come back and the thread was fetched once. Then use a small `limit` (say 2) and continue with the returned `nextPageToken`. Pages arriving at normal speed also show Slack is not applying its reduced history limits to the app. Also read one reply by its own link with `slack_get_messages`: it must come back as that reply, not as the thread's root.
 5. Post: `slack_prepare_write` with one `post` item to your own DM link; check the preview; `slack_confirm_write`. The result has a permalink.
 6. React: prepare and confirm a `react` item on that post, using the permalink.
 7. Upload: prepare and confirm an `upload` item for a tiny harmless text file at an absolute path. Check that the preview shows the resolved path.
-8. `slack_logout`. `slack_get_status` reports `not_connected`, and the logout result has `revoked: true`.
+8. `slack_logout`. `slack_get_status` reports `not_connected`. The app route reports `revoked: true`; the dev-dashboard route reports `revoked: false` and leaves `~/.config/slack/session.json` unchanged.
 
 ## 11. Limits and what is not included
 
-Not included: reading file contents, canvases, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. Token rotation is off, so an expired or revoked token means logging in again. Every Slack behavior described here comes from Slack's documentation and from offline tests; the smoke test is the first live run.
+Not included: reading file contents, canvases, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. For an app login, token rotation is off, so an expired or revoked token means logging in again; an adopted web session can be rotated or signed out by Slack at any time, and then means reconnecting in dev-dashboard and running `slack_login` again. Every Slack behavior described here comes from Slack's documentation and from offline tests except the dev-dashboard capture, which was verified against a live workspace; the smoke test is the first live run in this module.
 
 ## 12. Troubleshooting
+
+**Status is `expired` right after adopting the dev-dashboard session.** Slack rejected the captured token and cookie — usually because the web session was signed out or rotated. The module removed its copy. Reconnect Slack in dev-dashboard, then run `slack_login`. `reason` carries Slack's own code.
+
+**`slack_login` starts an app login even though dev-dashboard is connected.** The captured file was not usable: it is missing, not valid JSON, or its `token` does not start with `xoxc-` / its `cookie` does not start with `xoxd-`. Only a real Slack web session is adopted, and the file is read from `~/.config/slack/session.json` unless `SLACK_SESSION_FILE` says otherwise. Reconnect in dev-dashboard and check that path.
 
 **The port is in use.** `slack_login` returns `completion: "paste"`. Either finish by paste (section 4), or stop whatever holds port 53682, call `slack_logout` (which cancels the pending login) and run `slack_login` again. The port is fixed because it is part of the app's redirect URL.
 

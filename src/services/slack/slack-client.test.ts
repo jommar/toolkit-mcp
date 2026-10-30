@@ -17,7 +17,17 @@ import { createTempHome, writeTokenFile, type TempHome } from './__fixtures__/te
 import { settle } from './__fixtures__/settle.js';
 import { recordDefaultAxiosRequestConfigs } from './__fixtures__/fix1-request-configs.js';
 import { settleWithRetryClock, useRealAxiosInstances } from './__fixtures__/fix1-retry-axios.js';
-import { CHANNEL_ID, EXAMPLE_TEAM, FILE_ID, ROOT_TS, TOKEN_SENTINEL, USER_ID } from './__fixtures__/synthetic.js';
+import {
+  CAPTURED_COOKIE_SENTINEL,
+  CAPTURED_TOKEN_SENTINEL,
+  CHANNEL_ID,
+  EXAMPLE_TEAM,
+  FILE_ID,
+  ROOT_TS,
+  TOKEN_SENTINEL,
+  tokenRecord,
+  USER_ID,
+} from './__fixtures__/synthetic.js';
 
 const UPLOAD_URL = 'https://example-team.slack.com/upload/EXAMPLE-UPLOAD-ID';
 
@@ -213,6 +223,18 @@ describe('SlackClient', () => {
         expect(Object.keys(requests[0].headers)).not.toContain('cookie');
       },
     );
+
+    it('calls the web client host with the d cookie when the session was adopted', async () => {
+      writeTokenFile(temp, tokenRecord({ access_token: CAPTURED_TOKEN_SENTINEL, cookie: CAPTURED_COOKIE_SENTINEL }));
+      const client = new SlackClient(temp.paths);
+
+      await client.authTest();
+
+      const [request] = axiosHarness.requestsFor('auth.test');
+      expect(request.url).toBe('https://app.slack.com/api/auth.test');
+      expect(request.headers.authorization).toBe(`Bearer ${CAPTURED_TOKEN_SENTINEL}`);
+      expect(request.headers.cookie).toBe(`d=${CAPTURED_COOKIE_SENTINEL}`);
+    });
 
     it('returns Slack\'s response body for a successful call', async () => {
       writeTokenFile(temp);

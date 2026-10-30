@@ -3,9 +3,12 @@ import os from 'node:os';
 import { ErrorCode, McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { readAppConfig } from '../../services/slack/app-config.js';
 import {
+  readCapturedSession,
   readToken,
   removeToken,
   slackPaths,
+  writeToken,
+  type CapturedSession,
   type SlackPaths,
   type TokenRecord,
 } from '../../services/slack/credential-store.js';
@@ -35,7 +38,12 @@ export interface StatusArgs {
 }
 
 export type SessionState =
-  | { state: 'not_connected'; app_configured: boolean; next_step: string }
+  | {
+      state: 'not_connected';
+      app_configured: boolean;
+      dashboard_session_available: boolean;
+      next_step: string;
+    }
   | {
       state: 'pending';
       authorize_url: string;
@@ -49,7 +57,7 @@ export type SessionState =
       team_id: string;
       team_domain: string;
       saved_at: string;
-      scopes_missing: string[];
+      scopes_missing?: string[];
       next_step: string;
     }
   | { state: 'expired'; team_domain?: string; reason: string; next_step: string }
@@ -67,6 +75,11 @@ type Check = { state: 'connected' } | { state: 'expired'; reason: string } | { s
 const CHECK_TTL_MS = 60 * 1000;
 const REQUIRED_SCOPES: readonly string[] = [...new Set(Object.values(TOOL_SCOPES).flat())];
 const LOGIN_STEP = 'Call slack_login to connect a workspace.';
+const ADOPT_STEP =
+  'Connect Slack in dev-dashboard (it writes ~/.config/slack/session.json), then call slack_login to use ' +
+  'that session here.';
+const STALE_SESSION_STEP =
+  'The captured session no longer works. Reconnect Slack in dev-dashboard, then call slack_login again.';
 const READ_STEP =
   'Read Slack with slack_search_messages, slack_get_messages, slack_get_threads or slack_get_channels.';
 const CALLBACK_PENDING_STEP =
@@ -118,17 +131,75 @@ async function login(ctx: SessionToolContext, paths: SlackPaths, args: LoginArgs
     return storedSessionState(ctx, stored, true);
   }
 
+  // Nothing of our own is stored, so adopt the web session dev-dashboard already captured, if there is one.
+  const captured = await readCapturedSession(paths);
+  if (captured) return adoptCapturedSession(ctx, paths, captured, args.workspace);
+
   const pending = ctx.oauth.getPendingLogin() ?? (await ctx.oauth.startLogin({ workspace: args.workspace }));
   return pendingState(pending);
 }
 
+/**
+ * Takes the xoxc token and d cookie dev-dashboard captured as this module's login. The copy is verified
+ * before it is trusted, and a rejected copy is removed rather than left looking connected.
+ */
+async function adoptCapturedSession(
+  ctx: SessionToolContext,
+  paths: SlackPaths,
+  captured: CapturedSession,
+  workspace: string | undefined,
+): Promise<SessionState> {
+  if (workspace !== undefined && !namesWorkspace(workspace, captured)) {
+    throw slackError(
+      'signed_in_elsewhere',
+      `The captured Slack session is signed in to ${describeTeam(captured)}. Call slack_login without a ` +
+        'workspace to use it, or connect another workspace in dev-dashboard.',
+    );
+  }
+
+  const adopted: TokenRecord = {
+    access_token: captured.token,
+    cookie: captured.cookie,
+    team_id: captured.team_id,
+    team_domain: captured.team_domain,
+    team_url: captured.team_domain ? `https://${captured.team_domain}.slack.com/` : '',
+    user_id: '',
+    saved_at: captured.saved_at,
+  };
+  await writeToken(paths, adopted);
+
+  let identity: { team_id?: string; user_id?: string; url?: string };
+  try {
+    identity = await ctx.slack.authTest();
+  } catch (error) {
+    if (codeOf(error) !== 'session_rejected') {
+      return { state: 'unverified', team_domain: adopted.team_domain, next_step: UNVERIFIED_STEP };
+    }
+    await removeToken(paths);
+    return {
+      state: 'expired',
+      team_domain: adopted.team_domain,
+      reason: stringField(error, 'slack_code') ?? codeOf(error),
+      next_step: STALE_SESSION_STEP,
+    };
+  }
+
+  const confirmed: TokenRecord = {
+    ...adopted,
+    team_id: identity.team_id || adopted.team_id,
+    team_domain: domainOfUrl(identity.url) || adopted.team_domain,
+    user_id: identity.user_id || adopted.user_id,
+  };
+  await writeToken(paths, confirmed);
+  return connectedState(confirmed);
+}
+
 async function logout(ctx: SessionToolContext, paths: SlackPaths, args: LogoutArgs): Promise<LogoutResult> {
   ctx.oauth.cancelLogin();
-  const hadToken = await access(paths.tokenFile).then(
-    () => true,
-    () => false,
-  );
-  const attempted = hadToken && args.revoke !== false;
+  const stored = await readToken(paths).catch(() => null);
+  const hadToken = stored !== null || (await exists(paths.tokenFile));
+  // Slack can revoke an app token it issued; a session adopted from the web client has no such endpoint.
+  const attempted = hadToken && !stored?.cookie && args.revoke !== false;
   const revoked = attempted && (await revokeStoredToken(ctx));
   await removeToken(paths);
   return {
@@ -137,6 +208,13 @@ async function logout(ctx: SessionToolContext, paths: SlackPaths, args: LogoutAr
     removed: hadToken ? ['token.json'] : [],
     next_step: attempted && !revoked ? UNREVOKED_STEP : LOGIN_STEP,
   };
+}
+
+async function exists(target: string): Promise<boolean> {
+  return access(target).then(
+    () => true,
+    () => false,
+  );
 }
 
 // Status never throws: every failure to read or check the session becomes one of its states.
@@ -190,17 +268,18 @@ async function authCheck(ctx: SessionToolContext): Promise<Check> {
 }
 
 function connectedState(stored: TokenRecord): SessionState {
-  const granted = new Set<string>(stored.scopes);
-  const missing = REQUIRED_SCOPES.filter((scope) => !granted.has(scope));
-  return {
-    state: 'connected',
+  const base = {
+    state: 'connected' as const,
     user_id: stored.user_id,
     team_id: stored.team_id,
     team_domain: stored.team_domain,
     saved_at: stored.saved_at,
-    scopes_missing: missing,
-    next_step: missing.length === 0 ? READ_STEP : scopesStep(missing),
   };
+  // A web session has no granted-scope list: it carries exactly the account's own access.
+  if (!stored.scopes) return { ...base, next_step: READ_STEP };
+  const granted = new Set<string>(stored.scopes);
+  const missing = REQUIRED_SCOPES.filter((scope) => !granted.has(scope));
+  return { ...base, scopes_missing: missing, next_step: missing.length === 0 ? READ_STEP : scopesStep(missing) };
 }
 
 function scopesStep(missing: string[]): string {
@@ -218,12 +297,23 @@ function pendingState(pending: Omit<PendingLoginView, 'next_step'>): SessionStat
 }
 
 async function notConnectedState(paths: SlackPaths): Promise<SessionState> {
+  const captured = await readCapturedSession(paths).catch(() => null);
   try {
     await readAppConfig(paths);
-    return { state: 'not_connected', app_configured: true, next_step: LOGIN_STEP };
+    return {
+      state: 'not_connected',
+      app_configured: true,
+      dashboard_session_available: captured !== null,
+      next_step: captured ? ADOPT_STEP : LOGIN_STEP,
+    };
   } catch (error) {
     const nextStep = stringField(error, 'next_step') ?? `Check ${paths.appFile}, then see docs/slack.md.`;
-    return { state: 'not_connected', app_configured: false, next_step: nextStep };
+    return {
+      state: 'not_connected',
+      app_configured: false,
+      dashboard_session_available: captured !== null,
+      next_step: captured ? ADOPT_STEP : nextStep,
+    };
   }
 }
 
@@ -238,12 +328,24 @@ async function revokeStoredToken(ctx: SessionToolContext): Promise<boolean> {
 
 // Takes the same forms slack_login takes (team id, domain, host or workspace URL). On a slack.com host the
 // first label is the workspace, plain or Enterprise Grid alike.
-function namesWorkspace(workspace: string, stored: TokenRecord): boolean {
+function namesWorkspace(workspace: string, stored: { team_id: string; team_domain: string }): boolean {
   const value = workspace.trim();
-  if (value === stored.team_id) return true;
+  if (stored.team_id && value === stored.team_id) return true;
   const host = value.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
   const domain = /\.slack\.com$/.test(host) ? host.split('.')[0] : host;
   return domain === stored.team_domain;
+}
+
+function describeTeam(captured: CapturedSession): string {
+  return captured.team_domain || captured.team_id || 'another workspace';
+}
+
+// auth.test reports the workspace as a URL; its first label is the domain, Grid hosts included.
+function domainOfUrl(url: unknown): string | undefined {
+  if (typeof url !== 'string') return undefined;
+  const host = url.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
+  if (!host.endsWith('.slack.com')) return undefined;
+  return host.split('.')[0] || undefined;
 }
 
 async function settle<T>(action: () => Promise<T>): Promise<T> {
