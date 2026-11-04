@@ -214,7 +214,34 @@ describe('JiraModule', () => {
       mockJira.addComment.mockResolvedValue({ id: '48838' });
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
       await handlers.jira_add_comment({ key: 'TAP-1', body: 'hi', parentId: '48106' });
-      expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'hi', '48106');
+      expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'hi', '48106', 'text');
+    });
+
+    it('jira_add_comment defaults format to text and forwards an explicit one', async () => {
+      mockJira.addComment.mockResolvedValue({ id: '1' });
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_add_comment({ key: 'TAP-1', body: 'hi' });
+      await handlers.jira_add_comment({ key: 'TAP-1', body: '# hi', format: 'markdown' });
+      expect(mockJira.addComment).toHaveBeenNthCalledWith(1, 'TAP-1', 'hi', undefined, 'text');
+      expect(mockJira.addComment).toHaveBeenNthCalledWith(2, 'TAP-1', '# hi', undefined, 'markdown');
+    });
+
+    it('jira_update_comment defaults format to text and forwards an explicit one', async () => {
+      mockJira.updateComment.mockResolvedValue({ id: '2' });
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await handlers.jira_update_comment({ key: 'TAP-1', commentId: '2', body: 'hi' });
+      await handlers.jira_update_comment({ key: 'TAP-1', commentId: '2', body: '{}', format: 'adf' });
+      expect(mockJira.updateComment).toHaveBeenNthCalledWith(1, 'TAP-1', '2', 'hi', 'text');
+      expect(mockJira.updateComment).toHaveBeenNthCalledWith(2, 'TAP-1', '2', '{}', 'adf');
+    });
+
+    it.each(['jira_add_comment', 'jira_update_comment'])('%s rejects an unknown format without writing', async (tool) => {
+      const handlers = mod.createToolHandlers({ jira: mockJira as any });
+      await expect(
+        handlers[tool]({ key: 'TAP-1', commentId: '2', body: 'hi', format: 'html' }),
+      ).rejects.toThrow();
+      expect(mockJira.addComment).not.toHaveBeenCalled();
+      expect(mockJira.updateComment).not.toHaveBeenCalled();
     });
 
     it('jira_add_comment rejects a non-numeric parentId without posting', async () => {

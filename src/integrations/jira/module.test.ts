@@ -860,7 +860,7 @@ describe('jiraAddCommentHandler', () => {
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-1', body: 'Thanks!' });
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!');
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', undefined, undefined);
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 
@@ -871,7 +871,7 @@ describe('jiraAddCommentHandler', () => {
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-1', body: 'Thanks!', parentId: '48106' });
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', '48106');
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', '48106', undefined);
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 });
@@ -891,7 +891,7 @@ describe('jiraUpdateCommentHandler', () => {
     const handler = jiraUpdateCommentHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-799', commentId: '38560', body: 'Revised.' });
 
-    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-799', '38560', 'Revised.');
+    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-799', '38560', 'Revised.', undefined);
     expect(JSON.parse(result.content[0].text)).toEqual(comment);
   });
 });
@@ -926,6 +926,105 @@ describe('comment body schemas', () => {
     ['jiraUpdateCommentSchema', jiraUpdateCommentSchema],
   ])('%s documents the mention token syntax', (_name, schema) => {
     expect(schema.shape.body.description).toContain('[~accountid:<accountId>]');
+  });
+});
+
+describe('comment format', () => {
+  const commentSchemas = [
+    ['jiraAddCommentSchema', jiraAddCommentSchema, { key: 'TAP-1', body: 'hi' }],
+    ['jiraUpdateCommentSchema', jiraUpdateCommentSchema, { key: 'TAP-1', commentId: '38560', body: 'hi' }],
+  ] as const;
+  const commentTools = ['jira_add_comment', 'jira_update_comment'];
+  const tableExample = '| A | B |\\n|---|---|\\n| 1 | 2 |';
+
+  it.each(commentSchemas)('%s defaults format to text when omitted', (_name, schema, base) => {
+    expect(schema.parse(base).format).toBe('text');
+  });
+
+  it.each(commentSchemas)('%s accepts text, markdown and adf', (_name, schema, base) => {
+    for (const format of ['text', 'markdown', 'adf']) {
+      expect(schema.parse({ ...base, format }).format).toBe(format);
+    }
+  });
+
+  it.each(commentSchemas)('%s rejects an unknown format', (_name, schema, base) => {
+    for (const format of ['html', 'Markdown', 'ADF', 'storage', '', 1, null]) {
+      expect(schema.safeParse({ ...base, format }).success).toBe(false);
+    }
+  });
+
+  it('shares one format schema between the add and update tools', () => {
+    expect(jiraAddCommentSchema.shape.format).toBe(jiraUpdateCommentSchema.shape.format);
+  });
+
+  it.each(commentTools)('%s advertises format as an optional enum defaulting to text', (name) => {
+    const descriptor = jiraToolDescriptors.find((d) => d.name === name)!;
+    const schema = descriptor.inputSchema as {
+      properties: Record<string, { enum?: string[]; default?: string; description: string }>;
+      required?: string[];
+    };
+
+    expect(schema.properties.format.enum).toEqual(['text', 'markdown', 'adf']);
+    expect(schema.properties.format.default).toBe('text');
+    expect(schema.required).not.toContain('format');
+  });
+
+  it.each(commentTools)('%s description states the three formats, the plain text default and a table example', (name) => {
+    const { description } = jiraToolDescriptors.find((d) => d.name === name)!;
+
+    expect(description).toContain('"text" (default, plain text)');
+    expect(description).toContain('"markdown"');
+    expect(description).toContain('"adf"');
+    expect(description).toContain(tableExample);
+  });
+
+  it('leaves the other Jira tools without a format parameter', () => {
+    for (const descriptor of jiraToolDescriptors.filter((d) => !commentTools.includes(d.name))) {
+      expect(descriptor.inputSchema).not.toHaveProperty('properties.format');
+    }
+  });
+
+  it('keeps the transition and create descriptions unchanged', () => {
+    const description = (name: string) => jiraToolDescriptors.find((d) => d.name === name)!.description;
+
+    expect(description('jira_transition_issue')).toBe('Transition a Jira issue to a new status.');
+    expect(description('jira_create_issue')).toBe('Create a new Jira issue in a project.');
+  });
+
+  it('jira_add_comment forwards the format to the client', async () => {
+    const mockJira = makeMockJira();
+    mockJira.addComment.mockResolvedValue({ id: '1' });
+
+    await jiraAddCommentHandler({ jira: mockJira as any })({ key: 'TAP-1', body: '# Hi', format: 'markdown' });
+    await jiraAddCommentHandler({ jira: mockJira as any })({
+      key: 'TAP-1',
+      body: '{"type":"doc","version":1,"content":[]}',
+      format: 'adf',
+      parentId: '48106',
+    });
+
+    expect(mockJira.addComment).toHaveBeenNthCalledWith(1, 'TAP-1', '# Hi', undefined, 'markdown');
+    expect(mockJira.addComment).toHaveBeenNthCalledWith(
+      2,
+      'TAP-1',
+      '{"type":"doc","version":1,"content":[]}',
+      '48106',
+      'adf',
+    );
+  });
+
+  it('jira_update_comment forwards the format to the client', async () => {
+    const mockJira = makeMockJira();
+    mockJira.updateComment.mockResolvedValue({ id: '38560' });
+
+    await jiraUpdateCommentHandler({ jira: mockJira as any })({
+      key: 'TAP-1',
+      commentId: '38560',
+      body: '- a',
+      format: 'markdown',
+    });
+
+    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-1', '38560', '- a', 'markdown');
   });
 });
 

@@ -109,12 +109,28 @@ export const jiraAssignIssueSchema = z.object({
     .describe('AccountId, "me", or "none" (default "me").'),
 });
 
+const jiraCommentFormatSchema = z
+  .enum(['text', 'markdown', 'adf'])
+  .optional()
+  .default('text')
+  .describe(
+    'Format of `body`: "text" is plain text (default; only `[~accountid:<accountId>]` mentions are converted); ' +
+      '"markdown" is converted to rich text — paragraphs, headings, bold, italic, inline code, links, ' +
+      'bullet/ordered lists (nestable), fenced code blocks, blockquotes, rules and GFM pipe tables, with ' +
+      'single newlines kept as line breaks and mentions still converted; ' +
+      '"adf" is a JSON string of a complete ADF document ({"type":"doc","version":1,"content":[...]}), ' +
+      'sent unchanged with no mention conversion — use it for colours, status lozenges and panels.',
+  );
+
 export const jiraAddCommentSchema = z.object({
   key: z.string().max(20).describe('Issue key to comment on.'),
   body: z
     .string()
     .max(65536)
-    .describe('Comment body (plain text). Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`).'),
+    .describe(
+      'Comment body — see `format` for the accepted representation. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
+    ),
+  format: jiraCommentFormatSchema,
   parentId: z
     .string()
     .max(30)
@@ -130,8 +146,9 @@ export const jiraUpdateCommentSchema = z.object({
     .string()
     .max(65536)
     .describe(
-      'New comment body (plain text) — replaces the existing content. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`).',
+      'New comment body, replacing the existing content — see `format` for the accepted representation. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
     ),
+  format: jiraCommentFormatSchema,
 });
 
 export const jiraLinkIssuesSchema = z.object({
@@ -390,15 +407,13 @@ export const jiraAssignIssueHandler: ToolHandler<z.infer<typeof jiraAssignIssueS
 
 export const jiraAddCommentHandler: ToolHandler<z.infer<typeof jiraAddCommentSchema>> =
   (_clients) => async (args) => {
-    const comment = args.parentId
-      ? await _clients.jira.addComment(args.key, args.body, args.parentId)
-      : await _clients.jira.addComment(args.key, args.body);
+    const comment = await _clients.jira.addComment(args.key, args.body, args.parentId, args.format);
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 
 export const jiraUpdateCommentHandler: ToolHandler<z.infer<typeof jiraUpdateCommentSchema>> =
   (_clients) => async (args) => {
-    const comment = await _clients.jira.updateComment(args.key, args.commentId, args.body);
+    const comment = await _clients.jira.updateComment(args.key, args.commentId, args.body, args.format);
     return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
   };
 
@@ -531,6 +546,11 @@ export const jiraLinkIssuesHandler: ToolHandler<z.infer<typeof jiraLinkIssuesSch
     };
   };
 
+const COMMENT_FORMAT_HINT =
+  '`format` is "text" (default, plain text), ' +
+  '"markdown" (rich text: headings, bold, lists, code, links and tables, e.g. "| A | B |\\n|---|---|\\n| 1 | 2 |") ' +
+  'or "adf" (a complete ADF JSON document, sent unchanged)';
+
 /** All tool descriptors for the ListToolsRequestSchema response. */
 export const jiraToolDescriptors = [
   {
@@ -565,12 +585,12 @@ export const jiraToolDescriptors = [
   },
   {
     name: 'jira_add_comment',
-    description: 'Add a comment to a Jira issue.',
+    description: `Add a comment to a Jira issue; ${COMMENT_FORMAT_HINT}.`,
     inputSchema: zodToJsonSchema(jiraAddCommentSchema),
   },
   {
     name: 'jira_update_comment',
-    description: 'Update an existing comment on a Jira issue.',
+    description: `Update an existing comment on a Jira issue; ${COMMENT_FORMAT_HINT}.`,
     inputSchema: zodToJsonSchema(jiraUpdateCommentSchema),
   },
   {

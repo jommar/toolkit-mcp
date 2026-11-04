@@ -2,6 +2,10 @@ import axios, { AxiosInstance, isAxiosError } from 'axios';
 import { JiraConfig, loadConfig } from '../config.js';
 import { DEV_FIELDS, SlimIssue, toSlimIssue, toSlimComment } from '../slim.js';
 import { installRetry } from '../http-retry.js';
+import { markdownToAdf, splitMentions } from './markdown-to-adf.js';
+import type { AdfDocument } from './markdown-to-adf.js';
+
+export type CommentFormat = 'text' | 'markdown' | 'adf';
 
 export interface JiraUser {
   accountId: string;
@@ -194,20 +198,30 @@ export class JiraClient {
     await this.http.put(`/issue/${encodeURIComponent(key)}`, { fields });
   }
 
-  /** Add a comment (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. Pass `parentId` to reply in that comment's thread. */
-  async addComment(key: string, body: string, parentId?: string): Promise<{ id: string }> {
+  /** Add a comment (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). Pass `parentId` to reply in that comment's thread. */
+  async addComment(
+    key: string,
+    body: string,
+    parentId?: string,
+    format: CommentFormat = 'text',
+  ): Promise<{ id: string }> {
     const { data } = await this.http.post<{ id: string }>(
       `/issue/${encodeURIComponent(key)}/comment`,
-      { body: toCommentAdf(body), ...(parentId ? { parentId } : {}) },
+      { body: toCommentBody(body, format), ...(parentId ? { parentId } : {}) },
     );
     return data;
   }
 
-  /** Replace an existing comment's body (wrapped in Atlassian Document Format); `[~accountid:<id>]` tokens become mentions. */
-  async updateComment(key: string, commentId: string, body: string): Promise<{ id: string }> {
+  /** Replace an existing comment's body (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). */
+  async updateComment(
+    key: string,
+    commentId: string,
+    body: string,
+    format: CommentFormat = 'text',
+  ): Promise<{ id: string }> {
     const { data } = await this.http.put<{ id: string }>(
       `/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`,
-      { body: toCommentAdf(body) },
+      { body: toCommentBody(body, format) },
     );
     return data;
   }
@@ -331,20 +345,34 @@ function toAdf(text: string) {
   };
 }
 
-const MENTION_TOKEN = /\[~accountid:([^\]]+)\]/g;
-
 /** Like toAdf, but turns `[~accountid:<id>]` tokens into ADF mention nodes. */
 function toCommentAdf(text: string) {
-  const content: unknown[] = [];
-  let cursor = 0;
-  for (const match of text.matchAll(MENTION_TOKEN)) {
-    if (match.index > cursor) content.push({ type: 'text', text: text.slice(cursor, match.index) });
-    content.push({ type: 'mention', attrs: { id: match[1] } });
-    cursor = match.index + match[0].length;
-  }
+  const content = splitMentions(text);
   if (!content.length) return toAdf(text);
-  if (cursor < text.length) content.push({ type: 'text', text: text.slice(cursor) });
   return { type: 'doc', version: 1, content: [{ type: 'paragraph', content }] };
+}
+
+const ADF_DOCUMENT_SHAPE = '{"type":"doc","version":1,"content":[...]}';
+
+/** Parse a JSON string into an ADF document, checking only its outer shape. */
+function parseAdfDocument(body: string): AdfDocument {
+  let doc: Partial<AdfDocument> | null;
+  try {
+    doc = JSON.parse(body);
+  } catch {
+    throw new Error(`Invalid ADF body: not valid JSON, expected ${ADF_DOCUMENT_SHAPE}.`);
+  }
+  if (doc?.type !== 'doc' || doc.version !== 1 || !Array.isArray(doc.content)) {
+    throw new Error(`Invalid ADF body: expected a document like ${ADF_DOCUMENT_SHAPE}.`);
+  }
+  return doc as AdfDocument;
+}
+
+/** Build a comment's ADF body: `text` wraps the string (mention tokens only), `markdown` converts it, `adf` passes a validated document through. */
+function toCommentBody(body: string, format: CommentFormat) {
+  if (format === 'markdown') return markdownToAdf(body);
+  if (format === 'adf') return parseAdfDocument(body);
+  return toCommentAdf(body);
 }
 
 /** Turn an axios error into a concise, readable message (status + Jira error body). */

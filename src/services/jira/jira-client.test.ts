@@ -921,4 +921,229 @@ describe('JiraClient', () => {
       });
     });
   });
+
+  describe('comment formats', () => {
+    const accountId = '712020:e130b750-b09b-4d24-95b9-d72d503e4911';
+    const plainTextDoc = (text: string) => ({
+      type: 'doc',
+      version: 1,
+      content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+    });
+    const markdownBody = [
+      '## Result',
+      '',
+      '| AC | Result |',
+      '| -- | ------ |',
+      `| **AC1** | PASS [~accountid:${accountId}] |`,
+    ].join('\n');
+    const markdownDoc = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Result' }] },
+        {
+          type: 'table',
+          attrs: { isNumberColumnEnabled: false, layout: 'default' },
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'AC' }] }] },
+                { type: 'tableHeader', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Result' }] }] },
+              ],
+            },
+            {
+              type: 'tableRow',
+              content: [
+                {
+                  type: 'tableCell',
+                  content: [
+                    { type: 'paragraph', content: [{ type: 'text', text: 'AC1', marks: [{ type: 'strong' }] }] },
+                  ],
+                },
+                {
+                  type: 'tableCell',
+                  content: [
+                    {
+                      type: 'paragraph',
+                      content: [
+                        { type: 'text', text: 'PASS ' },
+                        { type: 'mention', attrs: { id: accountId } },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const adfDoc = {
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'panel',
+          attrs: { panelType: 'info' },
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: `kept as is [~accountid:${accountId}]`, marks: [{ type: 'textColor', attrs: { color: '#ff0000' } }] },
+                { type: 'status', attrs: { text: 'PASS', color: 'green', localId: 'abc' } },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    describe('text (default)', () => {
+      const markdownLooking = '# Not a heading\n**not bold** | a | b |\n- not a list';
+
+      it.each([
+        ['omitted', undefined],
+        ['text', 'text' as const],
+      ])('addComment with format %s sends the plain-text ADF, ignoring markdown syntax', async (_label, format) => {
+        http.post.mockResolvedValueOnce({ data: { id: '1' } });
+
+        await new JiraClient().addComment('TAP-1', markdownLooking, undefined, format);
+
+        expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', { body: plainTextDoc(markdownLooking) });
+      });
+
+      it.each([
+        ['omitted', undefined],
+        ['text', 'text' as const],
+      ])('updateComment with format %s sends the plain-text ADF, ignoring markdown syntax', async (_label, format) => {
+        http.put.mockResolvedValueOnce({ data: { id: '2' } });
+
+        await new JiraClient().updateComment('TAP-1', '2', markdownLooking, format);
+
+        expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/comment/2', { body: plainTextDoc(markdownLooking) });
+      });
+
+      it('still converts mention tokens with an explicit text format', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '1' } });
+
+        await new JiraClient().addComment('TAP-1', `Hi [~accountid:${accountId}]`, undefined, 'text');
+
+        expect(http.post.mock.calls[0][1].body).toEqual({
+          type: 'doc',
+          version: 1,
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Hi ' },
+                { type: 'mention', attrs: { id: accountId } },
+              ],
+            },
+          ],
+        });
+      });
+
+      it('produces byte-identical JSON whether format is omitted or text', async () => {
+        http.post.mockResolvedValue({ data: { id: '1' } });
+        const body = `Line one\nLine two [~accountid:${accountId}] **x**`;
+
+        await new JiraClient().addComment('TAP-1', body);
+        await new JiraClient().addComment('TAP-1', body, undefined, 'text');
+
+        const [omitted, explicit] = http.post.mock.calls.map((call) => JSON.stringify(call[1]));
+        expect(explicit).toBe(omitted);
+      });
+    });
+
+    describe('markdown', () => {
+      it('addComment sends the converted ADF', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '1' } });
+
+        const result = await new JiraClient().addComment('TAP-1', markdownBody, undefined, 'markdown');
+
+        expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', { body: markdownDoc });
+        expect(result.id).toBe('1');
+      });
+
+      it('addComment sends the converted ADF alongside parentId when replying', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '3' } });
+
+        await new JiraClient().addComment('TAP-1', markdownBody, '48106', 'markdown');
+
+        expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', { body: markdownDoc, parentId: '48106' });
+      });
+
+      it('updateComment sends the converted ADF', async () => {
+        http.put.mockResolvedValueOnce({ data: { id: '2' } });
+
+        const result = await new JiraClient().updateComment('TAP-1', '2', markdownBody, 'markdown');
+
+        expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/comment/2', { body: markdownDoc });
+        expect(result.id).toBe('2');
+      });
+    });
+
+    describe('adf', () => {
+      it('addComment sends the passed document unchanged, without converting mention tokens', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '1' } });
+
+        await new JiraClient().addComment('TAP-1', JSON.stringify(adfDoc), undefined, 'adf');
+
+        expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', { body: adfDoc });
+      });
+
+      it('addComment sends parentId alongside the passed document when replying', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '3' } });
+
+        await new JiraClient().addComment('TAP-1', JSON.stringify(adfDoc), '48106', 'adf');
+
+        expect(http.post).toHaveBeenCalledWith('/issue/TAP-1/comment', { body: adfDoc, parentId: '48106' });
+      });
+
+      it('updateComment sends the passed document unchanged', async () => {
+        http.put.mockResolvedValueOnce({ data: { id: '2' } });
+
+        await new JiraClient().updateComment('TAP-1', '2', JSON.stringify(adfDoc), 'adf');
+
+        expect(http.put).toHaveBeenCalledWith('/issue/TAP-1/comment/2', { body: adfDoc });
+      });
+
+      it('checks only the outer shape of the document', async () => {
+        http.post.mockResolvedValueOnce({ data: { id: '1' } });
+        const unusual = { type: 'doc', version: 1, content: [{ type: 'someFutureNode', attrs: { x: 1 } }] };
+
+        await new JiraClient().addComment('TAP-1', JSON.stringify(unusual), undefined, 'adf');
+
+        expect(http.post.mock.calls[0][1].body).toEqual(unusual);
+      });
+
+      it.each([
+        ['text that is not JSON', 'just words'],
+        ['an unterminated JSON string', '{"type":"doc"'],
+        ['JSON null', 'null'],
+        ['a JSON array', '[]'],
+        ['a JSON string', '"doc"'],
+        ['a node that is not a doc', '{"type":"paragraph","version":1,"content":[]}'],
+        ['a doc without a version', '{"type":"doc","content":[]}'],
+        ['a doc with another version', '{"type":"doc","version":2,"content":[]}'],
+        ['a doc without content', '{"type":"doc","version":1}'],
+        ['a doc whose content is not an array', '{"type":"doc","version":1,"content":{}}'],
+      ])('rejects %s before sending any request', async (_label, body) => {
+        const client = new JiraClient();
+
+        await expect(client.addComment('TAP-1', body, undefined, 'adf')).rejects.toThrow(/^Invalid ADF body: /);
+        await expect(client.updateComment('TAP-1', '2', body, 'adf')).rejects.toThrow(/^Invalid ADF body: /);
+
+        expect(http.post).not.toHaveBeenCalled();
+        expect(http.put).not.toHaveBeenCalled();
+      });
+
+      it('names the expected document shape in the error', async () => {
+        await expect(new JiraClient().addComment('TAP-1', '[]', undefined, 'adf')).rejects.toThrow(
+          '{"type":"doc","version":1,"content":[...]}',
+        );
+      });
+    });
+  });
 });

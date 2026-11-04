@@ -164,7 +164,7 @@ Exactly one sentence. Concise. No filler.
 | `jira_create_issue` | "Create a new Jira issue in a project." |
 | `jira_update_issue` | "Update fields on an existing Jira issue." |
 | `jira_transition_issue` | "Transition a Jira issue to a new status." |
-| `jira_add_comment` | "Add a comment to a Jira issue." |
+| `jira_add_comment` | "Add a comment to a Jira issue; `format` is "text" (default, plain text), "markdown" (rich text: headings, bold, lists, code, links and tables, e.g. "\| A \| B \|\n\|---\|---\|\n\| 1 \| 2 \|") or "adf" (a complete ADF JSON document, sent unchanged)." |
 | `github_get_prs` | "Find pull requests for one or more issue keys." |
 | `github_create_pr` | "Create a pull request from a branch." |
 | `github_add_pr_comment` | "Add an issue-level comment to a pull request." |

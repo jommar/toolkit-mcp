@@ -84,9 +84,25 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | `jira_update_issue` | Update fields on an existing Jira issue. | `key`, `fields` and/or `components` |
 | `jira_transition_issue` | Transition a Jira issue to a new status. | `key`, `transitionId` or `transitionName`, `comment` |
 | `jira_assign_issue` | Assign a Jira issue to a user or unassign it. | `key`, `assignee` (accountId, "me", or "none") |
-| `jira_add_comment` | Add a comment to a Jira issue. | `key`, `body`, `parentId` |
-| `jira_update_comment` | Update an existing comment on a Jira issue. | `key`, `commentId`, `body` |
+| `jira_add_comment` | Add a comment to a Jira issue — plain text by default, or rich text through `format` (see [Jira comment formats](#jira-comment-formats)). | `key`, `body`, `format`, `parentId` |
+| `jira_update_comment` | Update an existing comment on a Jira issue — plain text by default, or rich text through `format` (see [Jira comment formats](#jira-comment-formats)). | `key`, `commentId`, `body`, `format` |
 | `jira_link_issues` | Link two Jira issues together. | `inwardKey`, `outwardKey`, `type`, `comment` |
+
+#### Jira comment formats
+
+`jira_add_comment` and `jira_update_comment` take an optional `format` that says how `body` is read:
+
+| `format` | `body` is | Result |
+|---|---|---|
+| `text` (default) | Plain text | One ADF paragraph, exactly as before; only `[~accountid:<id>]` tokens become mentions. Markdown syntax is not interpreted. |
+| `markdown` | Markdown (GFM) | Converted to ADF: paragraphs, headings, **bold**, *italic*, ~~strikethrough~~, `inline code`, links, bullet and ordered lists (nestable), fenced code blocks (with language), blockquotes, horizontal rules and pipe tables (header row becomes header cells). A single newline inside a paragraph is a line break, and `[~accountid:<id>]` tokens still become mentions in paragraphs, headings, list items and table cells. |
+| `adf` | A JSON string of a complete ADF document | Sent unchanged, with no mention conversion; the escape hatch for colours, status lozenges and panels. Only the outer shape is checked (`type: "doc"`, `version: 1`, `content` an array) and a bad document is rejected before any API call. |
+
+```json
+{"key":"TAP-1","format":"markdown","body":"**Result:** 2 pass\n\n| AC | Result |\n|---|---|\n| AC1 | PASS |\n| AC2 | NOT VERIFIED |"}
+```
+
+Markdown limits: images become links to their source, relative links are kept as plain text, task-list items stay bullets that start with `[ ]` or `[x]`, column alignment and raw HTML are not converted (HTML is kept as literal text, except `<br>`, which is a line break), and a heading, rule or table nested in a list item or blockquote is kept as a literal paragraph. Mentions cannot carry formatting, so a mention inside bold text is plain. Use `text` when a body should stay literal.
 
 ### GitHub Tools (registered when `GH_TOKEN` is set)
 
@@ -246,7 +262,7 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 
 ## Testing
 
-More than 1,200 tests across 48 test files using **vitest**:
+More than 1,200 tests across 49 test files using **vitest**:
 
 ```bash
 npm run test                 # Run all tests
@@ -327,7 +343,8 @@ src/
 │   ├── config.ts              # loadConfig() + dotenv (shared by Jira/GitHub)
 │   ├── slim.ts                # SlimIssue, toSlimIssue, adfToText
 │   ├── jira/
-│   │   └── jira-client.ts     # JiraClient class
+│   │   ├── jira-client.ts     # JiraClient class
+│   │   └── markdown-to-adf.ts # Markdown → ADF converter for Jira comments
 │   ├── github/
 │   │   └── github-client.ts   # GitHubClient class
 │   └── slack/                 # SlackClient, login by link, dev-dashboard session adoption, token store, links, cursors, batching, upload source
@@ -361,6 +378,7 @@ docs/
 - **@modelcontextprotocol/sdk** — MCP protocol implementation (server, transport, types).
 - **zod** — Schema validation for tool input parameters.
 - **axios** — HTTP client for Jira and GitHub API calls.
+- **marked** — Markdown lexer behind the `markdown` format of `jira_add_comment` / `jira_update_comment` (exact version pinned).
 - **dotenv** — Environment variable loading from `.env`.
 
 The Slack module adds no dependency: it uses axios for the Web API and Node's built-ins (`node:http` for the loopback login listener, `node:crypto`, `node:fs`).
