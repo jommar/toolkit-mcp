@@ -11,6 +11,7 @@ export const TOOL_SCOPES = {
   slack_get_threads: HISTORY_SCOPES,
   slack_get_channels: [...READ_SCOPES, 'search:read'],
   slack_get_users: ['users:read', 'users:read.email'],
+  slack_download_file: ['files:read'],
   slack_prepare_write: [...HISTORY_SCOPES, ...READ_SCOPES, 'users:read'],
   slack_confirm_write: ['chat:write', 'reactions:write', 'files:write'],
 } as const;

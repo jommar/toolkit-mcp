@@ -49,6 +49,13 @@ export async function inspectUploadFile(file: string): Promise<UploadInspection>
 }
 
 export async function openHashedStream(file: string): Promise<HashedStream> {
+  const { hasher, sha256 } = hashingTransform();
+  pipeline(createReadStream(file), hasher, () => undefined);
+  return { stream: hasher, sha256 };
+}
+
+/** A pass-through that hashes what flows through it; the digest settles when the stream ends or fails. */
+export function hashingTransform(): { hasher: Transform; sha256: Promise<string> } {
   const digest = createHash('sha256');
   const hasher = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -58,25 +65,27 @@ export async function openHashedStream(file: string): Promise<HashedStream> {
   });
   const sha256 = new Promise<string>((resolve, reject) => {
     hasher.once('end', () => resolve(digest.digest('hex')));
-    pipeline(createReadStream(file), hasher, (error) => {
-      if (error) reject(error);
-    });
+    hasher.once('error', reject);
   });
   // A caller may stop reading before awaiting the digest; the failure then surfaces through the stream.
   sha256.catch(() => undefined);
-  return { stream: hasher, sha256 };
+  return { hasher, sha256 };
 }
 
 async function resolveRegularFile(file: string): Promise<{ resolved_path: string; via_symlink: boolean }> {
-  if (!path.isAbsolute(file)) throw uploadRefusal('path_not_absolute', file, 'the path must be absolute');
+  requireAbsolutePath(file);
   const resolved_path = await realpath(file).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') throw uploadRefusal('path_not_found', file, 'no file exists at this path');
+    if (error.code === 'ENOENT') throw fileRefusal('path_not_found', file, 'no file exists at this path');
     throw error;
   });
   if (!(await stat(resolved_path)).isFile()) {
-    throw uploadRefusal('not_a_file', file, 'only regular files can be uploaded');
+    throw fileRefusal('not_a_file', file, 'only regular files can be uploaded');
   }
   return { resolved_path, via_symlink: (await lstat(file)).isSymbolicLink() };
+}
+
+export function requireAbsolutePath(file: string): void {
+  if (!path.isAbsolute(file)) throw fileRefusal('path_not_absolute', file, 'the path must be absolute');
 }
 
 function sniffType(name: string, head: Buffer): string {
@@ -96,6 +105,6 @@ function isUtf8(head: Buffer): boolean {
   }
 }
 
-function uploadRefusal(code: string, file: string, rule: string): Error {
+export function fileRefusal(code: string, file: string, rule: string): Error {
   return Object.assign(new Error(`${code}: ${file} (${rule})`), { code });
 }

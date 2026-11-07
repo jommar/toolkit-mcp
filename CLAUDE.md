@@ -214,7 +214,7 @@ All optional — tools only register if their env vars are present:
 | `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_TOKEN` | Jira | All Jira tools |
 | `GH_TOKEN` | GitHub | All GitHub tools / PR search |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (read-only) |
-| `SLACK_ENABLED` | Slack | All 10 Slack tools (exact value `true`); client id in `~/.config/slack/toolkit-mcp/app.json`, see `docs/slack.md` |
+| `SLACK_ENABLED` | Slack | All 11 Slack tools (exact value `true`); client id in `~/.config/slack/toolkit-mcp/app.json`, see `docs/slack.md` |
 | `MCP_TRANSPORT` | Server | Transport mode (`stdio` default, `http`) |
 | `MCP_PORT` | Server | HTTP port (default `3000`) |
 | `MCP_LOG_LEVEL` | Server | `silent` | `info` | `debug` |

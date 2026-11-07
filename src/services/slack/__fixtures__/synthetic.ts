@@ -47,6 +47,7 @@ export const ALL_USER_SCOPES = [
   'users:read.email',
   'chat:write',
   'reactions:write',
+  'files:read',
   'files:write',
 ] as const;
 

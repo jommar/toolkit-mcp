@@ -14,7 +14,9 @@ import {
   slackGetThreadsSchema,
   slackGetChannelsSchema,
   slackGetUsersSchema,
+  slackDownloadFileSchema,
 } from './module.js';
+import { slackDownloadFileHandler } from './download-tools.js';
 import {
   slackGetChannelsHandler,
   slackGetMessagesHandler,
@@ -56,6 +58,7 @@ export class SlackModule implements IntegrationModule<{ slack: SlackClient }> {
     const threads = asTextResult(slackGetThreadsHandler(reads));
     const channels = asTextResult(slackGetChannelsHandler(reads));
     const users = asTextResult(slackGetUsersHandler(reads));
+    const download = asTextResult(slackDownloadFileHandler(reads));
     const prepareWrite = slackPrepareWriteHandler(writes);
     const confirmWrite = slackConfirmWriteHandler(writes);
 
@@ -68,6 +71,7 @@ export class SlackModule implements IntegrationModule<{ slack: SlackClient }> {
       slack_get_threads: async (args) => threads(slackGetThreadsSchema.parse(args)),
       slack_get_channels: async (args) => channels(slackGetChannelsSchema.parse(args)),
       slack_get_users: async (args) => users(slackGetUsersSchema.parse(args)),
+      slack_download_file: async (args) => download(slackDownloadFileSchema.parse(args)),
       slack_prepare_write: prepareWrite,
       slack_confirm_write: confirmWrite,
     };

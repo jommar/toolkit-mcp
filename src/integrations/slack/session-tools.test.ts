@@ -135,6 +135,16 @@ describe('session tools', () => {
       expect(status.scopes_missing).toEqual(['users:read.email']);
     });
 
+    it('scopes_missing lists files:read for a login without it', async () => {
+      seedToken({ scopes: ALL_SCOPES.filter((scope) => scope !== 'files:read') });
+      const { ctx } = createHarness();
+
+      const status = await statusOf(ctx);
+
+      expect(status.state).toBe('connected');
+      expect(status.scopes_missing).toEqual(['files:read']);
+    });
+
     it('reports expired with Slack\'s code when the token was revoked, keeping the token file', async () => {
       seedToken();
       const { ctx, slack } = createHarness();

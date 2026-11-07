@@ -150,10 +150,11 @@ describe('mcp-server bootstrap with SLACK_ENABLED=true', () => {
     vi.unstubAllEnvs();
   });
 
-  it('registers exactly the ten slack tools', async () => {
+  it('registers exactly the eleven slack tools', async () => {
     const slackToolNames = (await listedToolNames()).filter((name) => name.startsWith('slack_'));
     expect(slackToolNames.sort()).toEqual([
       'slack_confirm_write',
+      'slack_download_file',
       'slack_get_channels',
       'slack_get_messages',
       'slack_get_status',

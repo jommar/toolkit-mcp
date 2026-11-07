@@ -1,8 +1,10 @@
+import { Readable } from 'node:stream';
 import { vi } from 'vitest';
 import {
   ALL_USER_SCOPES,
   AUTH_CODE_SENTINEL,
   EXAMPLE,
+  FILE_BYTES_SENTINEL,
   FIXTURE_EMAIL,
   FIXTURE_EMAIL_SELF,
   MESSAGE_BODY_SENTINEL,
@@ -36,7 +38,12 @@ export type Reply =
 export type Handler = (fields: SlackFields, request: RecordedRequest) => Reply;
 
 const SLACK_API_HOSTS = new Set(['slack.com', 'app.slack.com']);
+export const FAKE_FILE_HOSTS: readonly string[] = ['files.slack.com', 'files-origin.slack.com'];
 const UPLOAD_HANDLER_KEY = 'upload-host';
+const FILE_HANDLER_KEY = 'file-host';
+
+/** The name Slack holds for the example file; a download must never carry it into a result. */
+export const SLACK_SIDE_FILE_NAME = 'EXAMPLE-slack-side-name.txt';
 
 function slackOk(extra: Record<string, unknown> = {}): Reply {
   return { data: { ok: true, ...extra } };
@@ -215,6 +222,56 @@ function uploadHostHandler(_fields: SlackFields, request: RecordedRequest): Repl
   return { data: `OK - ${length}`, status: 200 };
 }
 
+/** A response body that hands out the chunks one per read and then ends, as a streamed download does. */
+export function streamOf(...chunks: Buffer[]): Readable {
+  const queue = [...chunks];
+  return new Readable({
+    read() {
+      this.push(queue.shift() ?? null);
+    },
+  });
+}
+
+/** A response body that hands out one chunk and then fails with `error`. */
+export function streamFailingAfter(first: Buffer, error: Error): Readable {
+  let sent = false;
+  return new Readable({
+    read() {
+      if (!sent) {
+        sent = true;
+        this.push(first);
+        return;
+      }
+      setTimeout(() => this.destroy(error), 5);
+    },
+  });
+}
+
+/** The `file` object `files.info` answers for the example file: hosted, with the size of the default bytes. */
+export function hostedFileObject(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: EXAMPLE.fileId,
+    name: SLACK_SIDE_FILE_NAME,
+    title: TITLE_SENTINEL,
+    mimetype: 'text/plain',
+    filetype: 'text',
+    size: Buffer.byteLength(FILE_BYTES_SENTINEL),
+    mode: 'hosted',
+    is_external: false,
+    url_private: EXAMPLE.fileUrl,
+    url_private_download: EXAMPLE.fileUrl,
+    ...overrides,
+  };
+}
+
+function fileHostHandler(): Reply {
+  return {
+    data: streamOf(Buffer.from(FILE_BYTES_SENTINEL)),
+    status: 200,
+    headers: { 'content-type': 'application/octet-stream' },
+  };
+}
+
 export function defaultHandlers(): Record<string, Handler> {
   return {
     'oauth.v2.access': oauthExchangeHandler,
@@ -255,6 +312,8 @@ export function defaultHandlers(): Record<string, Handler> {
         message: { type: 'message', user: EXAMPLE.meId, text: fields.text, ts: EXAMPLE.postedTs },
       }),
     'reactions.add': () => slackOk(),
+    'files.info': (fields) =>
+      fields.file === EXAMPLE.fileId ? slackOk({ file: hostedFileObject() }) : slackError('file_not_found'),
     'files.getUploadURLExternal': () => slackOk({ upload_url: EXAMPLE.uploadUrl, file_id: EXAMPLE.fileId }),
     'files.completeUploadExternal': () =>
       slackOk({
@@ -267,6 +326,7 @@ export function defaultHandlers(): Record<string, Handler> {
         ],
       }),
     [UPLOAD_HANDLER_KEY]: uploadHostHandler,
+    [FILE_HANDLER_KEY]: fileHostHandler,
   };
 }
 
@@ -371,13 +431,17 @@ export class FakeSlackApi {
     this.handlers[UPLOAD_HANDLER_KEY] = handler;
   }
 
+  onFileHost(handler: Handler): void {
+    this.handlers[FILE_HANDLER_KEY] = handler;
+  }
+
   failSlack(apiMethod: string, error: string): void {
     this.handlers[apiMethod] = () => slackError(error);
   }
 
   failEverySlackMethod(error: string): void {
     for (const name of Object.keys(this.handlers)) {
-      if (name !== UPLOAD_HANDLER_KEY) this.handlers[name] = () => slackError(error);
+      if (name !== UPLOAD_HANDLER_KEY && name !== FILE_HANDLER_KEY) this.handlers[name] = () => slackError(error);
     }
   }
 
@@ -399,6 +463,10 @@ export class FakeSlackApi {
 
   uploadHostRequests(): RecordedRequest[] {
     return this.requests.filter((request) => request.apiMethod === undefined);
+  }
+
+  fileHostRequests(): RecordedRequest[] {
+    return this.requests.filter((request) => FAKE_FILE_HOSTS.includes(request.host));
   }
 
   fieldsOf(request: RecordedRequest): SlackFields {
@@ -429,9 +497,11 @@ export class FakeSlackApi {
 
     const axiosConfig = { url, method: request.httpMethod.toLowerCase(), headers };
     const handler =
-      request.apiMethod === undefined
-        ? this.handlers[UPLOAD_HANDLER_KEY]
-        : (this.handlers[request.apiMethod] ?? (() => slackError('unknown_method')));
+      request.apiMethod !== undefined
+        ? (this.handlers[request.apiMethod] ?? (() => slackError('unknown_method')))
+        : FAKE_FILE_HOSTS.includes(request.host)
+          ? this.handlers[FILE_HANDLER_KEY]
+          : this.handlers[UPLOAD_HANDLER_KEY];
     const reply = handler(parseFields(request), request);
 
     if ('networkError' in reply) {

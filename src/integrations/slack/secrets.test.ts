@@ -27,13 +27,20 @@ import {
   removeSandbox,
   resetSandbox,
   tokenFileExists,
+  uploadDirectory,
   writeAppConfig,
   writeCapturedSession,
   readCapturedSessionText,
   writeToken,
   writeUploadFile,
 } from './__fixtures__/wiring/sandbox.js';
-import { fakeSlackApi, type RecordedRequest } from './__fixtures__/wiring/fake-slack-api.js';
+import {
+  fakeSlackApi,
+  streamFailingAfter,
+  streamOf,
+  type RecordedRequest,
+  type Reply,
+} from './__fixtures__/wiring/fake-slack-api.js';
 import {
   callTool,
   captureConsole,
@@ -69,6 +76,7 @@ const SECRETS: Array<[string, string]> = [
   ['file bytes', FILE_BYTES_SENTINEL],
 ];
 
+const PRIVATE_FILE_PATH = new URL(EXAMPLE.fileUrl).pathname;
 const VERIFICATION_CACHE_MS = 60 * 1000;
 const TOKEN_LITERAL = /xox[a-z]-[0-9A-Za-z]{8}/;
 const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -94,6 +102,13 @@ function isUploadHostRequest(request: RecordedRequest): boolean {
   return request.apiMethod === undefined;
 }
 
+// The host is compared whole: a lookalike such as a longer name that starts with a file host is not one.
+const SLACK_FILE_HOSTS = ['files.slack.com', 'files-origin.slack.com'];
+
+function isSlackFileHostRequest(request: RecordedRequest): boolean {
+  return SLACK_FILE_HOSTS.includes(request.host);
+}
+
 function expectSecretsOnlyWhereTheyBelong(requests: RecordedRequest[]): void {
   for (const request of requests) {
     const where = `${request.httpMethod} ${request.host}${request.path}`;
@@ -106,13 +121,17 @@ function expectSecretsOnlyWhereTheyBelong(requests: RecordedRequest[]): void {
       .map(([name]) => name);
     if (headersWithToken.length > 0) {
       expect(headersWithToken, `${where}: token header`).toEqual(['authorization']);
-      expect(isUploadHostRequest(request), `${where}: token sent to a non-api host`).toBe(false);
+      // The token goes to Slack API methods and to the two exact Slack file hosts, and to no other host.
+      expect(
+        !isUploadHostRequest(request) || isSlackFileHostRequest(request),
+        `${where}: token sent to a host that is neither an api method nor a Slack file host`,
+      ).toBe(true);
     }
 
-    // A web session's cookie travels only beside its token, only to the host that issued it.
+    // A web session's cookie travels only beside its token, to the web client host or an exact Slack file host.
     const cookieHeaders = Object.entries(request.headers).filter(([name]) => name.toLowerCase() === 'cookie');
     if (cookieHeaders.length > 0) {
-      expect(request.host, `${where}: cookie sent to another host`).toBe('app.slack.com');
+      expect(['app.slack.com', ...SLACK_FILE_HOSTS], `${where}: cookie sent to another host`).toContain(request.host);
       expect(headersWithToken, `${where}: cookie without its token`).toEqual(['authorization']);
       expect(cookieHeaders, `${where}: cookie header`).toEqual([['cookie', `d=${CAPTURED_COOKIE_SENTINEL}`]]);
     }
@@ -493,6 +512,132 @@ describe('writes', () => {
 
     expect(observedText(confirmed)).toContain('not_in_channel');
     expectCleanRun('refused writes');
+  });
+});
+
+describe('downloads', () => {
+  beforeEach(() => {
+    writeToken();
+  });
+
+  function downloadTo(name: string): Promise<ToolOutcome> {
+    return call('slack_download_file', { file: EXAMPLE.fileId, path: join(uploadDirectory, name) });
+  }
+
+  // The file's private address is a capability: it never appears in a result, a log or an error.
+  function expectCleanDownloadRun(label: string): void {
+    expectAbsent([...observations, ...logs.lines()], [['private file address', PRIVATE_FILE_PATH]], label);
+    expectCleanRun(label);
+  }
+
+  it('sends the token to the Slack file hosts as an authorization header only, and keeps the bytes out of results and logs', async () => {
+    const plain = await downloadTo('plain.bin');
+    fakeSlackApi.onFileHost((_fields, request): Reply =>
+      request.host === 'files.slack.com'
+        ? { data: streamOf(), status: 302, headers: { location: EXAMPLE.fileRedirectUrl } }
+        : { data: streamOf(Buffer.from(FILE_BYTES_SENTINEL)), status: 200, headers: { 'content-type': 'application/octet-stream' } },
+    );
+    const redirected = await downloadTo('redirected.bin');
+
+    expect(plain.thrown).toBeUndefined();
+    expect(redirected.thrown).toBeUndefined();
+    expect(readFileSync(join(uploadDirectory, 'plain.bin'), 'utf8')).toBe(FILE_BYTES_SENTINEL);
+    const fileRequests = fakeSlackApi.fileHostRequests();
+    expect(fileRequests.map((request) => request.host)).toEqual([
+      'files.slack.com',
+      'files.slack.com',
+      'files-origin.slack.com',
+    ]);
+    for (const request of fileRequests) {
+      expect(request.headers.authorization, request.host).toBe(`Bearer ${TOKEN_SENTINEL}`);
+      expect(request.headers.cookie, `${request.host}: an app login has no cookie to send`).toBeUndefined();
+    }
+    expectCleanDownloadRun('downloads that succeed and redirect');
+  });
+
+  it('keeps secrets and file bytes out of every download that Slack or the transfer fails, or that is refused', async () => {
+    const leakyError = Object.assign(new Error(`socket closed while using ${TOKEN_SENTINEL}`), { code: 'ECONNRESET' });
+    const outcomes: ToolOutcome[] = [];
+
+    fakeSlackApi.failSlack('files.info', 'file_not_found');
+    outcomes.push(await downloadTo('not-found.bin'));
+    fakeSlackApi.failSlack('files.info', 'missing_scope');
+    outcomes.push(await downloadTo('missing-scope.bin'));
+    fakeSlackApi.failEverySlackMethod('token_revoked');
+    const revoked = await downloadTo('revoked.bin');
+    outcomes.push(revoked);
+    fakeSlackApi.resetHandlers();
+
+    fakeSlackApi.onFileHost(() => ({ data: streamOf(Buffer.from('gone')), status: 404, headers: {} }));
+    outcomes.push(await downloadTo('http-404.bin'));
+    fakeSlackApi.onFileHost(() => ({ data: streamOf(Buffer.from('slow')), status: 429, headers: { 'retry-after': '7' } }));
+    outcomes.push(await downloadTo('http-429.bin'));
+    fakeSlackApi.onFileHost(() => ({
+      data: streamFailingAfter(Buffer.from(FILE_BYTES_SENTINEL.slice(0, 8)), leakyError),
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+    }));
+    outcomes.push(await downloadTo('interrupted.bin'));
+    fakeSlackApi.onFileHost(() => ({
+      data: streamOf(Buffer.from(FILE_BYTES_SENTINEL)),
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }));
+    outcomes.push(await downloadTo('sign-in.bin'));
+    fakeSlackApi.onFileHost(() => ({
+      data: streamOf(),
+      status: 302,
+      headers: { location: 'https://sign-in.example.invalid/' },
+    }));
+    outcomes.push(await downloadTo('off-list.bin'));
+
+    for (const outcome of outcomes) expect(outcome.thrown, observedText(outcome)).toBeDefined();
+    expect(revoked.thrown?.message).toContain('session_rejected');
+    expectCleanDownloadRun('failed and refused downloads');
+  });
+
+  it("sends a browser session's token and cookie to the Slack file hosts only, and keeps them out of results and logs", async () => {
+    resetSandbox();
+    writeAppConfig();
+    writeCapturedSession();
+    const login = await call('slack_login');
+    expect(resultJson(login).state).toBe('connected');
+
+    fakeSlackApi.onFileHost((_fields, request): Reply =>
+      request.host === 'files.slack.com'
+        ? { data: streamOf(), status: 302, headers: { location: EXAMPLE.fileRedirectUrl } }
+        : { data: streamOf(Buffer.from(FILE_BYTES_SENTINEL)), status: 200, headers: { 'content-type': 'application/octet-stream' } },
+    );
+    const redirected = await downloadTo('session-redirected.bin');
+    fakeSlackApi.onFileHost(() => ({
+      data: streamOf(),
+      status: 302,
+      headers: { location: 'https://sign-in.example.invalid/' },
+    }));
+    const offList = await downloadTo('session-off-list.bin');
+    fakeSlackApi.onFileHost(() => ({
+      data: streamOf(Buffer.from('<html>sign in</html>')),
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }));
+    const signIn = await downloadTo('session-sign-in.bin');
+
+    expect(redirected.thrown, observedText(redirected)).toBeUndefined();
+    expect(offList.thrown?.message).toContain('download_not_authorized');
+    expect(signIn.thrown?.message).toContain('download_not_authorized');
+    const fileRequests = fakeSlackApi.fileHostRequests();
+    expect(fileRequests.map((request) => request.host)).toEqual([
+      'files.slack.com',
+      'files-origin.slack.com',
+      'files.slack.com',
+      'files.slack.com',
+    ]);
+    for (const request of fileRequests) {
+      expect(request.headers.authorization, request.host).toBe(`Bearer ${CAPTURED_TOKEN_SENTINEL}`);
+      expect(request.headers.cookie, request.host).toBe(`d=${CAPTURED_COOKIE_SENTINEL}`);
+    }
+    expect(fakeSlackApi.requests.filter((request) => request.host === 'sign-in.example.invalid')).toEqual([]);
+    expectCleanDownloadRun('downloads with a browser session');
   });
 });
 

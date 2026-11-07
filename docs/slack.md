@@ -1,6 +1,6 @@
 # Slack module
 
-The Slack module gives AI agents ten tools to read Slack and, behind a preview-then-confirm gate, to post messages, add reactions and upload files. It runs as you, and there are two ways to give it your Slack identity:
+The Slack module gives AI agents eleven tools to read Slack, download a file and, behind a preview-then-confirm gate, to post messages, add reactions and upload files. It runs as you, and there are two ways to give it your Slack identity:
 
 - **Reuse dev-dashboard's login (no Slack app).** `dev-dashboard` signs in to the Slack web client once and writes `~/.config/slack/session.json` — the web client's own `xoxc` token plus its `d` session cookie. `slack_login` adopts that pair, verifies it with `auth.test` and keeps its own copy. Nothing to register, and no browser step in this module.
 - **Log in with your own Slack app.** Create a small app from a manifest shipped in this repo and approve it once in your browser; the module keeps the resulting user token. Use this when there is no dev-dashboard session, or when you want a token Slack can revoke and whose scopes are fixed.
@@ -31,7 +31,7 @@ What the manifest sets:
 | Setting | Value |
 | --- | --- |
 | Redirect URL | `http://localhost:53682/slack/oauth/callback` |
-| User scopes | the 14 listed in section 8, and nothing else |
+| User scopes | the 15 listed in section 8, and nothing else |
 | PKCE | on |
 | Token rotation | off |
 | Bot user and bot scopes | none |
@@ -66,7 +66,7 @@ chmod 600 ~/.config/slack/toolkit-mcp/app.json
 2. Call `slack_login`, optionally with `workspace`. The module reads that file, copies the pair into `~/.config/slack/toolkit-mcp/token.json` (mode 600), and verifies it with `auth.test`. It returns `{state: "connected", user_id, team_id, team_domain, saved_at, next_step}`.
 3. The captured file is only ever read: never rewritten, moved or removed, so dev-dashboard keeps working.
 
-- Slack issued this pair to its web client, so calls go to `https://app.slack.com/api` with both `Authorization: Bearer <xoxc-token>` and `Cookie: d=<xoxd-cookie>`. Neither header works alone.
+- Slack issued this pair to its web client, so calls go to `https://app.slack.com/api` with both `Authorization: Bearer <xoxc-token>` and `Cookie: d=<xoxd-cookie>`. Neither header works alone. `slack_download_file` also sends the pair to `files.slack.com` and `files-origin.slack.com`, and to no other host, checking each address before attaching credentials. Only a browser-session login sends the cookie; an app login sends the bearer token only. Whether Slack serves file bytes to the browser-session pair remains unverified until the human live check.
 - The session carries exactly your account's access, so there is no granted-scope list: a connected adopted session has no `scopes_missing`, and `slack_get_users` answers `email_unavailable: "not_set"` when Slack returns no address.
 - If Slack rejects the pair, the copy is removed immediately and the call reports `expired` with `invalid_auth`-style `reason`. Reconnect in dev-dashboard, then `slack_login` again.
 - `SLACK_SESSION_FILE` points the module at a different captured file; give it an absolute path, because a leading `~` is not expanded.
@@ -113,7 +113,7 @@ Every state carries a `next_step`.
 - If the revoke call fails, the local file is still removed and the result has `revoked: false`. The `next_step` then tells you to remove the app in Slack's settings if the token should stop working.
 - `app.json` is never touched.
 
-## 5. The ten tools
+## 5. The eleven tools
 
 | Tool | What it does | Array and item shapes | Max items |
 | --- | --- | --- | --- |
@@ -125,10 +125,11 @@ Every state carries a `next_step`.
 | `slack_get_threads` | read threads | `threads[]`: `{thread}` (a message, reply or web-client thread link, or `{channel, ts}`); a reply is normalised to its root | 20 |
 | `slack_get_channels` | look up channels | `channels[]`: `{channel}`, or `{name}` (exact, or a prefix ending in `*`), or `{member_only: true, types?, include_archived?}` | 20 |
 | `slack_get_users` | look up users | `users[]`: `{user}`, `{query}`, `{members_of}` or `{me: true}` | 100 ids, or 20 of the other forms |
+| `slack_download_file` | save one Slack file to disk | `file` (a file id or file link), `path` (absolute), `overwrite?` (not an array); returns `{path, name, size, type, sha256}` | - |
 | `slack_prepare_write` | preview writes and get a confirmation token | `items[]` of `post`, `react` or `upload` (section 6) | 10, uploads included |
 | `slack_confirm_write` | send what was previewed | `confirmation_token` | - |
 
-Reads run on your user token, so they see only what you can see. Every read tool and `slack_prepare_write` takes an array of 1 to n items, even for a single lookup. Rules shared by all of them:
+Reads run on your user token, so they see only what you can see. Every read tool and `slack_prepare_write` takes an array of 1 to n items, even for a single lookup; `slack_download_file` takes one file per call. Rules shared by the batched reads and write previews:
 
 - **`ref`.** Any item may carry a `ref` of up to 64 characters. It is echoed back so the caller can match results to inputs.
 - **Targets are ids or links.** Wherever a channel, DM, thread, message or user is expected, a Slack id or a pasted Slack link works (next subsection).
@@ -149,7 +150,7 @@ Links are parsed locally, with no Slack call, and must be `https`. The examples 
 | Web client channel | `https://app.slack.com/client/T0EXAMPLE1/C0EXAMPLE01` | the conversation |
 | Web client thread | `https://app.slack.com/client/T0EXAMPLE1/C0EXAMPLE01/thread/C0EXAMPLE01-1700000000.000100` | the thread root |
 | User profile | `https://example-team.slack.com/team/U0EXAMPLE01` | the user |
-| File | `https://example-team.slack.com/files/U0EXAMPLE01/F0EXAMPLE01/notes.txt` | recognised, but no tool reads files, so it fails `wrong_link_kind` |
+| File | `https://example-team.slack.com/files/U0EXAMPLE01/F0EXAMPLE01/notes.txt` | the file; only `slack_download_file` takes it (as `file`), and every other field fails `wrong_link_kind` |
 
 Enterprise Grid workspace links resolve the same way. A message link works in a channel field (its channel) and in a thread field (its root); a reply link and the link of its root, sent together to `slack_get_threads`, cost one fetch. A user link works only in user fields.
 
@@ -221,7 +222,7 @@ Each frozen item remembers the workspace it was previewed in. If you log out and
 
 **The rule for agents.** Show the person every item's destination, text or file (with its resolved path), thread and mentions. Check the topic and purpose when they did not name the destination themselves. Call `slack_confirm_write` only after they say yes to that exact preview. The token makes the order mandatory; it cannot prove that a human looked.
 
-## 7. Uploads
+## 7. Uploads and downloads
 
 Uploads go through the same gate as posts, as the `upload` action. By design there is no file-size limit, no limit on the number of uploads beyond the 10 items per token, no blocked file types, and no restriction on where a file may live. The safeguard is visibility: the preview shows exactly which file would leave your machine, and nothing is sent without a confirmed token.
 
@@ -246,6 +247,16 @@ Memory stays at one chunk whatever the file size.
 
 The upload address Slack names in `get_upload_url` is checked before any byte is sent: it must be `https` on a `slack.com` host, and a redirect is reported rather than followed. Otherwise the item fails `upload_rejected` at step `send_bytes`, with neither a Slack code nor an HTTP status.
 
+### Downloading a file
+
+`slack_download_file` saves one Slack file to a path you choose and returns metadata only. It takes `file` (a file id such as `F0EXAMPLE01`, or a file link from the connected workspace such as `https://example-team.slack.com/files/U0EXAMPLE01/F0EXAMPLE01/notes.txt`), `path` (absolute) and `overwrite` (default false). It is one file per call, not an array, and it has no preview step because nothing leaves your machine. A file link from another workspace fails `wrong_workspace`, any other kind of link fails `wrong_link_kind`, and anything that is not a supported Slack link fails `unrecognized_link`; none of these calls Slack. Web-client file paths are not supported.
+
+- **The login.** It uses the same stored login as the other Slack tools, whichever kind. An app login needs the `files:read` scope (section 8) and fails `scope_missing` until you add the scope to the app, run `slack_logout`, run `slack_login` and approve every scope. A browser session adopted from dev-dashboard has no scope list and is not checked; on file requests it sends its `d` cookie beside the token, to the two exact Slack file hosts only. An app login sends no cookie. If Slack answers a sign-in page to a session, the call fails `download_not_authorized` (section 12). Real browser-session file downloads remain unverified pending the human live check.
+- **Which files.** Only files Slack stores itself (mode `hosted` or `snippet`) that are not external, deleted or tombstoned, with a reported non-negative integer size and a private download address. Anything else, including unsupported canvases, Google Docs, Slack Connect files and remote files, fails `file_not_downloadable` before a byte is requested.
+- **The target.** `path` must be absolute (`path_not_absolute`) and its directory must exist (`path_not_found`); the directory may be reached through a symlink, and the returned `path` shows where the file went. An existing target fails `target_exists` unless `overwrite` is true, and with `overwrite` only a regular file can be replaced (`not_a_file` for a directory or a symlink). These checks run before any Slack call. With `overwrite`, the target type is checked again immediately before replacement, rejecting a symlink or nonregular file that appeared during the download. Another local process can still change the destination between that final check and rename: this portable guard is not a strict guarantee against concurrent adversarial local writers. The saved file has mode 600. There is no protected-path deny-list; choose the path carefully, especially with `overwrite: true`.
+- **The transfer.** The module asks Slack for the file (`files.info`), then requests its bytes with the token as a bearer header (and, only for a browser session, its cookie). It follows at most three redirects itself, and only between the exact https file hosts `files.slack.com` and `files-origin.slack.com`; the first address and each redirect target are checked before any credential is attached, and download credentials go to no other host. A redirect anywhere else, or an HTML page where a non-HTML file should be, fails `download_not_authorized`. This can mean the account cannot read the file or, for a browser session, that Slack does not serve files to one. The byte request has a 30-second HTTP timeout configured, not a guaranteed overall transfer deadline. The bytes stream to a staging file beside `path` while their size and SHA-256 are computed, and the staging file is moved into place only when the byte count equals the size Slack reported. A failed transfer removes the staging file and leaves an existing target unchanged (`download_failed`); a killed process may leave a `.part` file. Without `overwrite`, committing uses a hard link so a target created during the download still fails `target_exists`; filesystems without hard-link support fail `download_failed`. There is no module-imposed file-size cap; memory use stays bounded by streaming rather than buffering the whole file.
+- **The result.** Single-line JSON `{path, name, size, type, sha256}`: where the file was saved (parent-directory symlinks resolved), the saved path's basename (not Slack's free-text filename), the bytes written, Slack's `mimetype` (or `application/octet-stream` when absent) and the lower-case hexadecimal SHA-256. No result, log or error holds the file's content, the token, cookie or a header.
+
 ## 8. Scopes per tool
 
 These are user-token scopes, and they apply to the app login only: an adopted web session carries your account's own access and has no scope list. For an app token, the manifest requests exactly their union, and a test keeps the two equal.
@@ -257,10 +268,11 @@ These are user-token scopes, and they apply to the app login only: an adopted we
 | `slack_get_messages`, `slack_get_threads` | `channels:history`, `groups:history`, `im:history`, `mpim:history` |
 | `slack_get_channels` | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `search:read` |
 | `slack_get_users` | `users:read`, plus `users:read.email` for the optional `email` field |
+| `slack_download_file` | `files:read` |
 | `slack_prepare_write` | the four `*:history` scopes, the four `*:read` scopes, `users:read` |
 | `slack_confirm_write` | `chat:write` (posts), `reactions:write` (reactions), `files:write` (uploads) |
 
-`users:read.email` is used only for the optional `email` field. If you remove it from the manifest, everything else works and `email` answers `scope_missing`; `slack_get_status` will keep listing the scope in `scopes_missing`, which is harmless in that case. If you change the app's scopes later, run `slack_logout` and `slack_login` so the new token carries them.
+`users:read.email` is used only for the optional `email` field. If you remove it from the manifest, everything else works and `email` answers `scope_missing`; `slack_get_status` will keep listing the scope in `scopes_missing`, which is harmless in that case. If you change the app's scopes later, run `slack_logout` and `slack_login` so the new token carries them. `files:read` was added for `slack_download_file`: an app login made before it was added lists it in `scopes_missing` from `slack_get_status`, and the tool answers `scope_missing`, until the app has the scope and you run `slack_logout` and `slack_login` and approve every scope. If the stored scope list includes it but Slack answers `missing_scope`, the tool reports `slack_error` naming that Slack code.
 
 ## 9. Errors
 
@@ -279,9 +291,17 @@ Call-level errors are thrown, with the message `slack.<code>: <what happened> <n
 | `invalid_workspace` | the `workspace` value is not a team id, domain, host or URL | name the workspace in one of those forms |
 | `no_authorization_code` | the redirect carried no code | run `slack_login` again |
 | `session_rejected` | Slack no longer accepts the token (revoked, expired, account inactive); a read fails the call, a write reports it on the item | `slack_logout`, then `slack_login` |
+| `scope_missing` | `slack_download_file` with an app login that lacks `files:read` | add the scope to the app, then `slack_logout`, `slack_login` and approve every scope |
+| `path_not_absolute`, `path_not_found`, `not_a_file` | the download `path` is relative, its directory is missing, or an existing target cannot be replaced (including a nonregular target found by the final overwrite check) | fix the path |
+| `target_exists` | the download target exists and `overwrite` is not true, including one created during the download | pick another path, or set `overwrite: true` |
+| `file_not_downloadable` | Slack does not store the file itself (remote, deleted, unsupported canvas, Google Doc, Slack Connect), its size or address is missing or invalid, or its address is not https on an exact Slack file host | none from this tool |
+| `download_not_authorized` | Slack answered with a sign-in page in place of a non-HTML file, or redirected off the https file hosts | app login: `slack_logout`, `slack_login`, approve every scope; if it persists the file may not be visible to this account. Browser session: reconnect Slack in dev-dashboard, and if it fails again log in with the Slack app (section 12) |
+| `download_failed` | the transfer or write failed, the byte count differs from Slack's size, or a redirect is missing its target or exceeds three hops | try again; the failed transfer's staging file is removed and any existing target is unchanged |
 | `batch_too_large` | more items than the tool's cap | split the list |
 | `confirmation_unknown` | the token is unknown, the server restarted, or the token expired and a later `slack_prepare_write` has since cleared it | preview again with `slack_prepare_write`, unless the token was already confirmed (section 6) |
 | `confirmation_expired` | the token is older than 10 minutes; if it was never confirmed, nothing was sent | preview again, unless the token was already confirmed (section 6) |
+
+`slack_download_file` also throws `unrecognized_link`, `wrong_link_kind`, `wrong_workspace`, `session_rejected`, `rate_limited`, `unreachable` and `slack_error` at call level, rather than in a batch result. A rate limit's next step names the retry delay in seconds; Slack API errors name Slack's code, and file-host HTTP errors name the status. No file is saved by these failures.
 
 Per-item errors appear in a result's `error` field, and the rest of the batch is unaffected:
 
@@ -289,7 +309,7 @@ Per-item errors appear in a result's `error` field, and the rest of the batch is
 | --- | --- |
 | `unrecognized_link` | not a supported Slack link; the message lists the supported shapes |
 | `wrong_workspace` | the link is from a workspace other than the connected one |
-| `wrong_link_kind` | the link's kind does not fit the field (a user link as a channel, any file link) |
+| `wrong_link_kind` | the link's kind does not fit the field (a user link as a channel, a file link anywhere except the `file` field of `slack_download_file`) |
 | `channel_not_found`, `channel_archived`, `thread_not_found`, `message_not_found`, `user_not_found` | the target does not exist, or is not visible to you |
 | `target_mismatch` | the destination is not what `expected_destination` said, or a thread and a destination link name different threads |
 | `workspace_changed` | the connected workspace changed after the preview; nothing was sent; preview again |
@@ -318,7 +338,7 @@ Only you run this; agents never log in to a live Slack. It exercises every part 
 
 ## 11. Limits and what is not included
 
-Not included: reading file contents, canvases, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. For an app login, token rotation is off, so an expired or revoked token means logging in again; an adopted web session can be rotated or signed out by Slack at any time, and then means reconnecting in dev-dashboard and running `slack_login` again. Every Slack behavior described here comes from Slack's documentation and from offline tests except the dev-dashboard capture, which was verified against a live workspace; the smoke test is the first live run in this module.
+Not included: returning file contents in a response (a download saves to disk and returns metadata only), downloading canvases, Google Docs, Slack Connect or remote files, discovering file ids from messages, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. For an app login, token rotation is off, so an expired or revoked token means logging in again; an adopted web session can be rotated or signed out by Slack at any time, and then means reconnecting in dev-dashboard and running `slack_login` again. Every Slack behavior described here comes from Slack's documentation and from offline tests except the dev-dashboard capture, which was verified against a live workspace; the smoke test is the first live run in this module. Browser-session file downloads specifically remain unverified until the human live check; offline tests prove credential routing and local-save behavior, not that Slack accepts that login for file bytes.
 
 ## 12. Troubleshooting
 
@@ -338,7 +358,7 @@ Not included: reading file contents, canvases, lists, drafts, scheduled messages
 
 **`app_not_configured`.** The message names the path. Check that `~/.config/slack/toolkit-mcp/` is mode 700, `app.json` is a regular file of mode 600 (not a symlink), and its contents are valid JSON with a `client_id`. Section 3 has the commands.
 
-**`exchange_failed`.** Check that the client id is the one on this app's Basic Information page, that the app was created from the shipped manifest (PKCE on, the redirect URL exactly as in section 2, all 14 scopes), and that you approved rather than cancelled. Then run `slack_login` again; a used or expired link cannot be reused. The `revoked` flag and the remove-the-app step come back only on the paste route. On the callback route the browser shows the failed page and `slack_get_status` reports `not_connected`, without saying whether the new token was revoked. If a callback login failed after you approved and the token must not stay valid, remove the app from the workspace in Slack's settings.
+**`exchange_failed`.** Check that the client id is the one on this app's Basic Information page, that the app was created from the shipped manifest (PKCE on, the redirect URL exactly as in section 2, all 15 scopes), and that you approved rather than cancelled. Then run `slack_login` again; a used or expired link cannot be reused. The `revoked` flag and the remove-the-app step come back only on the paste route. On the callback route the browser shows the failed page and `slack_get_status` reports `not_connected`, without saying whether the new token was revoked. If a callback login failed after you approved and the token must not stay valid, remove the app from the workspace in Slack's settings.
 
 **An administrator has to approve the app.** If your workspace requires approval for new apps, the login cannot finish until an admin approves this one. Ask an admin to approve it, then run `slack_login` again.
 
@@ -349,3 +369,5 @@ Not included: reading file contents, canvases, lists, drafts, scheduled messages
 **Status is `expired` with `token_unreadable`.** `token.json` is not valid JSON. Delete the file by hand and run `slack_login`.
 
 **`invalid_cursor` on a continuation.** The server restarted, or the cursor came from another tool or target. Request the first page again.
+
+**`download_not_authorized` with the dev-dashboard session.** Slack answered a sign-in page where the file should be, or redirected away from an allowed file host. Either the web session expired (reconnect Slack in dev-dashboard, then call `slack_logout` and `slack_login` to adopt the fresh pair) or Slack does not serve files to a browser session. Real browser-session downloads have not yet been verified. To use the app route instead, point `SLACK_SESSION_FILE` at a path that does not exist (in the server's environment), restart the MCP client, call `slack_logout`, then `slack_login` and approve the app link (sections 2 to 4).
