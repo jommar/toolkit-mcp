@@ -189,6 +189,10 @@ By default a message carries only `channel_id`, `ts`, `thread_ts`, `is_top_level
 - **Email** appears only on the user entries of a `slack_get_users` call that lists `email` in `fields`. Each such entry has `email`, or `email: null` with `email_unavailable` set to `scope_missing` (the token was not granted `users:read.email`; log out and in again after adding the scope) or `not_set` (Slack has no address for that user, as for bots). A `{query}` user lookup matches names only, never addresses.
 - No other tool, write preview, log or error contains an email address. No result, log or error contains a token, an authorization code, file contents or a request header.
 
+### Threads on Jira issues
+
+The Jira module's `jira_get_issues` can look up Slack threads for each issue it returns (`includeSlackThreads: true`), over the same session as the tools above, so it needs `SLACK_ENABLED=true` and a `slack_login` session. It runs one `search.messages` call per issue for the quoted issue key (`-is:dm`, so direct messages do not use up the matches), for the first 10 issues only, newest matches first, and returns up to 5 threads per issue as links to the thread root (`permalink`, `channel`, `channelId`, `threadTs`, `at`), never message text. Several matches in one thread collapse into one entry. Direct messages, group direct messages and bot messages are left out. When Slack is not connected, rejects the session or cannot be reached, the Jira issues are still returned, with the reason in the response's `warnings`.
+
 ## 6. Writing: prepare, then confirm
 
 There is no way to post, react or upload in one step. `slack_prepare_write` checks and previews up to 10 items and returns a `confirmation_token`; `slack_confirm_write` sends them.
@@ -253,7 +257,7 @@ These are user-token scopes, and they apply to the app login only: an adopted we
 | Tool | User scopes |
 | --- | --- |
 | `slack_login`, `slack_logout`, `slack_get_status` | none |
-| `slack_search_messages` | `search:read` |
+| `slack_search_messages`, and `jira_get_issues` with `includeSlackThreads` | `search:read` |
 | `slack_get_messages`, `slack_get_threads` | `channels:history`, `groups:history`, `im:history`, `mpim:history` |
 | `slack_get_channels` | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `search:read` |
 | `slack_get_users` | `users:read`, plus `users:read.email` for the optional `email` field |

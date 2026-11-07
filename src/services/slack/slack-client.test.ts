@@ -271,6 +271,25 @@ describe('SlackClient', () => {
     });
   });
 
+  describe('the workspace url', () => {
+    it('is the team url of the stored token, read without calling Slack', async () => {
+      writeTokenFile(temp);
+      const client = new SlackClient(temp.paths);
+
+      expect(await client.teamUrl()).toBe(EXAMPLE_TEAM.team_url);
+      expect(axiosHarness.requests).toHaveLength(0);
+    });
+
+    it('fails not_connected when no token is stored', async () => {
+      const client = new SlackClient(temp.paths);
+
+      const outcome = await settle(() => client.teamUrl());
+
+      expect(outcome.threw).toBe(true);
+      expect(outcome.error).toMatchObject({ code: 'not_connected' });
+    });
+  });
+
   describe('a token Slack no longer accepts', () => {
     it.each(['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive'])(
       'maps %s to session_rejected carrying Slack\'s code and keeps the token file',

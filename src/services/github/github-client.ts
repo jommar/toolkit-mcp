@@ -421,6 +421,11 @@ export class GitHubClient {
       }),
     );
 
+    // A chunk that fails alone only leaves its keys without PRs, but when every chunk fails the empty result
+    // would read as "no PRs" for what is really an outage or a rejected token.
+    const failures = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length === settled.length) throw failures[0].reason;
+
     const allItems: any[] = [];
     for (const result of settled) {
       if (result.status === 'fulfilled') {

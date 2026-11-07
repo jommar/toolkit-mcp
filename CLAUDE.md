@@ -40,6 +40,7 @@ src/
 │   ├── jira/
 │   │   ├── index.ts           # IntegrationModule impl + needsEnv()
 │   │   ├── module.ts          # registerTools, registerResources, registerPrompts
+│   │   ├── issue-links.ts     # includeGithubPrs / includeSlackThreads enrichment for jira_get_issues
 │   │   └── module.test.ts     # Tests with mocked JiraClient
 │   └── github/
 │       ├── index.ts           # IntegrationModule impl + needsEnv()
@@ -65,7 +66,7 @@ interface IntegrationModule<C extends Record<string, unknown> = Record<string, u
 Modules type their expected clients via the generic parameter:
 
 ```typescript
-class JiraModule implements IntegrationModule<{ jira: JiraClient }> { ... }
+class JiraModule implements IntegrationModule<{ jira: JiraClient; github?: GitHubClient; slack?: SlackClient }> { ... }
 class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... }
 ```
 
@@ -145,6 +146,8 @@ Parameters accepted by every list tool:
 `jira_get_issues` accepts `key` (single issue) OR `jql` (search). **Always returns `PaginatedResponse<SlimIssue>`** — even a single-issue lookup returns a one-item array with `hasMore: false`. This gives LLMs a consistent response shape regardless of the input mode.
 
 If both `key` and `jql` are provided, `key` wins.
+
+The opt-in `includeGithubPrs` and `includeSlackThreads` flags attach `pullRequests` / `slackThreads` (links only) to each issue. This is a composite call, so a leg that is inactive, fails or is capped never fails the call: the issues are returned and the envelope gains an optional `warnings: [{source, message}]` beside `items` and `hasMore`. An empty array means "looked, found nothing"; an absent key means "not looked up". That is why the Jira module also receives the optional `github` and `slack` clients.
 
 ### Tool Naming Convention
 

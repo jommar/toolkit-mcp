@@ -78,7 +78,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `jira_whoami` | Return the authenticated Jira user profile. | *(none)* |
-| `jira_get_issues` | Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search. | `key`, `jql`, `limit`, `cursor`, `fields`, `adf` |
+| `jira_get_issues` | Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search. | `key`, `jql`, `limit`, `cursor`, `fields`, `adf`, `includeGithubPrs`, `includeSlackThreads` (see [Linked pull requests and Slack threads](#linked-pull-requests-and-slack-threads)) |
 | `jira_list_components` | List a Jira project's components (id, name) — use to find valid names for the Components field. | `projectKey` |
 | `jira_create_issue` | Create a new Jira issue in a project. | `projectKey`, `issueType`, `summary`, `description`, `fields`, `components` |
 | `jira_update_issue` | Update fields on an existing Jira issue. | `key`, `fields` and/or `components` |
@@ -87,6 +87,36 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 | `jira_add_comment` | Add a comment to a Jira issue — plain text by default, or rich text through `format` (see [Jira comment formats](#jira-comment-formats)). | `key`, `body`, `format`, `parentId` |
 | `jira_update_comment` | Update an existing comment on a Jira issue — plain text by default, or rich text through `format` (see [Jira comment formats](#jira-comment-formats)). | `key`, `commentId`, `body`, `format` |
 | `jira_link_issues` | Link two Jira issues together. | `inwardKey`, `outwardKey`, `type`, `comment` |
+
+#### Linked pull requests and Slack threads
+
+`jira_get_issues` can attach, to each issue it returns, the GitHub pull requests and the Slack threads that mention it, so the links come back in the same response (both `key` and `jql` modes). Both flags default to off, and with neither set the response is unchanged.
+
+| Flag | Adds to each issue | Looked up for |
+|---|---|---|
+| `includeGithubPrs` | `pullRequests`: `{number, title, state, repo, htmlUrl, reviewStatus}` for every PR (open, closed and merged) that names the issue key, found with the same search as `github_get_prs` (a TAP key also finds PRs still titled with the pre-rename TRIPS key) | the first 20 issues |
+| `includeSlackThreads` | `slackThreads`: up to 5 `{permalink, channel, channelId, threadTs, at}`, newest match first. `permalink` points at the thread root; several matches in one thread collapse into one entry, and `at` is the newest matching message. Links only, never message text. Channels only: direct and group messages and bot messages are left out | the first 10 issues (one Slack search each) |
+
+An empty array means the lookup ran and found nothing; a missing key means it did not run. When a lookup does not run, or fails, the issues are still returned and the envelope gains a `warnings` array (absent otherwise): an integration that is not active (`GH_TOKEN` unset; `SLACK_ENABLED` not `true`, or no `slack_login` session), an API error on that lookup, or a lookup limited to the first N issues. A Slack search that fails for some issues leaves `slackThreads` off just those issues, and the GitHub lookup, the Slack lookups of the other issues and the issues themselves are unaffected.
+
+```json
+{
+  "items": [
+    {
+      "key": "TAP-1234",
+      "summary": "Example summary",
+      "pullRequests": [
+        {"number": 87, "title": "TAP-1234 Example change", "state": "merged", "repo": "example-org/example-repo", "htmlUrl": "https://github.com/example-org/example-repo/pull/87", "reviewStatus": "APPROVED"}
+      ],
+      "slackThreads": [
+        {"permalink": "https://example-team.slack.com/archives/C0EXAMPLE01/p1700000000000100", "channel": "example-room", "channelId": "C0EXAMPLE01", "threadTs": "1700000000.000100", "at": "2023-11-14T22:14:10.000Z"}
+      ]
+    }
+  ],
+  "hasMore": false,
+  "warnings": [{"source": "slack", "message": "Slack lookup was limited to the first 10 of 12 issues."}]
+}
+```
 
 #### Jira comment formats
 
@@ -213,6 +243,7 @@ All list-style tools return a uniform envelope:
 | `limit` | number | 20 | Items per page (max 100) |
 
 - `jira_get_issues` with `key` always returns a one-item `PaginatedResponse` with `hasMore: false` — consistent shape regardless of input mode.
+- `jira_get_issues` accepts `includeGithubPrs` and `includeSlackThreads` to attach linked pull requests and Slack threads to each issue; a lookup that is limited, unavailable or fails adds a `warnings` array (`{source, message}`) beside `items` and `hasMore` instead of failing the call. Details in [Linked pull requests and Slack threads](#linked-pull-requests-and-slack-threads).
 - `jira_get_issues` flattens `description` to plain text; pass `adf: true` to also get the raw ADF document as `descriptionAdf` (omitted when the issue has no description), e.g. to append to a description via `jira_update_issue` without losing its structure.
 - `jira_create_issue` / `jira_update_issue` take `components` as names (case-insensitive), resolved to ids against `jira_list_components`; an unknown name is rejected with the project's valid names. On update it replaces the issue's components, and omitting it leaves them untouched; `fields` is optional there when `components` is given, but a call with neither is rejected. `jira_list_components` returns every component in one page (`hasMore: false`).
 - `github_get_copilot_unresolved_prs` limits candidate PRs rather than matches; sparse or empty pages may still have `hasMore: true`.

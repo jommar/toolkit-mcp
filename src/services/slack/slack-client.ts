@@ -128,6 +128,11 @@ export class SlackClient {
     return this.post<SlackResponse>('files.completeUploadExternal', params);
   }
 
+  /** The connected workspace's address, from the stored token; no Slack call. */
+  async teamUrl(): Promise<string> {
+    return (await this.storedToken()).team_url;
+  }
+
   async getUserDirectory(): Promise<SlackUser[]> {
     const token = await this.storedToken();
     const cached = this.directoryCache;

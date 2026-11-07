@@ -1,11 +1,15 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { AxiosError } from 'axios';
 
 // Mock jira-cli so toSlimIssue is available (JiraClient constructor unused by these tests)
-vi.mock('../../services/index.js', () => ({
+vi.mock('../../services/index.js', async () => ({
   JiraClient: class MockJiraClient {},
   toSlimIssue: vi.fn((issue: any) => issue),
   DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
+  describeGitHubError: (await vi.importActual<typeof import('../../services/github/github-client.js')>(
+    '../../services/github/github-client.js',
+  )).describeGitHubError,
 }));
 
 import {
@@ -35,6 +39,14 @@ import {
   jiraToolDescriptors,
 } from './module.js';
 import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
+import {
+  MESSAGE_TEXT_MARKER,
+  OTHER_CHANNEL_ID,
+  searchMatch,
+  searchResponse,
+  tsAt,
+} from '../../services/slack/__fixtures__/issue-threads.js';
+import { CHANNEL_ID, DM_ID, EXAMPLE_TEAM, TOKEN_SENTINEL } from '../../services/slack/__fixtures__/synthetic.js';
 
 function makeMockJira() {
   return {
@@ -302,6 +314,386 @@ describe('jiraGetIssuesSchema adf', () => {
   it('documents adf in the published tool input schema', () => {
     const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_get_issues')!;
     expect((descriptor.inputSchema as any).properties.adf.type).toBe('boolean');
+  });
+});
+
+describe('jiraGetIssuesHandler linked GitHub pull requests and Slack threads', () => {
+  const GITHUB_INACTIVE = 'GitHub integration is not active (GH_TOKEN not set)';
+  const SLACK_INACTIVE =
+    'Slack integration is not active (SLACK_ENABLED not true or no session; run slack_login)';
+
+  let mockJira: MockJira;
+  let mockGitHub: { findPrsForIssueKeys: ReturnType<typeof vi.fn> };
+  let mockSlack: { teamUrl: ReturnType<typeof vi.fn>; searchMessages: ReturnType<typeof vi.fn> };
+
+  const rawIssues = (...keys: string[]) =>
+    keys.map((key, index) => ({ id: String(index + 1), key, fields: { summary: `Summary of ${key}` } }));
+  const keysFrom = (count: number) => Array.from({ length: count }, (_, index) => `TAP-${index + 1}`);
+
+  const pullRequest = (number: number, repo = 'example-org/example-repo') => ({
+    number,
+    title: `TAP-${number} change`,
+    state: 'open' as const,
+    repo,
+    author: 'example-author',
+    createdAt: '2026-10-01T00:00:00Z',
+    htmlUrl: `https://github.com/${repo}/pull/${number}`,
+    reviewStatus: 'APPROVED' as const,
+  });
+  const linkedPullRequest = (number: number, repo = 'example-org/example-repo') => ({
+    number,
+    title: `TAP-${number} change`,
+    state: 'open',
+    repo,
+    htmlUrl: `https://github.com/${repo}/pull/${number}`,
+    reviewStatus: 'APPROVED',
+  });
+
+  const githubFinds = (found: Record<string, ReturnType<typeof pullRequest>[]>) =>
+    mockGitHub.findPrsForIssueKeys.mockResolvedValue(new Map(Object.entries(found)));
+  // The search is for the quoted key plus operators of its own, so a mock tells the issues apart by the key.
+  const quotedKeyOf = (query: string) => /"([^"]+)"/.exec(query)?.[1] ?? '';
+  const slackFinds = (found: Record<string, Array<Record<string, unknown>>>) =>
+    mockSlack.searchMessages.mockImplementation(async ({ query }: { query: string }) =>
+      searchResponse(found[quotedKeyOf(query)] ?? []),
+    );
+
+  const lookUp = async (args: Record<string, unknown>, clients: Record<string, unknown> = {}) => {
+    const handler = jiraGetIssuesHandler({ jira: mockJira as any, ...clients } as any);
+    const result = await handler({ limit: 20, ...args } as any);
+    return { text: result.content[0].text, body: JSON.parse(result.content[0].text) };
+  };
+  const withBoth = () => ({ github: mockGitHub, slack: mockSlack });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+    mockGitHub = { findPrsForIssueKeys: vi.fn().mockResolvedValue(new Map()) };
+    mockSlack = {
+      teamUrl: vi.fn().mockResolvedValue(EXAMPLE_TEAM.team_url),
+      searchMessages: vi.fn().mockResolvedValue(searchResponse([])),
+    };
+    mockJira.getIssue.mockImplementation(async (key: string) => rawIssues(key)[0]);
+  });
+
+  describe('flags off', () => {
+    it.each([
+      ['unset', {}],
+      ['false', { includeGithubPrs: false, includeSlackThreads: false }],
+    ])('leaves the response byte-for-byte unchanged and calls neither integration when both are %s', async (_label, flags) => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2'), isLast: true });
+
+      const { text } = await lookUp({ jql: 'project = TAP', ...flags }, withBoth());
+
+      expect(text).toBe(JSON.stringify({ items: rawIssues('TAP-1', 'TAP-2'), hasMore: false }));
+      expect(mockGitHub.findPrsForIssueKeys).not.toHaveBeenCalled();
+      expect(mockSlack.teamUrl).not.toHaveBeenCalled();
+      expect(mockSlack.searchMessages).not.toHaveBeenCalled();
+    });
+
+    it('keeps a next page token and adds nothing to it', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1'), isLast: false, nextPageToken: 'page2' });
+
+      const { text } = await lookUp({ jql: 'project = TAP' }, withBoth());
+
+      expect(text).toBe(JSON.stringify({ items: rawIssues('TAP-1'), nextPageToken: 'page2', hasMore: true }));
+    });
+  });
+
+  describe('includeGithubPrs', () => {
+    it('attaches the pull requests of a single issue by key, as compact links, in every state', async () => {
+      githubFinds({ 'TAP-1': [pullRequest(11), pullRequest(12, 'example-org/other-repo')] });
+
+      const { body } = await lookUp({ key: 'TAP-1', includeGithubPrs: true }, withBoth());
+
+      expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(['TAP-1'], 'all');
+      expect(body.items[0].pullRequests).toEqual([
+        linkedPullRequest(11),
+        linkedPullRequest(12, 'example-org/other-repo'),
+      ]);
+      expect(body.items[0]).not.toHaveProperty('slackThreads');
+      expect(body).not.toHaveProperty('warnings');
+      expect(mockSlack.searchMessages).not.toHaveBeenCalled();
+    });
+
+    it('groups pull requests per issue of a JQL search and gives an issue with none an empty array', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2', 'TAP-3'), isLast: true });
+      githubFinds({ 'TAP-1': [pullRequest(11)], 'TAP-3': [pullRequest(31), pullRequest(32)] });
+
+      const { body } = await lookUp({ jql: 'project = TAP', includeGithubPrs: true }, withBoth());
+
+      expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(['TAP-1', 'TAP-2', 'TAP-3'], 'all');
+      expect(body.items.map((item: any) => item.pullRequests)).toEqual([
+        [linkedPullRequest(11)],
+        [],
+        [linkedPullRequest(31), linkedPullRequest(32)],
+      ]);
+    });
+
+    it('looks up only the first 20 issues, warns, and still returns every issue', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues(...keysFrom(25)), isLast: true });
+      githubFinds({ 'TAP-1': [pullRequest(1)] });
+
+      const { body } = await lookUp({ jql: 'project = TAP', limit: 25, includeGithubPrs: true }, withBoth());
+
+      expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(keysFrom(20), 'all');
+      expect(body.items).toHaveLength(25);
+      expect(body.items[19].pullRequests).toEqual([]);
+      expect(body.items[20]).not.toHaveProperty('pullRequests');
+      expect(body.warnings).toEqual([
+        { source: 'github', message: 'GitHub lookup was limited to the first 20 of 25 issues.' },
+      ]);
+    });
+  });
+
+  describe('includeSlackThreads', () => {
+    it('attaches the Slack threads of a single issue by key, as links to the thread root', async () => {
+      slackFinds({ 'TAP-1': [searchMatch({ ts: tsAt(50), threadTs: tsAt(10), channelId: CHANNEL_ID })] });
+
+      const { body } = await lookUp({ key: 'TAP-1', includeSlackThreads: true }, withBoth());
+
+      expect(mockSlack.searchMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ query: expect.stringContaining('"TAP-1"') }),
+      );
+      expect(body.items[0].slackThreads).toEqual([
+        {
+          permalink: `https://example-team.slack.com/archives/${CHANNEL_ID}/p${tsAt(10).replace('.', '')}`,
+          channel: 'example-room',
+          channelId: CHANNEL_ID,
+          threadTs: tsAt(10),
+          at: '2023-11-14T22:14:10.000Z',
+        },
+      ]);
+      expect(body.items[0]).not.toHaveProperty('pullRequests');
+      expect(body).not.toHaveProperty('warnings');
+      expect(mockGitHub.findPrsForIssueKeys).not.toHaveBeenCalled();
+    });
+
+    it('searches each issue of a JQL search and gives an issue with no thread an empty array', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2'), isLast: true });
+      slackFinds({ 'TAP-2': [searchMatch({ ts: tsAt(30) })] });
+
+      const { body } = await lookUp({ jql: 'project = TAP', includeSlackThreads: true }, withBoth());
+
+      expect(mockSlack.searchMessages).toHaveBeenCalledTimes(2);
+      expect(body.items[0].slackThreads).toEqual([]);
+      expect(body.items[1].slackThreads).toHaveLength(1);
+    });
+
+    it('collapses a thread, leaves out direct messages, keeps five threads and never returns message text', async () => {
+      const matches = [
+        searchMatch({ ts: tsAt(90), threadTs: tsAt(60) }),
+        searchMatch({ ts: tsAt(80), threadTs: tsAt(60) }),
+        searchMatch({ ts: tsAt(75), channelId: DM_ID, isIm: true }),
+        ...[70, 60, 50, 40, 30, 20].map((seconds) =>
+          searchMatch({ ts: tsAt(seconds), channelId: OTHER_CHANNEL_ID }),
+        ),
+      ];
+      slackFinds({ 'TAP-1': matches });
+
+      const { text, body } = await lookUp({ key: 'TAP-1', includeSlackThreads: true }, withBoth());
+
+      const threads = body.items[0].slackThreads;
+      expect(threads).toHaveLength(5);
+      expect(threads[0].threadTs).toBe(tsAt(60));
+      expect(threads.map((thread: any) => thread.channelId)).not.toContain(DM_ID);
+      expect(text).not.toContain(MESSAGE_TEXT_MARKER);
+    });
+
+    it('searches only the first 10 issues, warns, and still returns every issue', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues(...keysFrom(12)), isLast: true });
+
+      const { body } = await lookUp({ jql: 'project = TAP', limit: 12, includeSlackThreads: true }, withBoth());
+
+      expect(mockSlack.searchMessages).toHaveBeenCalledTimes(10);
+      expect(body.items).toHaveLength(12);
+      expect(body.items[9].slackThreads).toEqual([]);
+      expect(body.items[10]).not.toHaveProperty('slackThreads');
+      expect(body.warnings).toEqual([
+        { source: 'slack', message: 'Slack lookup was limited to the first 10 of 12 issues.' },
+      ]);
+    });
+  });
+
+  describe('both flags', () => {
+    it('attaches pull requests and Slack threads to each issue without a warning', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2'), isLast: true });
+      githubFinds({ 'TAP-1': [pullRequest(11)] });
+      slackFinds({ 'TAP-2': [searchMatch({ ts: tsAt(30) })] });
+
+      const { body } = await lookUp(
+        { jql: 'project = TAP', includeGithubPrs: true, includeSlackThreads: true },
+        withBoth(),
+      );
+
+      expect(body.items[0].pullRequests).toEqual([linkedPullRequest(11)]);
+      expect(body.items[0].slackThreads).toEqual([]);
+      expect(body.items[1].pullRequests).toEqual([]);
+      expect(body.items[1].slackThreads).toHaveLength(1);
+      expect(body).not.toHaveProperty('warnings');
+    });
+  });
+
+  describe('an integration that is not active', () => {
+    it('warns for GitHub and returns the issue and its Slack threads', async () => {
+      slackFinds({ 'TAP-1': [searchMatch({ ts: tsAt(30) })] });
+
+      const { body } = await lookUp(
+        { key: 'TAP-1', includeGithubPrs: true, includeSlackThreads: true },
+        { slack: mockSlack },
+      );
+
+      expect(body.items[0].key).toBe('TAP-1');
+      expect(body.items[0]).not.toHaveProperty('pullRequests');
+      expect(body.items[0].slackThreads).toHaveLength(1);
+      expect(body.warnings).toEqual([{ source: 'github', message: GITHUB_INACTIVE }]);
+    });
+
+    it('warns for Slack and returns the issue and its pull requests', async () => {
+      githubFinds({ 'TAP-1': [pullRequest(11)] });
+
+      const { body } = await lookUp(
+        { key: 'TAP-1', includeGithubPrs: true, includeSlackThreads: true },
+        { github: mockGitHub },
+      );
+
+      expect(body.items[0].pullRequests).toEqual([linkedPullRequest(11)]);
+      expect(body.items[0]).not.toHaveProperty('slackThreads');
+      expect(body.warnings).toEqual([{ source: 'slack', message: SLACK_INACTIVE }]);
+    });
+
+    it('warns once per integration and returns the issues untouched when neither is active', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2'), isLast: true });
+
+      const { body } = await lookUp({ jql: 'project = TAP', includeGithubPrs: true, includeSlackThreads: true });
+
+      expect(body.items).toEqual(rawIssues('TAP-1', 'TAP-2'));
+      expect(body.hasMore).toBe(false);
+      expect(body.warnings).toEqual([
+        { source: 'github', message: GITHUB_INACTIVE },
+        { source: 'slack', message: SLACK_INACTIVE },
+      ]);
+    });
+
+    it('reports a Slack client with no login as inactive and makes no search', async () => {
+      mockSlack.teamUrl.mockRejectedValue(
+        Object.assign(new Error('No Slack token is stored for this module.'), { code: 'not_connected' }),
+      );
+
+      const { body } = await lookUp({ key: 'TAP-1', includeSlackThreads: true }, withBoth());
+
+      expect(body.items[0]).not.toHaveProperty('slackThreads');
+      expect(body.warnings).toEqual([{ source: 'slack', message: SLACK_INACTIVE }]);
+      expect(mockSlack.searchMessages).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a lookup that fails', () => {
+    const slackFailure = (code: string, message: string, extra: Record<string, unknown> = {}) =>
+      Object.assign(new Error(message), { code, ...extra });
+
+    it('warns about a GitHub API error without leaking the request and keeps the Slack threads', async () => {
+      const apiError = new AxiosError('Request failed with status code 502', 'ERR_BAD_RESPONSE', undefined, undefined, {
+        status: 502,
+        data: { message: 'Bad Gateway' },
+        statusText: 'Bad Gateway',
+        headers: {},
+        config: { headers: { Authorization: `Bearer ${TOKEN_SENTINEL}` } },
+      } as any);
+      mockGitHub.findPrsForIssueKeys.mockRejectedValue(apiError);
+      slackFinds({ 'TAP-1': [searchMatch({ ts: tsAt(30) })] });
+
+      const { text, body } = await lookUp(
+        { key: 'TAP-1', includeGithubPrs: true, includeSlackThreads: true },
+        withBoth(),
+      );
+
+      expect(body.items[0].key).toBe('TAP-1');
+      expect(body.items[0]).not.toHaveProperty('pullRequests');
+      expect(body.items[0].slackThreads).toHaveLength(1);
+      expect(body.warnings).toEqual([
+        { source: 'github', message: 'GitHub lookup failed: GitHub API error (502): Bad Gateway' },
+      ]);
+      expect(text).not.toContain(TOKEN_SENTINEL);
+    });
+
+    it('warns about a Slack search that failed for one issue and keeps the others and the pull requests', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2', 'TAP-3'), isLast: true });
+      githubFinds({ 'TAP-1': [pullRequest(11)] });
+      mockSlack.searchMessages.mockImplementation(async ({ query }: { query: string }) => {
+        if (quotedKeyOf(query) === 'TAP-2') throw slackFailure('unreachable', 'Slack could not be reached.');
+        return searchResponse([searchMatch({ ts: tsAt(30) })]);
+      });
+
+      const { body } = await lookUp(
+        { jql: 'project = TAP', includeGithubPrs: true, includeSlackThreads: true },
+        withBoth(),
+      );
+
+      expect(body.items.map((item: any) => item.key)).toEqual(['TAP-1', 'TAP-2', 'TAP-3']);
+      expect(body.items[0].slackThreads).toHaveLength(1);
+      expect(body.items[1]).not.toHaveProperty('slackThreads');
+      expect(body.items[2].slackThreads).toHaveLength(1);
+      expect(body.items[0].pullRequests).toEqual([linkedPullRequest(11)]);
+      expect(body.warnings).toEqual([
+        { source: 'slack', message: 'Slack lookup failed for TAP-2: Slack could not be reached.' },
+      ]);
+    });
+
+    it('groups Slack failures that share a message into one warning without leaking the request', async () => {
+      mockJira.search.mockResolvedValue({ issues: rawIssues('TAP-1', 'TAP-2'), isLast: true });
+      mockSlack.searchMessages.mockRejectedValue(
+        slackFailure('session_rejected', 'Slack no longer accepts the stored token (invalid_auth).', {
+          config: { headers: { Authorization: `Bearer ${TOKEN_SENTINEL}` } },
+        }),
+      );
+
+      const { text, body } = await lookUp({ jql: 'project = TAP', includeSlackThreads: true }, withBoth());
+
+      expect(body.items).toEqual(rawIssues('TAP-1', 'TAP-2'));
+      expect(body.warnings).toEqual([
+        {
+          source: 'slack',
+          message: 'Slack lookup failed for TAP-1, TAP-2: Slack no longer accepts the stored token (invalid_auth).',
+        },
+      ]);
+      expect(text).not.toContain(TOKEN_SENTINEL);
+    });
+
+    it('warns once when the workspace address cannot be read', async () => {
+      mockSlack.teamUrl.mockRejectedValue(
+        slackFailure('token_unreadable', 'The Slack token file is not valid JSON'),
+      );
+
+      const { body } = await lookUp({ key: 'TAP-1', includeSlackThreads: true }, withBoth());
+
+      expect(body.items[0].key).toBe('TAP-1');
+      expect(body.warnings).toEqual([
+        { source: 'slack', message: 'Slack lookup failed: The Slack token file is not valid JSON' },
+      ]);
+    });
+  });
+});
+
+describe('jiraGetIssuesSchema includeGithubPrs and includeSlackThreads', () => {
+  it.each(['includeGithubPrs', 'includeSlackThreads'] as const)('accepts a boolean %s and leaves it undefined when omitted', (flag) => {
+    const given = jiraGetIssuesSchema.safeParse({ key: 'TAP-1', [flag]: true });
+    const omitted = jiraGetIssuesSchema.safeParse({ key: 'TAP-1' });
+
+    expect(given.success && given.data[flag]).toBe(true);
+    expect(omitted.success && omitted.data[flag]).toBeUndefined();
+  });
+
+  it.each(['includeGithubPrs', 'includeSlackThreads'])('rejects a non-boolean %s', (flag) => {
+    expect(jiraGetIssuesSchema.safeParse({ key: 'TAP-1', [flag]: 'yes' }).success).toBe(false);
+  });
+
+  it.each(['includeGithubPrs', 'includeSlackThreads'])('publishes %s as a described boolean', (flag) => {
+    const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_get_issues')!;
+    const property = (descriptor.inputSchema as any).properties[flag];
+
+    expect(property.type).toBe('boolean');
+    expect(property.description).toMatch(/^[^.]+\.$/);
   });
 });
 

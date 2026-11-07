@@ -972,6 +972,25 @@ describe('GitHubClient', () => {
         expect(http.get).toHaveBeenCalledTimes(3); // 2 searches + 1 review lookup for the single unique PR
       });
 
+      it('throws when every search fails, rather than answering that there are no PRs', async () => {
+        http.get.mockRejectedValue(new Error('Bad Gateway'));
+
+        const client = new GitHubClient();
+
+        await expect(client.findPrsForIssueKeys(['TAP-1', 'TAP-2', 'TAP-3'])).rejects.toThrow('Bad Gateway');
+      });
+
+      it('answers from the searches that worked when only some of them fail', async () => {
+        const found = searchItem(9, '[TAP-3] Landed');
+        http.get.mockRejectedValueOnce(new Error('Bad Gateway')).mockResolvedValueOnce(searchPage(found));
+        http.get.mockResolvedValueOnce(approved);
+
+        const client = new GitHubClient();
+        const result = await client.findPrsForIssueKeys(['TAP-1', 'TAP-2', 'TAP-3']);
+
+        expect(result.get('TAP-3')!.map((pr) => pr.number)).toEqual([9]);
+      });
+
       it('searches and groups only the TRIPS key itself for a TRIPS key', async () => {
         const newStyle = searchItem(5, '[TAP-1877] New-style title');
         const oldStyle = searchItem(6, '[TRIPS-1877] Old-style title');

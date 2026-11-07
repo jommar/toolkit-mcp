@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { JiraClient, toSlimIssue, DEV_FIELDS } from '../../services/index.js';
-import type { SlimIssue, SearchResult, JiraIssue } from '../../services/index.js';
+import type { SlimIssue, SearchResult, JiraIssue, GitHubClient, SlackClient } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
+import { attachIssueLinks } from './issue-links.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -30,6 +31,14 @@ export const jiraGetIssuesSchema = z.object({
     .boolean()
     .optional()
     .describe('Also return the raw ADF description as `descriptionAdf` (needed to append to a description without losing its structure).'),
+  includeGithubPrs: z
+    .boolean()
+    .optional()
+    .describe('Also return each issue\'s GitHub pull requests, in any state, as `pullRequests` (looked up for the first 20 issues).'),
+  includeSlackThreads: z
+    .boolean()
+    .optional()
+    .describe('Also return up to 5 Slack channel threads that mention each issue as `slackThreads`, links only (looked up for the first 10 issues).'),
 });
 
 export const jiraCreateIssueSchema = z.object({
@@ -227,8 +236,11 @@ export const jiraTriageIssuePromptSchema = z.object({
 // ---------------------------------------------------------------------------
 // Handler Factories
 // ---------------------------------------------------------------------------
+/** Jira is required; GitHub and Slack are present only when their integrations are active. */
+export type JiraToolClients = { jira: JiraClient; github?: GitHubClient; slack?: SlackClient };
+
 type ToolHandler<T = unknown> = (
-  clients: { jira: JiraClient },
+  clients: JiraToolClients,
 ) => (args: T) => Promise<{
   content: (
     | { type: 'text'; text: string }
@@ -269,10 +281,15 @@ export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
 
 export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchema>> =
   (_clients) => async (args) => {
-    const { key, jql, limit, cursor, fields, adf } = args;
+    const { key, jql, limit, cursor, fields, adf, includeGithubPrs, includeSlackThreads } = args;
     const customFieldIds = fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
     const slim = (issue: JiraIssue) =>
       adf ? toSlimIssue(issue, customFieldIds, { adf }) : toSlimIssue(issue, customFieldIds);
+    const respond = async (issues: SlimIssue[], nextPageToken?: string) => {
+      const { items, warnings } = await attachIssueLinks(issues, { includeGithubPrs, includeSlackThreads }, _clients);
+      const body = { ...paginated(items, nextPageToken), warnings: warnings.length > 0 ? warnings : undefined };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
+    };
 
     if (key) {
       // Always slim. If custom fields are requested, merge with DEV_FIELDS.
@@ -280,15 +297,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
       const raw = issueFields
         ? await _clients.jira.getIssue(key, issueFields)
         : await _clients.jira.getIssue(key, [...DEV_FIELDS]);
-      const issue = slim(raw);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(paginated([issue])),
-          },
-        ],
-      };
+      return respond([slim(raw)]);
     }
 
     if (jql) {
@@ -301,15 +310,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
         searchOpts.fields = searchFields;
       }
       const result: SearchResult = await _clients.jira.search(jql, searchOpts);
-      const items: SlimIssue[] = result.issues.map(slim);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(paginated(items, result.isLast ? undefined : result.nextPageToken)),
-          },
-        ],
-      };
+      return respond(result.issues.map(slim), result.isLast ? undefined : result.nextPageToken);
     }
 
     throw new McpError(ErrorCode.InvalidParams, 'Provide either key or jql');

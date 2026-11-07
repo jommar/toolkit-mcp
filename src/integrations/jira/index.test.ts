@@ -138,6 +138,57 @@ describe('JiraModule', () => {
       expect(parsed.items).toHaveLength(1);
     });
 
+    describe('jira_get_issues linked context', () => {
+      const issue = { id: '1', key: 'TAP-1', fields: { summary: 'Test' } };
+
+      beforeEach(() => {
+        mockJira.getIssue.mockResolvedValue(issue);
+      });
+
+      it('hands the GitHub client the issue key when includeGithubPrs is set', async () => {
+        const findPrsForIssueKeys = vi.fn().mockResolvedValue(new Map());
+        const handlers = mod.createToolHandlers({ jira: mockJira as any, github: { findPrsForIssueKeys } as any });
+
+        const result = await handlers.jira_get_issues({ key: 'TAP-1', includeGithubPrs: true });
+
+        expect(findPrsForIssueKeys).toHaveBeenCalledWith(['TAP-1'], 'all');
+        expect(JSON.parse(result.content[0].text).items[0].pullRequests).toEqual([]);
+      });
+
+      it('hands the Slack client the issue key when includeSlackThreads is set', async () => {
+        const slack = {
+          teamUrl: vi.fn().mockResolvedValue('https://example-team.slack.com/'),
+          searchMessages: vi.fn().mockResolvedValue({ ok: true, messages: { matches: [] } }),
+        };
+        const handlers = mod.createToolHandlers({ jira: mockJira as any, slack: slack as any });
+
+        const result = await handlers.jira_get_issues({ key: 'TAP-1', includeSlackThreads: true });
+
+        expect(slack.searchMessages).toHaveBeenCalledWith(
+          expect.objectContaining({ query: expect.stringContaining('"TAP-1"') }),
+        );
+        expect(JSON.parse(result.content[0].text).items[0].slackThreads).toEqual([]);
+      });
+
+      it('answers with a warning, not an error, when a flag is set and the integration is not active', async () => {
+        const handlers = mod.createToolHandlers({ jira: mockJira as any });
+
+        const result = await handlers.jira_get_issues({ key: 'TAP-1', includeGithubPrs: true });
+
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed.items[0].key).toBe('TAP-1');
+        expect(parsed.warnings).toEqual([expect.objectContaining({ source: 'github' })]);
+      });
+
+      it('rejects a non-boolean flag before any lookup', async () => {
+        const findPrsForIssueKeys = vi.fn();
+        const handlers = mod.createToolHandlers({ jira: mockJira as any, github: { findPrsForIssueKeys } as any });
+
+        await expect(handlers.jira_get_issues({ key: 'TAP-1', includeGithubPrs: 'yes' })).rejects.toThrow();
+        expect(findPrsForIssueKeys).not.toHaveBeenCalled();
+      });
+    });
+
     it('jira_create_issue validates required fields', async () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
       await expect(

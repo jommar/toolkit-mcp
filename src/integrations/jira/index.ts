@@ -38,9 +38,10 @@ import {
   jiraCreateIssuePromptSchema,
   jiraTriageIssuePromptSchema,
   jiraToolDescriptors,
+  type JiraToolClients,
 } from './module.js';
 
-export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
+export class JiraModule implements IntegrationModule<JiraToolClients> {
   readonly id = 'jira';
 
   getResourcePrefix(): string {
@@ -51,7 +52,7 @@ export class JiraModule implements IntegrationModule<{ jira: JiraClient }> {
     return !!(process.env.JIRA_BASE_URL && process.env.JIRA_EMAIL && process.env.JIRA_TOKEN);
   }
 
-  createToolHandlers(clients: { jira: JiraClient }): Record<string, ToolHandlerFn> {
+  createToolHandlers(clients: JiraToolClients): Record<string, ToolHandlerFn> {
     return {
       jira_whoami: async (args) => {
         const parsed = jiraWhoamiSchema.parse(args);
