@@ -49,6 +49,7 @@ import {
 import { SlackModule } from './index.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 import { oneShotSha256 } from '../../services/slack/__fixtures__/bytes.js';
+import { rawMessage } from './__fixtures__/tools/fake-slack.js';
 
 const TOOL = 'slack_download_file';
 const FILE_HOSTS = ['files.slack.com', 'files-origin.slack.com'];
@@ -115,6 +116,55 @@ function redirectTo(location: string): Reply {
 }
 
 describe('slack_download_file: saving a file', () => {
+  it('downloads the attachment ID returned by a default message read', async () => {
+    const content = Buffer.from(`${FILE_BYTES_SENTINEL}\n`);
+    const file = hostedFileObject({ id: 'F0EXAMPLE01', size: content.length });
+    fakeSlackApi.onMethod('conversations.history', () => ({
+      data: {
+        ok: true,
+        messages: [{ ...rawMessage({ ts: EXAMPLE.rootTs, user: EXAMPLE.peerId }), subtype: 'file_share', files: [file] }],
+      },
+    }));
+    fakeSlackApi.onMethod('files.info', () => ({ data: { ok: true, file } }));
+    serve(() => streamOf(content));
+
+    const read = await callTool(handlers, 'slack_get_messages', { messages: [{ channel: EXAMPLE.channelId }] });
+
+    expect(read.thrown, observedText(read)).toBeUndefined();
+    expect(fakeSlackApi.requests.map((request) => request.apiMethod ?? request.host)).toEqual(['conversations.history']);
+    expect(fakeSlackApi.requestsFor('files.info')).toEqual([]);
+    expect(fakeSlackApi.fileHostRequests()).toEqual([]);
+    const message = resultJson(read).results[0].items[0];
+    expect(message.hasAttachments).toBe(true);
+    expect(message.attachments).toEqual([
+      { file_id: 'F0EXAMPLE01', name: 'EXAMPLE-slack-side-name.txt', size: 20, type: 'text/plain' },
+    ]);
+    expect(message).not.toHaveProperty('text');
+    const path = pathInDirectory('discovered-copy.txt');
+
+    const outcome = await download({ file: message.attachments[0].file_id, path });
+
+    expect(outcome.thrown, observedText(outcome)).toBeUndefined();
+    expect(resultJson(outcome)).toEqual({
+      path,
+      name: 'discovered-copy.txt',
+      size: 20,
+      type: 'text/plain',
+      sha256: oneShotSha256(content),
+    });
+    expect(readFileSync(path).equals(content)).toBe(true);
+    expect(filesInDirectory()).toEqual(['discovered-copy.txt']);
+    const infoRequests = fakeSlackApi.requestsFor('files.info');
+    expect(infoRequests).toHaveLength(1);
+    expect(fakeSlackApi.fieldsOf(infoRequests[0]).file).toBe('F0EXAMPLE01');
+    const byteRequests = fakeSlackApi.fileHostRequests();
+    expect(byteRequests).toHaveLength(1);
+    expect(byteRequests[0].httpMethod).toBe('GET');
+    expect(outcome.text).not.toContain(SLACK_SIDE_FILE_NAME);
+    expect(outcome.text).not.toContain(FILE_BYTES_SENTINEL);
+    expect(outcome.text).not.toContain(EXAMPLE.fileUrl);
+  });
+
   it('saves a hosted file by id and returns only its path, name, size, type and sha256', async () => {
     const chunks = [`${FILE_BYTES_SENTINEL}-first part\n`, 'second part\n', 'third part\n'].map((text) => Buffer.from(text));
     const content = Buffer.concat(chunks);

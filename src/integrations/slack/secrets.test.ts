@@ -36,6 +36,7 @@ import {
 } from './__fixtures__/wiring/sandbox.js';
 import {
   fakeSlackApi,
+  hostedFileObject,
   streamFailingAfter,
   streamOf,
   type RecordedRequest,
@@ -44,6 +45,7 @@ import {
 import {
   callTool,
   captureConsole,
+  collectKeys,
   eventually,
   loopbackRequest,
   observedText,
@@ -54,6 +56,7 @@ import {
   type ToolOutcome,
 } from './__fixtures__/wiring/harness.js';
 import { READ_CALLS, postItem, reactItem, uploadItem } from './__fixtures__/wiring/calls.js';
+import { rawMessage } from './__fixtures__/tools/fake-slack.js';
 import { PRODUCTION_CALLBACK_PORT, holdProductionPort } from './__fixtures__/wiring/fix1-ports.js';
 import {
   AUTH_CODE_SENTINEL,
@@ -412,6 +415,104 @@ describe('reads', () => {
     }
 
     expectCleanRun('successful reads');
+  });
+
+  it('keeps file payload secrets out of wired reads', async () => {
+    const signedUrl = 'https://files.slack.com/EXAMPLE-secret-file?signature=EXAMPLE-private';
+    const shared = {
+      ...rawMessage({ ts: EXAMPLE.rootTs, user: EXAMPLE.peerId, text: 'EXAMPLE-message', replyCount: 1 }),
+      subtype: 'file_share',
+      files: [
+        hostedFileObject({
+          id: 'F0EXAMPLE01',
+          name: 'EXAMPLE-notes.txt',
+          size: 0,
+          preview: FILE_BYTES_SENTINEL,
+          preview_plain: FILE_BYTES_SENTINEL,
+          preview_highlight: FILE_BYTES_SENTINEL,
+          content: FILE_BYTES_SENTINEL,
+          permalink_public: signedUrl,
+          thumb_64: signedUrl,
+          headers: { authorization: TOKEN_SENTINEL, cookie: CAPTURED_COOKIE_SENTINEL },
+          access_token: CAPTURED_TOKEN_SENTINEL,
+          client_secret: CLIENT_SECRET_SENTINEL,
+          authorization_code: AUTH_CODE_SENTINEL,
+          nested: { token: TOKEN_SENTINEL, cookie: CAPTURED_COOKIE_SENTINEL, signed_url: signedUrl },
+        }),
+      ],
+    };
+    const ordinary = rawMessage({
+      ts: EXAMPLE.replyTs,
+      threadTs: EXAMPLE.rootTs,
+      user: EXAMPLE.meId,
+      text: 'EXAMPLE-message',
+    });
+    fakeSlackApi.onMethod('conversations.history', () => ({ data: { ok: true, messages: [ordinary, shared] } }));
+    fakeSlackApi.onMethod('conversations.replies', () => ({ data: { ok: true, messages: [shared, ordinary] } }));
+    fakeSlackApi.onMethod('search.messages', () => ({
+      data: {
+        ok: true,
+        messages: {
+          total: 2,
+          matches: [ordinary, shared].map((message) => ({ ...message, channel: { id: EXAMPLE.channelId } })),
+        },
+      },
+    }));
+    const forbiddenKeys = [
+      'files',
+      'title',
+      'preview',
+      'preview_plain',
+      'preview_highlight',
+      'content',
+      'permalink_public',
+      'thumb_64',
+      'url_private',
+      'url_private_download',
+      'headers',
+      'authorization',
+      'cookie',
+      'access_token',
+      'client_secret',
+      'authorization_code',
+      'nested',
+      'token',
+      'signed_url',
+    ];
+    const messageCalls = READ_CALLS.filter(({ tool }) =>
+      ['slack_get_messages', 'slack_get_threads', 'slack_search_messages'].includes(tool),
+    );
+
+    for (const { tool, args } of messageCalls) {
+      for (const fields of [undefined, ['text']]) {
+        const outcome = await call(tool, { ...args, ...(fields === undefined ? {} : { fields }) });
+        expect(outcome.thrown, tool).toBeUndefined();
+        const body = resultJson(outcome);
+        const items = body.results.flatMap((result: { items: any[] }) => result.items);
+        expect(items).toHaveLength(2);
+        const fileMessage = items.find((item: { ts: string }) => item.ts === EXAMPLE.rootTs);
+        expect(fileMessage.hasAttachments, tool).toBe(true);
+        expect(fileMessage.attachments).toEqual([
+          { file_id: 'F0EXAMPLE01', name: 'EXAMPLE-notes.txt', size: 0, type: 'text/plain' },
+        ]);
+        const noFileMessage = items.find((item: { ts: string }) => item.ts === EXAMPLE.replyTs);
+        expect(noFileMessage.hasAttachments, tool).toBe(false);
+        expect(noFileMessage).not.toHaveProperty('attachments');
+        const keys = collectKeys(body);
+        for (const key of forbiddenKeys) expect(keys.has(key), `${tool}: key ${key}`).toBe(false);
+        if (fields === undefined) expect(keys.has('text'), tool).toBe(false);
+        else expect(items.map((item: { text: string }) => item.text)).toEqual(['EXAMPLE-message', 'EXAMPLE-message']);
+      }
+    }
+
+    expectAbsent(
+      [...observations, ...logs.lines()],
+      [['private file address', PRIVATE_FILE_PATH], ['signed file address', signedUrl]],
+      'attachment reads',
+    );
+    expectCleanRun('attachment reads');
+    expect(fakeSlackApi.requestsFor('files.info')).toEqual([]);
+    expect(fakeSlackApi.fileHostRequests()).toEqual([]);
   });
 
   it('keeps secrets out of the error for a rejected session', async () => {

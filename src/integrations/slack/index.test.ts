@@ -64,6 +64,42 @@ describe('SlackModule', () => {
       expect(descriptor?.description.length).toBeLessThanOrEqual(359);
     });
 
+    it.each([
+      ['slack_search_messages', 'queries', '1 to 5'],
+      ['slack_get_messages', 'messages', '1 to 20'],
+      ['slack_get_threads', 'threads', '1 to 20'],
+    ])('advertises default attachment metadata without new inputs for %s', (tool, batchKey, cap) => {
+      const descriptor = slackModule.getToolDescriptors().find((candidate) => candidate.name === tool)!;
+
+      expect(descriptor, tool).toBeDefined();
+      expect(descriptor.description.length).toBeGreaterThanOrEqual(135);
+      expect(descriptor.description.length).toBeLessThanOrEqual(359);
+      expect(descriptor.description.match(/[.!?](?:\s|$)/g)).toHaveLength(1);
+      expect(descriptor.description).toContain(cap);
+      expect(descriptor.description).toContain('nextPageToken');
+      expect(descriptor.description).toContain('cursor');
+      expect(descriptor.description).toMatch(/text/i);
+      expect(descriptor.description).toMatch(/fields/i);
+      expect(descriptor.description).toMatch(/only|opt[- ]in/i);
+      expect(descriptor.description).toMatch(/default/i);
+      expect(descriptor.description).toContain('hasAttachments');
+      expect(descriptor.description).toContain('attachments');
+      expect(descriptor.description).toContain('file_id');
+      expect(descriptor.description).toContain('slack_download_file');
+      const properties = descriptor.inputSchema.properties as Record<
+        string,
+        { type: string; items?: unknown; description: string }
+      >;
+      expect(sorted(Object.keys(properties))).toEqual(sorted([batchKey, 'fields', 'limit', 'max_text_chars']));
+      expect(descriptor.inputSchema.required).toEqual([batchKey]);
+      expect(properties.fields.type).toBe('array');
+      expect(properties.fields.items).toEqual({ type: 'string' });
+      expect(properties.fields.description).toContain('text, mrkdwn, author_name, reactions, channel_name');
+      expect(properties.fields.description).toMatch(/default/i);
+      expect(properties.fields.description).toContain('hasAttachments');
+      expect(properties.fields.description).toContain('attachments');
+    });
+
     it('gives every descriptor a description and a non-empty input schema', () => {
       for (const descriptor of slackModule.getToolDescriptors()) {
         expect(descriptor.description.trim().length, `${descriptor.name} description`).toBeGreaterThan(0);

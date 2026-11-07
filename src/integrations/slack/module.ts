@@ -30,7 +30,9 @@ const MESSAGE_FIELDS = 'text, mrkdwn, author_name, reactions, channel_name';
 const messageFieldsField = z
   .array(z.string())
   .optional()
-  .describe(`Extra fields per message: ${MESSAGE_FIELDS}. Omit for the privacy-minimal default.`);
+  .describe(
+    `Extra fields per message: ${MESSAGE_FIELDS}. Text and author names are opt-in; hasAttachments and available attachments metadata are returned by default.`,
+  );
 const limitField = z
   .number()
   .int()
@@ -228,13 +230,13 @@ export const slackToolDescriptors: ToolDescriptor[] = [
   {
     name: 'slack_search_messages',
     description:
-      'Search Slack messages for 1 to 5 queries in one call, newest first; in_channels and from_users take ids or Slack links; send {cursor} items with nextPageToken to continue; text appears only when fields asks for it.',
+      'Search Slack messages for 1 to 5 queries in one call, newest first; in_channels and from_users take ids or Slack links; send {cursor} items with nextPageToken to continue; text appears only when fields asks for it; hasAttachments is default; available attachments metadata includes file_id for slack_download_file.',
     inputSchema: batchTool(slackSearchMessagesSchema, 'queries', itemJson(searchQuery)),
   },
   {
     name: 'slack_get_messages',
     description:
-      'Read 1 to 20 messages: {message} takes a message link or {channel, ts}, and {channel} reads that channel history, given as an id or link; page with nextPageToken as {cursor} items; text and author names appear only when fields asks for them.',
+      'Read 1 to 20 messages: {message} takes a message link or {channel, ts}, and {channel} reads that channel history, given as an id or link; page with nextPageToken as {cursor} items; text and author names appear only when fields asks for them; hasAttachments is default; available attachments metadata includes file_id for slack_download_file.',
     inputSchema: batchTool(
       slackGetMessagesSchema,
       'messages',
@@ -246,7 +248,7 @@ export const slackToolDescriptors: ToolDescriptor[] = [
   {
     name: 'slack_get_threads',
     description:
-      'Read 1 to 20 threads, each given by a message, reply or thread link (or {channel, ts}); a reply resolves to its root, which appears once, oldest first; page with nextPageToken as {cursor} items; text appears only when fields asks for it.',
+      'Read 1 to 20 threads, each given by a message, reply or thread link (or {channel, ts}); a reply resolves to its root, which appears once, oldest first; page with nextPageToken as {cursor} items; text appears only when fields asks for it; hasAttachments is default; available attachments metadata includes file_id for slack_download_file.',
     inputSchema: batchTool(
       slackGetThreadsSchema,
       'threads',

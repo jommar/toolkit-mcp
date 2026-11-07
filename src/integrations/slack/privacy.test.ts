@@ -29,6 +29,7 @@ import {
   type ToolOutcome,
 } from './__fixtures__/wiring/harness.js';
 import {
+  CAPTURED_COOKIE_SENTINEL,
   EXAMPLE,
   FILE_BYTES_SENTINEL,
   FIXTURE_EMAIL,
@@ -37,9 +38,11 @@ import {
   PHONE_SENTINEL,
   REAL_NAME_SENTINEL,
   TITLE_SENTINEL,
+  TOKEN_SENTINEL,
   messageLink,
 } from './__fixtures__/wiring/sentinels.js';
 import { READ_CALLS, postItem, uploadItem } from './__fixtures__/wiring/calls.js';
+import { rawMessage } from './__fixtures__/tools/fake-slack.js';
 import { SlackModule } from './index.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 
@@ -109,6 +112,108 @@ describe('default read output', () => {
   it('keeps every personal value out of the logs', async () => {
     for (const { tool, args } of READ_CALLS) await call(tool, args);
     expectNoneOf(logs.lines(), PERSONAL_VALUES, 'logs');
+  });
+
+  it('returns only safe default attachment metadata through message tools', async () => {
+    const signedUrl = 'https://files.slack.com/EXAMPLE-signed-file?signature=EXAMPLE-private';
+    const shared = {
+      ...rawMessage({ ts: EXAMPLE.rootTs, user: EXAMPLE.peerId, text: MESSAGE_BODY_SENTINEL, replyCount: 1 }),
+      subtype: 'file_share',
+      files: [
+        hostedFileObject({
+          id: 'F0EXAMPLE01',
+          name: 'EXAMPLE-notes.txt',
+          size: 0,
+          preview: FILE_BYTES_SENTINEL,
+          preview_plain: FILE_BYTES_SENTINEL,
+          preview_highlight: FILE_BYTES_SENTINEL,
+          content: FILE_BYTES_SENTINEL,
+          thumb_64: signedUrl,
+          permalink_public: signedUrl,
+          headers: { authorization: TOKEN_SENTINEL, cookie: CAPTURED_COOKIE_SENTINEL },
+          nested: { email: FIXTURE_EMAIL, phone: PHONE_SENTINEL, real_name: REAL_NAME_SENTINEL, signed_url: signedUrl },
+        }),
+        { id: 'F0EXAMPLE02', title: TITLE_SENTINEL, content: FILE_BYTES_SENTINEL },
+      ],
+    };
+    const ordinary = rawMessage({
+      ts: EXAMPLE.replyTs,
+      threadTs: EXAMPLE.rootTs,
+      user: EXAMPLE.meId,
+      text: MESSAGE_BODY_SENTINEL,
+    });
+    fakeSlackApi.onMethod('conversations.history', () => ({ data: { ok: true, messages: [ordinary, shared] } }));
+    fakeSlackApi.onMethod('conversations.replies', () => ({ data: { ok: true, messages: [shared, ordinary] } }));
+    fakeSlackApi.onMethod('search.messages', () => ({
+      data: {
+        ok: true,
+        messages: {
+          total: 2,
+          matches: [ordinary, shared].map((message) => ({ ...message, channel: { id: EXAMPLE.channelId } })),
+        },
+      },
+    }));
+    const forbiddenKeys = [
+      ...PROFILE_KEYS,
+      'files',
+      'preview',
+      'preview_plain',
+      'preview_highlight',
+      'content',
+      'thumb_64',
+      'url_private',
+      'url_private_download',
+      'permalink_public',
+      'headers',
+      'authorization',
+      'cookie',
+      'nested',
+      'signed_url',
+    ];
+    const forbiddenValues = [
+      ...PROFILE_VALUES,
+      FILE_BYTES_SENTINEL,
+      EXAMPLE.fileUrl,
+      signedUrl,
+      TOKEN_SENTINEL,
+      CAPTURED_COOKIE_SENTINEL,
+    ];
+    const messageCalls = READ_CALLS.filter(({ tool }) =>
+      ['slack_get_messages', 'slack_get_threads', 'slack_search_messages'].includes(tool),
+    );
+
+    for (const { tool, args } of messageCalls) {
+      for (const fields of [undefined, ['text']]) {
+        const outcome = await call(tool, { ...args, ...(fields === undefined ? {} : { fields }) });
+        expect(outcome.thrown, tool).toBeUndefined();
+        const items = itemsOf(outcome);
+        expect(items).toHaveLength(2);
+        const fileMessage = items.find((item) => item.ts === EXAMPLE.rootTs);
+        expect(fileMessage.hasAttachments, tool).toBe(true);
+        expect(fileMessage.attachments).toEqual([
+          { file_id: 'F0EXAMPLE01', name: 'EXAMPLE-notes.txt', size: 0, type: 'text/plain' },
+          { file_id: 'F0EXAMPLE02' },
+        ]);
+        const noFileMessage = items.find((item) => item.ts === EXAMPLE.replyTs);
+        expect(noFileMessage.hasAttachments, tool).toBe(false);
+        expect(noFileMessage).not.toHaveProperty('attachments');
+        if (fields === undefined) {
+          expectNoKeys(items, ['text'], tool);
+          expectNoneOf([outcome.text], [MESSAGE_BODY_SENTINEL], tool);
+        } else {
+          expect(items.map((item) => item.text)).toEqual([MESSAGE_BODY_SENTINEL, MESSAGE_BODY_SENTINEL]);
+        }
+        expectNoKeys(resultJson(outcome), [...forbiddenKeys, 'mrkdwn', 'author_name', 'channel_name'], tool);
+        expectNoneOf([observedText(outcome)], forbiddenValues, tool);
+      }
+    }
+
+    expectNoneOf(logs.lines(), [...forbiddenValues, MESSAGE_BODY_SENTINEL], 'attachment read logs');
+    expect(fakeSlackApi.requestsFor('files.info')).toEqual([]);
+    expect(fakeSlackApi.fileHostRequests()).toEqual([]);
+    expect(fakeSlackApi.requestsFor('users.info')).toEqual([]);
+    expect(fakeSlackApi.requestsFor('users.list')).toEqual([]);
+    expect(fakeSlackApi.requestsFor('conversations.info')).toEqual([]);
   });
 });
 

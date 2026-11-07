@@ -183,12 +183,14 @@ One contract for every list-shaped result, per target:
 
 ### Fields and privacy defaults
 
-By default a message carries only `channel_id`, `ts`, `thread_ts`, `is_top_level`, `reply_count`, `author_id`, `is_bot`, `at` and `permalink`. There is no message text, no author name and no email unless asked for.
+By default a message carries `channel_id`, `ts`, `thread_ts`, `is_top_level`, `reply_count`, `author_id`, `is_bot`, `at`, `permalink` and always `hasAttachments`. When Slack supplies usable file IDs it also carries `attachments`. This applies to history, exact messages (roots and replies), threads and search, including cursor continuations, without extra Slack requests, scopes or tools. There is no message text, no author name and no profile email unless asked for; attachment file names are separate default metadata.
 
+- **Attachment metadata.** `attachments: [{file_id, name?, size?, type?}]` contains only files with string IDs matching `^F[A-Z0-9]+$`, in Slack's file order. `name` is a nonempty filename string, `size` a non-negative safe integer in bytes (including zero), and `type` a nonempty Slack `mimetype` string, not a type inferred from contents or a filename. Missing or wrong-typed optional metadata is omitted, with no fallback to a title or URL. These are response keys, not input options: metadata and `hasAttachments` remain default with omitted `fields`, `[]` or requested fields such as `['text']`.
+- **File presence, not downloadability.** `hasAttachments` describes object file records in Slack's `files`, not rich-message attachments or link-preview unfurls. Missing, null or non-array `files`, an empty list, or a list without object file records gives false and no `attachments`; null, primitive and array entries are ignored. A supplied object file record makes the flag true even without a usable ID. If no usable IDs remain, `attachments` is omitted, not an empty array, even when the flag is true. Missing `files` is best-effort false, not proof Slack stores no attachment; reads do not look up missing metadata, and a discovered ID does not guarantee a download will be allowed.
 - Message tools accept `fields`: `text`, `mrkdwn`, `author_name`, `reactions`, `channel_name`. `max_text_chars` (default 300) caps each text. `slack_get_channels` takes no `fields`.
 - `slack_get_users` accepts `fields`: `real_name`, `title`, `tz`, `email`. Phone numbers are never available. Any other field name is rejected as invalid input.
 - **Email** appears only on the user entries of a `slack_get_users` call that lists `email` in `fields`. Each such entry has `email`, or `email: null` with `email_unavailable` set to `scope_missing` (the token was not granted `users:read.email`; log out and in again after adding the scope) or `not_set` (Slack has no address for that user, as for bots). A `{query}` user lookup matches names only, never addresses.
-- No other tool, write preview, log or error contains an email address. No result, log or error contains a token, an authorization code, file contents or a request header.
+- No other tool, write preview, log or error fetches or adds a profile email address. No result, log or error contains a stored token, an authorization code, file contents or a request header. The file projection excludes raw Slack file objects, titles, contents/previews, thumbnails, private/signed/public/file URLs, unknown nested data, credentials and headers. Filename metadata is user-controlled text: allowlisting its key is not content sanitization or a guarantee that the name contains no PII or sensitive words.
 
 ### Threads on Jira issues
 
@@ -254,6 +256,28 @@ The upload address Slack names in `get_upload_url` is checked before any byte is
 ### Downloading a file
 
 `slack_download_file` saves one Slack file to a path you choose and returns metadata only. It takes `file` (a file id such as `F0EXAMPLE01`, or a file link from the connected workspace such as `https://example-team.slack.com/files/U0EXAMPLE01/F0EXAMPLE01/notes.txt`), `path` (absolute) and `overwrite` (default false). It is one file per call, not an array, and it has no preview step because nothing leaves your machine. A file link from another workspace fails `wrong_workspace`, any other kind of link fails `wrong_link_kind`, and anything that is not a supported Slack link fails `unrecognized_link`; none of these calls Slack. Web-client file paths are not supported.
+
+**Discover, then download.** `slack_get_messages`, `slack_get_threads` and `slack_search_messages` supply available IDs at `results[].items[].attachments[].file_id` by default. Reads only project file metadata already returned by Slack: they make no `files.info` or file-byte request. Pass that ID unchanged as `slack_download_file.file`; the explicit download still performs its own file-info, eligibility and authorization checks below.
+
+For example, call `slack_get_messages` without `fields` using these synthetic targets:
+
+```json
+{"messages":[{"channel":"C0EXAMPLE01"}],"limit":1}
+```
+
+The additions to a returned message in `results[0].items[0]` might be:
+
+```json
+{"hasAttachments":true,"attachments":[{"file_id":"F0EXAMPLE01","name":"EXAMPLE-notes.txt","size":0,"type":"text/plain"},{"file_id":"F0EXAMPLE02"}]}
+```
+
+Pass its first `attachments[0].file_id` to `slack_download_file` with your chosen local path:
+
+```json
+{"file":"F0EXAMPLE01","path":"/absolute/path/EXAMPLE-local-notes.txt"}
+```
+
+The download result's `name` is `EXAMPLE-local-notes.txt`, the saved basename, not the read metadata's Slack filename. No new tool, scope or attachment opt-in is needed for discovery; the existing download scope and restrictions remain unchanged.
 
 - **The login.** It uses the same stored login as the other Slack tools, whichever kind. An app login needs the `files:read` scope (section 8) and fails `scope_missing` until you add the scope to the app, run `slack_logout`, run `slack_login` and approve every scope. A browser session adopted from dev-dashboard has no scope list and is not checked; on file requests it sends its `d` cookie beside the token, to the two exact Slack file hosts only. An app login sends no cookie. If Slack answers a sign-in page to a session, the call fails `download_not_authorized` (section 12). Real browser-session file downloads remain unverified pending the human live check.
 - **Which files.** Only files Slack stores itself (mode `hosted` or `snippet`) that are not external, deleted or tombstoned, with a reported non-negative integer size and a private download address. Anything else, including unsupported canvases, Google Docs, Slack Connect files and remote files, fails `file_not_downloadable` before a byte is requested.
@@ -334,15 +358,15 @@ Only you run this; agents never log in to a live Slack. It exercises every part 
 1. Connect either route: with dev-dashboard, connect Slack there once so `~/.config/slack/session.json` exists; otherwise create the app (section 2) and write `app.json` (section 3). Then set `SLACK_ENABLED=true` and restart the MCP client.
 2. `slack_get_status` reports `not_connected`, with `dashboard_session_available: true` on the dev-dashboard route or `app_configured: true` on the app route.
 3. `slack_login`. On the dev-dashboard route it returns `connected` at once and a stored `token.json` holds `access_token` (xoxc) and `cookie` (xoxd). On the app route, open the link in your own browser and approve; the tab says the login finished. Either way `slack_get_status` then reports `connected`, and the app route also shows an empty `scopes_missing`. The app route confirms Slack accepted the localhost redirect.
-4. Read: send `slack_get_threads` the link of a thread's root message and the link of one of its replies, from your own DM (or any thread you can read), in one call; both entries come back and the thread was fetched once. Then use a small `limit` (say 2) and continue with the returned `nextPageToken`. Pages arriving at normal speed also show Slack is not applying its reduced history limits to the app. Also read one reply by its own link with `slack_get_messages`: it must come back as that reply, not as the thread's root.
+4. Read: send `slack_get_threads` the link of a thread's root message and the link of one of its replies, from your own DM (or any thread you can read), in one call; both entries come back and the thread was fetched once. Then use a small `limit` (say 2) and continue with the returned `nextPageToken`. Pages arriving at normal speed also show Slack is not applying its reduced history limits to the app. Also read one reply by its own link with `slack_get_messages`: it must come back as that reply, not as the thread's root. A message without files must have `hasAttachments: false` and no `attachments`, with text and author names still omitted unless requested.
 5. Post: `slack_prepare_write` with one `post` item to your own DM link; check the preview; `slack_confirm_write`. The result has a permalink.
 6. React: prepare and confirm a `react` item on that post, using the permalink.
-7. Upload: prepare and confirm an `upload` item for a tiny harmless text file at an absolute path. Check that the preview shows the resolved path.
+7. Upload: prepare and confirm an `upload` item for a tiny harmless text file at an absolute path. Check that the preview shows the resolved path. Read its message with `slack_get_messages` without `fields`, and check `hasAttachments: true` and the supplied `attachments[].file_id`; also check thread/search reads where Slack returns that file record. Pass the returned ID directly to `slack_download_file` with a fresh absolute local path and verify the saved bytes and hash yourself. Do not copy real IDs, message text, filenames or credentials into test artifacts; missing metadata or refused browser-session bytes do not establish live acceptance.
 8. `slack_logout`. `slack_get_status` reports `not_connected`. The app route reports `revoked: true`; the dev-dashboard route reports `revoked: false` and leaves `~/.config/slack/session.json` unchanged.
 
 ## 11. Limits and what is not included
 
-Not included: returning file contents in a response (a download saves to disk and returns metadata only), downloading canvases, Google Docs, Slack Connect or remote files, discovering file ids from messages, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. For an app login, token rotation is off, so an expired or revoked token means logging in again; an adopted web session can be rotated or signed out by Slack at any time, and then means reconnecting in dev-dashboard and running `slack_login` again. Every Slack behavior described here comes from Slack's documentation and from offline tests except the dev-dashboard capture, which was verified against a live workspace; the smoke test is the first live run in this module. Browser-session file downloads specifically remain unverified until the human live check; offline tests prove credential routing and local-save behavior, not that Slack accepts that login for file bytes.
+Not included: returning file contents in a response (a download saves to disk and returns metadata only), downloading canvases, Google Docs, Slack Connect or remote files, lists, drafts, scheduled messages, editing or deleting messages, removing reactions, joining or inviting, unreads and mentions, concurrent workspaces. For an app login, token rotation is off, so an expired or revoked token means logging in again; an adopted web session can be rotated or signed out by Slack at any time, and then means reconnecting in dev-dashboard and running `slack_login` again. Every Slack behavior described here comes from Slack's documentation and from offline tests except the dev-dashboard capture, which was verified against a live workspace; the smoke test is the first live run in this module. Live attachment availability and browser-session file downloads remain unverified until the human live check; offline tests prove the metadata projection, credential routing and local-save behavior, not that Slack returns files on every read or accepts that login for file bytes.
 
 ## 12. Troubleshooting
 

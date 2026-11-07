@@ -209,16 +209,18 @@ Eleven tools that read Slack as you, download a file to a path you choose and, b
 | `slack_login` | Connect: adopt the dev-dashboard web session when there is one, otherwise return a link to open in your own browser or finish a login from the pasted redirect address. | `workspace`, `redirected_url` |
 | `slack_logout` | Revoke an app token at Slack and remove the stored login; an adopted web session is only removed locally. | `revoke` |
 | `slack_get_status` | Report the connection state with the next step, and whether a dev-dashboard session is available. | `verify` |
-| `slack_search_messages` | Search messages, newest first. | `queries[]` (`query`, `exact_phrases`, `in_channels`, `from_users`, `after`, `before`), `fields`, `limit` |
-| `slack_get_messages` | Read one message, or a conversation's history. | `messages[]` (`message` or `channel`), `fields`, `limit` |
-| `slack_get_threads` | Read threads by message, reply or thread link. | `threads[]`, `fields`, `limit` |
+| `slack_search_messages` | Search messages, newest first, with default file metadata and `hasAttachments`. | `queries[]` (`query`, `exact_phrases`, `in_channels`, `from_users`, `after`, `before`), `fields`, `limit` |
+| `slack_get_messages` | Read one message, or a conversation's history, with default file metadata and `hasAttachments`. | `messages[]` (`message` or `channel`), `fields`, `limit` |
+| `slack_get_threads` | Read threads by message, reply or thread link, with default file metadata and `hasAttachments`. | `threads[]`, `fields`, `limit` |
 | `slack_get_channels` | Look up channels by id, link, name or membership. | `channels[]`, `limit` |
 | `slack_get_users` | Look up users by id, link, name, channel members or `me`. | `users[]`, `fields`, `limit` |
-| `slack_download_file` | Save one Slack file (by id or file link) to an absolute path you choose and return its path, name, size, type and sha256, never its contents; an app login needs `files:read`. | `file`, `path`, `overwrite` |
+| `slack_download_file` | Save one Slack file (by a read's `attachments[].file_id` or a file link) to an absolute path you choose and return its path, name, size, type and sha256, never its contents; an app login needs `files:read`. | `file`, `path`, `overwrite` |
 | `slack_prepare_write` | Preview up to 10 posts, reactions or file uploads and get one confirmation token. | `items[]` (`action`, `destination`, `text`, `path`, `emoji`) |
 | `slack_confirm_write` | Send exactly what was previewed under that token. | `confirmation_token` |
 
-Message text, author names and emails are omitted unless asked for through `fields`. Slack's list-shaped results do not use the single envelope below: each input item gets its own result with its own `nextPageToken`, and a continuation is a new item holding only `{cursor}`.
+Every message has `hasAttachments` by default, plus `attachments: [{file_id, name?, size?, type?}]` when Slack supplies usable file IDs; `type` is Slack's MIME type. No-file or link-unfurl-only messages return false with no `attachments`; supplied file records with no usable IDs return true but no metadata. These response keys are independent of `fields` and require no extra read requests, scopes or tools; pass a returned `file_id` directly as `slack_download_file.file`. Read metadata never includes raw file objects, contents/previews or file URLs. File names are default, user-controlled metadata, not sanitized content; message text, author names and profile emails remain omitted unless asked for through `fields` (email only on `slack_get_users`). See the guide's [privacy defaults](docs/slack.md#fields-and-privacy-defaults) and [discovery-to-download example](docs/slack.md#downloading-a-file).
+
+Slack's list-shaped results do not use the single envelope below: each input item gets its own result with its own `nextPageToken`, and a continuation is a new item holding only `{cursor}`.
 
 ### Built-in (always registered)
 
