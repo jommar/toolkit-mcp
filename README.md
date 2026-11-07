@@ -18,7 +18,7 @@ An MCP server that exposes developer toolchain operations (Jira issue management
 │         │                             │               │
 │  ┌──────┴──────┐    ┌─────────┴──────────┐   ┌─────────┴──────────┐   ┌─────────┴──────────┐   │
 │  │  Jira Module │    │  GitHub Module     │   │  Figma Module      │   │  Slack Module      │   │
-│  │  8 tools     │    │  30 tools          │   │  8 tools           │   │  10 tools          │   │
+│  │  8 tools     │    │  30 tools          │   │  8 tools           │   │  11 tools          │   │
 │  │  3 resources │    │  1 resource        │   │                    │   │  (SLACK_ENABLED)   │   │
 │  │  2 prompts   │    │                    │   │                    │   │                    │   │
 │  └──────┬──────┘    └─────────┬──────────┘   └─────────┬──────────┘   └─────────┬──────────┘   │
@@ -60,7 +60,7 @@ All variables are optional — tools only register if their required env vars ar
 | `GH_REPOS` | GitHub | Comma-separated repo list for GitHub searches (default: `TransActComm/TravelTracker,TransActComm/Portage-backend,TransActComm/Portage-frontend`) |
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
-| `SLACK_ENABLED` | Slack | All 10 Slack tools, when set to exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json`; without one, the Slack app's client id is read from `~/.config/slack/toolkit-mcp/app.json`, not the environment — see [`docs/slack.md`](docs/slack.md) |
+| `SLACK_ENABLED` | Slack | All 11 Slack tools, when set to exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json`; without one, the Slack app's client id is read from `~/.config/slack/toolkit-mcp/app.json`, not the environment — see [`docs/slack.md`](docs/slack.md) |
 | `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
 | `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
 | `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
@@ -202,7 +202,7 @@ Read-only. All list tools return the paginated response shape (`items`, `nextPag
 
 ### Slack Tools (registered when `SLACK_ENABLED=true`)
 
-Ten tools that read Slack as you and, behind a preview-then-confirm gate, post, react and upload. Login takes the shortest route available: if dev-dashboard has captured your Slack web session in `~/.config/slack/session.json`, `slack_login` adopts it and no Slack app is needed; otherwise create the app from the shipped manifest `docs/slack-app-manifest.json`, write the one-time config file and log in by link. Both routes, every limit and every error code are in [`docs/slack.md`](docs/slack.md). Every read tool and `slack_prepare_write` takes an array of 1 to n items and returns one result per item.
+Eleven tools that read Slack as you, download a file to a path you choose and, behind a preview-then-confirm gate, post, react and upload. Login takes the shortest route available: if dev-dashboard has captured your Slack web session in `~/.config/slack/session.json`, `slack_login` adopts it and no Slack app is needed; otherwise create the app from the shipped manifest `docs/slack-app-manifest.json`, write the one-time config file and log in by link. Both routes, every limit and every error code are in [`docs/slack.md`](docs/slack.md). Every read tool and `slack_prepare_write` takes an array of 1 to n items and returns one result per item; `slack_download_file` takes one file per call.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -214,6 +214,7 @@ Ten tools that read Slack as you and, behind a preview-then-confirm gate, post, 
 | `slack_get_threads` | Read threads by message, reply or thread link. | `threads[]`, `fields`, `limit` |
 | `slack_get_channels` | Look up channels by id, link, name or membership. | `channels[]`, `limit` |
 | `slack_get_users` | Look up users by id, link, name, channel members or `me`. | `users[]`, `fields`, `limit` |
+| `slack_download_file` | Save one Slack file (by id or file link) to an absolute path you choose and return its path, name, size, type and sha256, never its contents; an app login needs `files:read`. | `file`, `path`, `overwrite` |
 | `slack_prepare_write` | Preview up to 10 posts, reactions or file uploads and get one confirmation token. | `items[]` (`action`, `destination`, `text`, `path`, `emoji`) |
 | `slack_confirm_write` | Send exactly what was previewed under that token. | `confirmation_token` |
 
@@ -394,6 +395,7 @@ src/
 │       ├── module.ts          # Slack Zod schemas and tool descriptors
 │       ├── session-tools.ts   # slack_login, slack_logout, slack_get_status
 │       ├── read-tools.ts      # search, messages, threads, channels, users
+│       ├── download-tools.ts  # slack_download_file
 │       ├── write-tools.ts     # slack_prepare_write, slack_confirm_write
 │       ├── write-gate.ts      # Confirmation tokens over a frozen list of writes
 │       └── __fixtures__/      # Synthetic test fixtures

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { vi, describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
@@ -8,8 +9,15 @@ vi.mock('axios', async () => {
   return createAxiosModule(actual, fakeSlackApi);
 });
 
-import { removeSandbox, resetSandbox, writeAppConfig, writeToken, writeUploadFile } from './__fixtures__/wiring/sandbox.js';
-import { fakeSlackApi } from './__fixtures__/wiring/fake-slack-api.js';
+import {
+  removeSandbox,
+  resetSandbox,
+  uploadDirectory,
+  writeAppConfig,
+  writeToken,
+  writeUploadFile,
+} from './__fixtures__/wiring/sandbox.js';
+import { SLACK_SIDE_FILE_NAME, fakeSlackApi, hostedFileObject, streamOf } from './__fixtures__/wiring/fake-slack-api.js';
 import {
   callTool,
   captureConsole,
@@ -177,6 +185,57 @@ describe('write previews', () => {
     expect(file.resolved_path.endsWith('/note.txt')).toBe(true);
     expectNoneOf([outcome.text], [FILE_BYTES_SENTINEL, 'second line of the note'], 'upload preview');
     expectNoKeys(resultJson(outcome), PROFILE_KEYS, 'upload preview');
+  });
+});
+
+describe('file downloads', () => {
+  // The private file address is a capability, so it stays out of results, errors and logs like the bytes do.
+  const DOWNLOAD_FORBIDDEN = [
+    ...PERSONAL_VALUES,
+    FILE_BYTES_SENTINEL,
+    SLACK_SIDE_FILE_NAME,
+    new URL(EXAMPLE.fileUrl).pathname,
+  ];
+
+  it('returns the path, name, size, type and hash of the saved file, and no personal key, value or file content', async () => {
+    const outcome = await call('slack_download_file', {
+      file: EXAMPLE.fileId,
+      path: join(uploadDirectory, 'saved.txt'),
+    });
+
+    const result = resultJson(outcome);
+    expect(Object.keys(result).sort()).toEqual(['name', 'path', 'sha256', 'size', 'type']);
+    expectNoKeys(result, PERSONAL_KEYS, 'download result');
+    expectNoneOf([outcome.text], DOWNLOAD_FORBIDDEN, 'download result');
+    expectNoneOf(logs.lines(), DOWNLOAD_FORBIDDEN, 'logs');
+  });
+
+  it('keeps personal values and file content out of the errors of a download that is refused or fails', async () => {
+    const path = join(uploadDirectory, 'refused.txt');
+    const refusals: Array<() => void> = [
+      () => fakeSlackApi.failEverySlackMethod('invalid_auth'),
+      () => fakeSlackApi.failSlack('files.info', 'file_not_found'),
+      () =>
+        fakeSlackApi.onMethod('files.info', () => ({
+          data: { ok: true, file: hostedFileObject({ mode: 'external', is_external: true }) },
+        })),
+      () =>
+        fakeSlackApi.onFileHost(() => ({
+          data: streamOf(Buffer.from(`${FILE_BYTES_SENTINEL} ${SLACK_SIDE_FILE_NAME}`)),
+          status: 404,
+          headers: { 'content-type': 'text/html' },
+        })),
+    ];
+
+    for (const refuse of refusals) {
+      fakeSlackApi.resetHandlers();
+      refuse();
+      const outcome = await call('slack_download_file', { file: EXAMPLE.fileId, path });
+      expect(outcome.thrown, 'a refused download throws').toBeDefined();
+    }
+
+    expectNoneOf(observations, DOWNLOAD_FORBIDDEN, 'download errors');
+    expectNoneOf(logs.lines(), DOWNLOAD_FORBIDDEN, 'logs');
   });
 });
 

@@ -239,7 +239,13 @@ the human, cannot be audited as a bot, and is the one call that is hard to undo.
 Gate it behind an explicit opt-in env flag and say so in the tool description.
 
 Never log the token or cookie, never echo them in an error message, and never
-send them anywhere except `app.slack.com`.
+send them anywhere except `app.slack.com` and, to download a file,
+`files.slack.com` and `files-origin.slack.com`. toolkit-mcp checks each exact
+https file host, including every redirect target, before attaching credentials;
+only a browser-session login sends its cookie, and an app login sends only its
+bearer token. This file-host exception describes the implemented routing rule,
+not a verified live download: whether Slack serves file bytes to the session
+pair remains unverified pending the human live check.
 
 ## What we measured (for sizing expectations)
 

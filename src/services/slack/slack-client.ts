@@ -8,6 +8,9 @@ const SLACK_API_BASE_URL = 'https://slack.com/api';
 // A web session (xoxc token + d cookie) is issued to the Slack web client, so it is called on that host.
 const SLACK_WEB_API_BASE_URL = 'https://app.slack.com/api';
 const SLACK_HOST_SUFFIX = '.slack.com';
+// The only hosts a file download may contact, compared whole: a suffix match would also admit hosts Slack does not run.
+const SLACK_FILE_HOSTS: ReadonlySet<string> = new Set(['files.slack.com', 'files-origin.slack.com']);
+const MAX_DOWNLOAD_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 30_000;
 const DIRECTORY_PAGE_SIZE = 200;
 const DIRECTORY_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -48,6 +51,20 @@ export type CompleteUploadRequest = {
   thread_ts?: string;
   initial_comment?: string;
 };
+
+export interface SlackFile {
+  id?: string;
+  mimetype?: string;
+  size?: number;
+  mode?: string;
+  is_external?: boolean;
+  is_deleted?: boolean;
+  is_tombstoned?: boolean;
+  url_private?: string;
+  url_private_download?: string;
+}
+export type FileInfoResponse = SlackResponse & { file: SlackFile };
+export type FileDownload = { body: Readable; contentType?: string };
 
 type UsersListResponse = SlackResponse & {
   members: SlackUser[];
@@ -120,6 +137,10 @@ export class SlackClient {
     return this.post<SlackResponse>('reactions.add', params);
   }
 
+  filesInfo(params: { file: string }): Promise<FileInfoResponse> {
+    return this.get<FileInfoResponse>('files.info', params);
+  }
+
   getUploadUrl(params: UploadUrlRequest): Promise<UploadUrlResponse> {
     return this.get<UploadUrlResponse>('files.getUploadURLExternal', params);
   }
@@ -159,6 +180,42 @@ export class SlackClient {
         maxRedirects: 0,
       });
     } catch (error) {
+      throw asClientError(error);
+    }
+  }
+
+  // The stored credentials go through the default instance, one request at a time, and each request gets them
+  // only after its own address passed isSlackFileUrl: nothing is forwarded by axios, and a redirect to any
+  // other host is refused unfollowed. The body is a stream the caller must consume or destroy.
+  async openFileDownload(fileUrl: string): Promise<FileDownload> {
+    const token = await this.storedToken();
+    let address = fileUrl;
+    for (let redirects = 0; ; redirects += 1) {
+      if (!isSlackFileUrl(address)) throw offListError(address, redirects);
+      const response = await this.requestFile(address, token);
+      if (response.status < 300) {
+        return { body: response.data, contentType: headerText(response.headers['content-type']) };
+      }
+      response.data.destroy();
+      const next = redirectTarget(address, headerText(response.headers.location));
+      if (next === undefined || redirects === MAX_DOWNLOAD_REDIRECTS) {
+        throw clientError('download_failed', 'Slack answered a redirect that could not be followed.');
+      }
+      address = next;
+    }
+  }
+
+  private async requestFile(address: string, token: TokenRecord): Promise<AxiosResponse<Readable>> {
+    try {
+      return await axios.get<Readable>(address, {
+        headers: authHeaders(token),
+        responseType: 'stream',
+        timeout: REQUEST_TIMEOUT_MS,
+        maxRedirects: 0,
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
+    } catch (error) {
+      if (isAxiosError(error)) (error.response?.data as Readable | undefined)?.destroy();
       throw asClientError(error);
     }
   }
@@ -230,6 +287,43 @@ function isSlackUploadUrl(uploadUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isSlackFileUrl(address: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(address);
+    return protocol === 'https:' && SLACK_FILE_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+// The first address comes from Slack's file record; any later one is a redirect target that redirectTarget parsed.
+function offListError(address: string, redirects: number): Error {
+  if (redirects === 0) {
+    return clientError(
+      'file_not_downloadable',
+      'Slack named a download address that is not https on a Slack file host.',
+    );
+  }
+  return clientError(
+    'download_not_authorized',
+    `Slack redirected the download to ${new URL(address).hostname}, which is not an https Slack file host, ` +
+      'so it was not followed.',
+  );
+}
+
+function redirectTarget(from: string, location: string | undefined): string | undefined {
+  if (location === undefined) return undefined;
+  try {
+    return new URL(location, from).href;
+  } catch {
+    return undefined;
+  }
+}
+
+function headerText(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function clientError(code: string, message: string, details: Record<string, unknown> = {}): Error {

@@ -29,6 +29,7 @@ export const ALL_USER_SCOPES = [
   'users:read.email',
   'chat:write',
   'reactions:write',
+  'files:read',
   'files:write',
 ] as const;
 
@@ -53,6 +54,8 @@ export const EXAMPLE = {
   laterTs: '1700000000.000300',
   postedTs: '1700000000.000900',
   uploadUrl: 'https://example-team.slack.com/v1/EXAMPLE-UPLOAD',
+  fileUrl: 'https://files.slack.com/files-pri/T0EXAMPLE1-F0EXAMPLE01/download/example.txt',
+  fileRedirectUrl: 'https://files-origin.slack.com/files-pri/T0EXAMPLE1-F0EXAMPLE01/download/example.txt',
 } as const;
 
 export const TOOL_NAMES = [
@@ -64,6 +67,7 @@ export const TOOL_NAMES = [
   'slack_get_threads',
   'slack_get_channels',
   'slack_get_users',
+  'slack_download_file',
   'slack_prepare_write',
   'slack_confirm_write',
 ] as const;

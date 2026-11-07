@@ -159,6 +159,12 @@ export const slackGetUsersSchema = z.object({
   limit: limitField,
 });
 
+export const slackDownloadFileSchema = z.object({
+  file: z.string().min(1).describe('A file id (starts with F) or a file link of the connected workspace.'),
+  path: z.string().min(1).describe('Absolute path to save the file at; its directory must already exist.'),
+  overwrite: z.boolean().optional().describe('Replace an existing regular file at path (default false).'),
+});
+
 // zodToJsonSchema reports an array as an array of bare objects; each batch item's own properties are restored here.
 function batchTool(schema: z.AnyZodObject, batchKey: string, items: Record<string, unknown>) {
   const json = zodToJsonSchema(schema);
@@ -263,6 +269,12 @@ export const slackToolDescriptors: ToolDescriptor[] = [
     description:
       'Look up 1 to 100 users by id or profile link, or 1 to 20 items by {query} on names, {members_of} (a DM or channel link) or {me:true}; fields may add real_name, title, tz or email, and email only when listed; page with nextPageToken as {cursor} items; phone is never returned.',
     inputSchema: batchTool(slackGetUsersSchema, 'users', itemJson(userItem)),
+  },
+  {
+    name: 'slack_download_file',
+    description:
+      'Download one Slack file, given its id or a Slack file link, to an absolute path you choose and return only its path, name, size, type and sha256; an existing file is replaced only with overwrite:true, no file content is returned, and an app login needs the files:read scope.',
+    inputSchema: zodToJsonSchema(slackDownloadFileSchema),
   },
   {
     name: 'slack_prepare_write',

@@ -31,6 +31,7 @@ export const ALL_SCOPES: readonly string[] = [
   'users:read.email',
   'chat:write',
   'reactions:write',
+  'files:read',
   'files:write',
 ];
 

@@ -26,7 +26,7 @@ function* walkManifest(node: unknown, keyPath: string[] = []): Generator<{ keyPa
 
 describe('slack app definition', () => {
   describe('tool scopes', () => {
-    it('unions to exactly the fourteen user scopes the spec lists, users:read.email included', () => {
+    it('unions to exactly the fifteen user scopes the spec lists, users:read.email included', () => {
       expect(sorted(unionOfToolScopes())).toEqual(sorted(ALL_USER_SCOPES));
       expect(unionOfToolScopes()).toContain('users:read.email');
     });
@@ -47,6 +47,10 @@ describe('slack app definition', () => {
 
     it('gives the confirm step the three write scopes', () => {
       expect(sorted(TOOL_SCOPES.slack_confirm_write)).toEqual(['chat:write', 'files:write', 'reactions:write']);
+    });
+
+    it('gives the download tool the files:read scope', () => {
+      expect(TOOL_SCOPES.slack_download_file).toEqual(['files:read']);
     });
   });
 

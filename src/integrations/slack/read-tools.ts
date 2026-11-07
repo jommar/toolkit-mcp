@@ -890,7 +890,7 @@ async function authorName(names: Names, userId: string | undefined): Promise<str
   return displayName(user);
 }
 
-async function connectedTeam(ctx: ReadToolContext): Promise<TokenRecord> {
+export async function connectedTeam(ctx: ReadToolContext): Promise<TokenRecord> {
   const token = await readToken(slackPaths(os.homedir()));
   if (token) return token;
   if (ctx.oauth?.getPendingLogin()) {
@@ -903,7 +903,7 @@ async function connectedTeam(ctx: ReadToolContext): Promise<TokenRecord> {
   throw callError('not_connected', 'No Slack token is stored for this module.', 'Run slack_login.');
 }
 
-function locate(value: string, accepted: LinkKind[], team: TokenRecord): ResolvedLink {
+export function locate(value: string, accepted: LinkKind[], team: TokenRecord): ResolvedLink {
   const link = SLACK_ID_PATTERN.test(value) ? idLink(value) : parsedLinkOrRefuse(value);
   if (!accepted.includes(link.kind)) {
     throw new ItemFailure({
@@ -1065,11 +1065,11 @@ function invalidParams(message: string): McpError {
   return new McpError(ErrorCode.InvalidParams, message);
 }
 
-function callError(code: string, sentence: string, nextStep: string): McpError {
+export function callError(code: string, sentence: string, nextStep: string): McpError {
   return new McpError(ErrorCode.InvalidRequest, `slack.${code}: ${sentence} ${nextStep}`);
 }
 
-function jsonResult(body: unknown): CallToolResult {
+export function jsonResult(body: unknown): CallToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(body) }] };
 }
 

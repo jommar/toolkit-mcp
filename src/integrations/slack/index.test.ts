@@ -44,7 +44,7 @@ describe('SlackModule', () => {
   });
 
   describe('tool surface', () => {
-    it('creates exactly the ten slack tool handlers', () => {
+    it('creates exactly the eleven slack tool handlers', () => {
       const handlers = slackModule.createToolHandlers({ slack: {} as never });
       expect(sorted(Object.keys(handlers))).toEqual(sorted(TOOL_NAMES));
       for (const handler of Object.values(handlers)) expect(typeof handler).toBe('function');
@@ -54,6 +54,14 @@ describe('SlackModule', () => {
       const handlers = slackModule.createToolHandlers({ slack: {} as never });
       const descriptorNames = slackModule.getToolDescriptors().map((descriptor) => descriptor.name);
       expect(sorted(descriptorNames)).toEqual(sorted(Object.keys(handlers)));
+    });
+
+    it('gives slack_download_file a description of 135 to 359 characters', () => {
+      const descriptor = slackModule.getToolDescriptors().find((candidate) => candidate.name === 'slack_download_file');
+
+      expect(descriptor, 'slack_download_file descriptor').toBeDefined();
+      expect(descriptor?.description.length).toBeGreaterThanOrEqual(135);
+      expect(descriptor?.description.length).toBeLessThanOrEqual(359);
     });
 
     it('gives every descriptor a description and a non-empty input schema', () => {
