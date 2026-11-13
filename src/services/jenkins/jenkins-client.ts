@@ -201,12 +201,13 @@ export class JenkinsClient {
 
   /**
    * Console log for a build, paginated by line to keep responses small. Defaults to the last
-   * build. The full log is fetched from Jenkins but only the requested line window is returned.
+   * build. The full log is fetched from Jenkins but only the requested line window is returned;
+   * `tail` makes that window the last `limit` lines.
    */
   async getConsole(
     job: string,
     buildNumber?: number,
-    opts?: { offset?: number; limit?: number },
+    opts?: { offset?: number; limit?: number; tail?: boolean },
   ): Promise<JenkinsConsolePage> {
     const ref = this.buildRef(buildNumber);
     const { data } = await this.http.get<string>(`${this.jobPath(job)}/${ref}/consoleText`, {
@@ -216,8 +217,8 @@ export class JenkinsClient {
     const all = String(data ?? '').split(/\r?\n/);
     if (all.length > 0 && all[all.length - 1] === '') all.pop();
     const totalLines = all.length;
-    const offset = clamp(opts?.offset ?? 0, 0, totalLines);
     const limit = clamp(opts?.limit ?? 200, 1, 2000);
+    const offset = opts?.tail ? Math.max(0, totalLines - limit) : clamp(opts?.offset ?? 0, 0, totalLines);
     const lines = all.slice(offset, offset + limit);
     const nextOffset = offset + lines.length;
     const hasMore = nextOffset < totalLines;

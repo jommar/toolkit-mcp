@@ -38,6 +38,16 @@ export interface PrInfo {
 
 export type PrSearchResult = PrInfo;
 
+/** One page of a list endpoint; `hasMore` comes from GitHub's Link rel="next", not from over-fetching. */
+export interface PageResult<T> {
+  items: T[];
+  hasMore: boolean;
+}
+
+/** GitHub rejects per_page above 100 by silently clamping it. */
+const MAX_PER_PAGE = 100;
+const MAX_REVIEW_PAGES = 10;
+
 export interface PrCreated {
   number: number;
   htmlUrl: string;
@@ -565,6 +575,26 @@ export class GitHubClient {
   }
 
   /**
+   * GET one page of a list endpoint. `hasMore` is true only when GitHub's Link header carries rel="next",
+   * so it stays correct at per_page 100 (GitHub's cap) and never skips or repeats an item across pages.
+   */
+  private async getPage<T>(
+    url: string,
+    opts: { perPage?: number; page?: number } | undefined,
+    defaultPerPage: number,
+    extraParams?: Record<string, unknown>,
+  ): Promise<{ data: T; hasMore: boolean }> {
+    const response = await this.http.get<T>(url, {
+      params: {
+        ...extraParams,
+        per_page: Math.min(opts?.perPage ?? defaultPerPage, MAX_PER_PAGE),
+        page: opts?.page ?? 1,
+      },
+    });
+    return { data: response.data, hasMore: this.parseNextLink(response.headers?.['link'] as string | undefined) !== undefined };
+  }
+
+  /**
    * Parse GitHub's Link header for rel="next" URL.
    * Returns the URL string or undefined if no next page.
    * Link format: `<https://api.github.com/search/issues?page=2>; rel="next", <https://...>; rel="last"`
@@ -630,18 +660,19 @@ export class GitHubClient {
     repo: string,
     prNumber: number,
     opts?: { perPage?: number; page?: number },
-  ): Promise<PrComment[]> {
+  ): Promise<PageResult<PrComment>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/issues/${prNumber}/comments`, {
-      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
-    });
-    return data.map((c: any) => ({
-      id: c.id,
-      htmlUrl: c.html_url,
-      body: c.body ?? '',
-      user: c.user?.login ?? 'unknown',
-      createdAt: c.created_at,
-    }));
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/issues/${prNumber}/comments`, opts, 100);
+    return {
+      items: data.map((c: any) => ({
+        id: c.id,
+        htmlUrl: c.html_url,
+        body: c.body ?? '',
+        user: c.user?.login ?? 'unknown',
+        createdAt: c.created_at,
+      })),
+      hasMore,
+    };
   }
 
   /**
@@ -667,16 +698,17 @@ export class GitHubClient {
   async listBranches(
     repo: string,
     opts?: { perPage?: number; page?: number },
-  ): Promise<BranchInfo[]> {
+  ): Promise<PageResult<BranchInfo>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/branches`, {
-      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
-    });
-    return data.map((b: any) => ({
-      name: b.name,
-      sha: b.commit?.sha ?? '',
-      protected: b.protected ?? false,
-    }));
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/branches`, opts, 100);
+    return {
+      items: data.map((b: any) => ({
+        name: b.name,
+        sha: b.commit?.sha ?? '',
+        protected: b.protected ?? false,
+      })),
+      hasMore,
+    };
   }
 
   /**
@@ -801,13 +833,11 @@ export class GitHubClient {
   async getPrFiles(
     repo: string,
     prNumber: number,
-    opts?: { perPage?: number; page?: number },
-  ): Promise<PrFile[]> {
+    opts?: { perPage?: number; page?: number; includePatch?: boolean },
+  ): Promise<PageResult<PrFile>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/files`, {
-      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
-    });
-    return data.map((f: any) => {
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/pulls/${prNumber}/files`, opts, 100);
+    const items = data.map((f: any) => {
       const file: PrFile = {
         filename: f.filename,
         status: f.status,
@@ -815,7 +845,7 @@ export class GitHubClient {
         deletions: f.deletions,
         changes: f.changes,
       };
-      if (f.patch) {
+      if (opts?.includePatch && f.patch) {
         file.patch = f.patch.length > 2000 ? f.patch.slice(0, 2000) : f.patch;
         if (f.patch.length > 2000) {
           file.truncated = true;
@@ -826,34 +856,42 @@ export class GitHubClient {
       }
       return file;
     });
+    return { items, hasMore };
   }
 
   async getPrCommits(
     repo: string,
     prNumber: number,
     opts?: { perPage?: number; page?: number },
-  ): Promise<any[]> {
+  ): Promise<PageResult<any>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/commits`, {
-      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
-    });
-    return data.map((c: any) => ({
-      sha: c.sha,
-      commit: {
-        message: c.commit?.message ?? '',
-        author: {
-          name: c.commit?.author?.name ?? '',
-          email: c.commit?.author?.email ?? '',
-          date: c.commit?.author?.date ?? '',
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/pulls/${prNumber}/commits`, opts, 100);
+    return {
+      items: data.map((c: any) => ({
+        sha: c.sha,
+        commit: {
+          message: c.commit?.message ?? '',
+          author: {
+            name: c.commit?.author?.name ?? '',
+            email: c.commit?.author?.email ?? '',
+            date: c.commit?.author?.date ?? '',
+          },
         },
-      },
-      author: {
-        login: c.author?.login ?? '',
-      },
-    }));
+        author: {
+          login: c.author?.login ?? '',
+        },
+      })),
+      hasMore,
+    };
   }
 
-  async getFileContents(repo: string, path: string, ref?: string): Promise<{
+  /** `range` (1-based, inclusive) narrows the returned content to those lines and adds `totalLines`. */
+  async getFileContents(
+    repo: string,
+    path: string,
+    ref?: string,
+    range?: { startLine?: number; endLine?: number },
+  ): Promise<{
     path: string;
     content: string;
     encoding: string;
@@ -861,6 +899,7 @@ export class GitHubClient {
     sha?: string;
     truncated: boolean;
     message?: string;
+    totalLines?: number;
   }> {
     this.assertRepo(repo);
     const params: Record<string, string> = {};
@@ -879,9 +918,15 @@ export class GitHubClient {
       };
     }
 
+    const content = Buffer.from(data.content, 'base64').toString('utf-8');
+    const windowed =
+      range?.startLine !== undefined || range?.endLine !== undefined
+        ? sliceLines(content, range.startLine, range.endLine)
+        : { content };
+
     return {
       path: data.path,
-      content: Buffer.from(data.content, 'base64').toString('utf-8'),
+      ...windowed,
       encoding: data.encoding,
       size: data.size,
       sha: data.sha,
@@ -889,17 +934,35 @@ export class GitHubClient {
     };
   }
 
-  async getPullRequestReviews(repo: string, prNumber: number): Promise<PullRequestReview[]> {
+  async getPullRequestReviews(
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; page?: number },
+  ): Promise<PageResult<PullRequestReview>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/reviews`);
-    return data.map((review: any) => ({
-      id: review.id,
-      user: review.user?.login ?? 'unknown',
-      state: review.state,
-      body: review.body ?? null,
-      submittedAt: review.submitted_at,
-      commitId: review.commit_id,
-    }));
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/pulls/${prNumber}/reviews`, opts, 100);
+    return {
+      items: data.map((review: any) => ({
+        id: review.id,
+        user: review.user?.login ?? 'unknown',
+        state: review.state,
+        body: review.body ?? null,
+        submittedAt: review.submitted_at,
+        commitId: review.commit_id,
+      })),
+      hasMore,
+    };
+  }
+
+  /** Every review of a PR (up to MAX_REVIEW_PAGES pages), for the approval and status checks that must not stop at page one. */
+  private async getAllPullRequestReviews(repo: string, prNumber: number): Promise<PullRequestReview[]> {
+    const reviews: PullRequestReview[] = [];
+    for (let page = 1, hasMore = true; hasMore && page <= MAX_REVIEW_PAGES; page++) {
+      const result = await this.getPullRequestReviews(repo, prNumber, { page });
+      reviews.push(...result.items);
+      hasMore = result.hasMore;
+    }
+    return reviews;
   }
 
   /**
@@ -907,7 +970,7 @@ export class GitHubClient {
    * Bot reviews (login ending in "[bot]") and the author's own approval never count.
    */
   async isPrApprovedByHuman(repo: string, prNumber: number, authorLogin: string): Promise<boolean> {
-    const reviews = await this.getPullRequestReviews(repo, prNumber);
+    const reviews = await this.getAllPullRequestReviews(repo, prNumber);
     return reviews.some(
       (review) =>
         review.state === 'APPROVED' &&
@@ -1293,7 +1356,11 @@ export class GitHubClient {
     return { success: true, message: 'Review dismissed' };
   }
 
-  async searchPullRequestsByQuery(opts: PrSearchOptions): Promise<PrSearchResult[]> {
+  /**
+   * Search PRs by query. Items carry no `reviewStatus`: it would need one reviews call per PR, which a
+   * search page does not pay for (`github_get_prs` computes it for the PRs it finds).
+   */
+  async searchPullRequestsByQuery(opts: PrSearchOptions): Promise<PageResult<Omit<PrSearchResult, 'reviewStatus'>>> {
     if (!opts.query && !opts.author && !opts.repo && !opts.label && !opts.reviewRequested && !opts.base) {
       throw new Error('At least one of query, author, repo, label, reviewRequested, or base must be provided');
     }
@@ -1321,10 +1388,9 @@ export class GitHubClient {
       parts.push(`base:${opts.base}`);
     }
     const q = parts.join(' ');
-    const { data } = await this.http.get<{ items: any[] }>('/search/issues', {
-      params: { q, per_page: opts.perPage ?? 20, page: opts.page ?? 1 },
-    });
-    return this.parseItems(data.items ?? []);
+    const { data, hasMore } = await this.getPage<{ items: any[] }>('/search/issues', opts, 20, { q });
+    const items = this.parseItems(data.items ?? []).map(({ reviewStatus: _placeholder, ...pr }) => pr);
+    return { items, hasMore };
   }
 
   async createPrReviewComment(
@@ -1377,12 +1443,10 @@ export class GitHubClient {
     repo: string,
     prNumber: number,
     opts?: { perPage?: number; page?: number },
-  ): Promise<PrReviewComment[]> {
+  ): Promise<PageResult<PrReviewComment>> {
     this.assertRepo(repo);
-    const { data } = await this.http.get<any[]>(`/repos/${repo}/pulls/${prNumber}/comments`, {
-      params: { per_page: opts?.perPage ?? 100, page: opts?.page ?? 1 },
-    });
-    return data.map(mapToPrReviewComment);
+    const { data, hasMore } = await this.getPage<any[]>(`/repos/${repo}/pulls/${prNumber}/comments`, opts, 100);
+    return { items: data.map(mapToPrReviewComment), hasMore };
   }
 
   async updatePrReviewComment(
@@ -1437,7 +1501,7 @@ export class GitHubClient {
   }
 
   private async getReviewStatus(repo: string, prNumber: number): Promise<PrInfo['reviewStatus']> {
-    const reviews = await this.getPullRequestReviews(repo, prNumber);
+    const reviews = await this.getAllPullRequestReviews(repo, prNumber);
     // Determine status: APPROVED beats everything, CHANGES_REQUESTED beats COMMENTED
     let hasChangesRequested = false;
     let hasCommented = false;
@@ -1460,6 +1524,11 @@ export class GitHubClient {
       return true;
     });
   }
+}
+
+function sliceLines(content: string, startLine = 1, endLine?: number): { content: string; totalLines: number } {
+  const lines = content.split('\n');
+  return { content: lines.slice(startLine - 1, endLine).join('\n'), totalLines: lines.length };
 }
 
 function mapToPrReviewComment(data: any): PrReviewComment {

@@ -120,7 +120,7 @@ describe('GitHubModule', () => {
       const handlers = mod.createToolHandlers({ github: mockGitHub as any });
       const result = await handlers.github_get_prs({ issueKey: 'TAP-1' });
 
-      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 20, 'open');
+      expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 21, 'open');
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.items).toHaveLength(1);
     });

@@ -39,6 +39,7 @@ import {
   jiraToolDescriptors,
 } from './module.js';
 import { toSlimIssue, DEV_FIELDS } from '../../services/index.js';
+import { MAX_INLINE_ATTACHMENT_BYTES } from '../../services/jira/jira-client.js';
 import {
   MESSAGE_TEXT_MARKER,
   OTHER_CHANNEL_ID,
@@ -1557,6 +1558,76 @@ describe('jiraGetCommentsHandler', () => {
     expect(parsed.hasMore).toBe(false);
   });
 
+  describe('slim shape', () => {
+    const rawUser = (name: string) => ({
+      self: 'https://test.atlassian.net/rest/api/3/user?accountId=acc-1',
+      accountId: 'acc-1',
+      emailAddress: 'someone@example.com',
+      avatarUrls: { '48x48': 'https://avatar.example.com/48' },
+      displayName: name,
+      active: true,
+      timeZone: 'UTC',
+    });
+    const rawComment = {
+      self: 'https://test.atlassian.net/rest/api/3/issue/1/comment/10',
+      id: '10',
+      author: rawUser('Alice Example'),
+      updateAuthor: rawUser('Bob Example'),
+      body: {
+        type: 'doc',
+        version: 1,
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'Hello ' }, { type: 'mention', attrs: { id: 'acc-9', text: '@Carol Example' } }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Second paragraph' }] },
+        ],
+      },
+      created: '2025-01-01T00:00:00.000+0000',
+      updated: '2025-01-02T00:00:00.000+0000',
+      jsdPublic: true,
+    };
+
+    it('returns id, author name, created, updated and plain-text body only', async () => {
+      mockJira.getComments.mockResolvedValue([rawComment]);
+
+      const result = await jiraGetCommentsHandler({ jira: mockJira as any })({ key: 'TAP-1' });
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.items).toEqual([
+        {
+          id: '10',
+          author: 'Alice Example',
+          created: '2025-01-01T00:00:00.000+0000',
+          updated: '2025-01-02T00:00:00.000+0000',
+          body: 'Hello\nSecond paragraph',
+        },
+      ]);
+      expect(parsed.hasMore).toBe(false);
+      const text = result.content[0].text;
+      expect(text).not.toMatch(/example\.com|avatar|"self"|accountId|updateAuthor|jsdPublic/);
+    });
+
+    it('keeps parentId on thread replies', async () => {
+      mockJira.getComments.mockResolvedValue([{ ...rawComment, id: '11', parentId: '10' }]);
+
+      const result = await jiraGetCommentsHandler({ jira: mockJira as any })({ key: 'TAP-1' });
+
+      expect(JSON.parse(result.content[0].text).items[0]).toMatchObject({ id: '11', parentId: '10' });
+    });
+
+    it('adds the raw ADF as bodyAdf only when adf is true', async () => {
+      mockJira.getComments.mockResolvedValue([rawComment]);
+      const handler = jiraGetCommentsHandler({ jira: mockJira as any });
+
+      const off = JSON.parse((await handler({ key: 'TAP-1' })).content[0].text);
+      const on = JSON.parse((await handler({ key: 'TAP-1', adf: true })).content[0].text);
+
+      expect(off.items[0]).not.toHaveProperty('bodyAdf');
+      expect(on.items[0].bodyAdf).toEqual(rawComment.body);
+      expect(on.items[0].body).toBe('Hello\nSecond paragraph');
+      expect(JSON.stringify(on)).not.toMatch(/example\.com|avatar|"self"/);
+    });
+  });
+
   it('respects limit parameter', async () => {
     const comments = Array.from({ length: 100 }, (_, i) => ({
       id: String(i + 1),
@@ -1795,6 +1866,30 @@ describe('jiraGetAttachmentHandler', () => {
       size: 524288,
       issueKey: null,
       contentBase64: 'JVBERi0xLjQK',
+    });
+  });
+
+  it.each(['image/png', 'video/mp4'])('returns metadata and a message, no bytes, when the client skipped a %s over the cap', async (mimeType) => {
+    mockJira.getAttachmentContent.mockResolvedValue({
+      id: '50002',
+      filename: 'big.file',
+      mimeType,
+      size: MAX_INLINE_ATTACHMENT_BYTES + 1,
+    });
+
+    const handler = jiraGetAttachmentHandler({ jira: mockJira as any });
+    const result = await handler({ attachmentId: '50002', issueKey: 'TAP-1' });
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe('text');
+    const body = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
+    expect(body).toEqual({
+      id: '50002',
+      filename: 'big.file',
+      mimeType,
+      size: MAX_INLINE_ATTACHMENT_BYTES + 1,
+      issueKey: 'TAP-1',
+      message: expect.stringContaining(String(MAX_INLINE_ATTACHMENT_BYTES)),
     });
   });
 });

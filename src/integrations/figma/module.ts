@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FigmaClient } from '../../services/index.js';
+import { FigmaClient, type FigmaComment, type FigmaStyle, type FigmaVersion } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { zodToJsonSchema } from '../helpers.js';
 
@@ -9,11 +9,15 @@ import { zodToJsonSchema } from '../helpers.js';
 
 const fileKeyDescription = 'Figma file key from URL (e.g., "ABC123def456").';
 
+/** Tree depth applied to figma_get_file and figma_get_nodes when the caller gives none; pass `depth` (max 100) to go deeper. */
+const DEFAULT_TREE_DEPTH = 2;
+const depthDescription = `Depth of the node tree to return (default ${DEFAULT_TREE_DEPTH}; raise it, up to 100, to read deeper).`;
+
 export const figmaGetMeSchema = z.object({});
 
 export const figmaGetFileSchema = z.object({
   fileKey: z.string().min(1).max(50).describe(fileKeyDescription),
-  depth: z.number().min(1).max(100).optional().describe('Depth of the document tree to return (e.g., 1 for top-level children only).'),
+  depth: z.number().min(1).max(100).optional().describe(depthDescription),
   ids: z.string().min(1).max(500).optional().describe('Comma-separated node IDs to include (e.g., "1:2,3:4").'),
   geometry: z.string().min(1).max(50).optional().describe('Geometry type to return (e.g., "paths").'),
   version: z.string().min(1).max(50).optional().describe('Version ID to retrieve (from getVersions).'),
@@ -26,6 +30,7 @@ export const figmaGetNodesSchema = z.object({
     .min(1)
     .max(500)
     .describe('Comma-separated node IDs (e.g., "1:2,3:4").'),
+  depth: z.number().min(1).max(100).optional().describe(depthDescription),
 });
 
 export const figmaGetImagesSchema = z.object({
@@ -86,6 +91,31 @@ function wrapError<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
+/** Drop avatar and position bloat from a Figma user. */
+function slimUser(user?: { id?: string; handle?: string }) {
+  return user && { id: user.id, handle: user.handle };
+}
+
+function slimComment(c: FigmaComment) {
+  return {
+    id: c.id,
+    message: c.message,
+    user: slimUser(c.user),
+    created_at: c.created_at,
+    resolved_at: c.resolved_at,
+    parent_id: c.parent_id,
+    node_id: c.client_meta?.node_id,
+  };
+}
+
+function slimStyle(s: FigmaStyle) {
+  return { key: s.key, name: s.name, style_type: s.style_type, node_id: s.node_id, description: s.description };
+}
+
+function slimVersion(v: FigmaVersion) {
+  return { id: v.id, created_at: v.created_at, label: v.label, description: v.description, user: slimUser(v.user) };
+}
+
 export const figmaGetMeHandler: ToolHandler<z.infer<typeof figmaGetMeSchema>> =
   (clients) => async (_args) => {
     return wrapError(async () => {
@@ -98,18 +128,11 @@ export const figmaGetFileHandler: ToolHandler<z.infer<typeof figmaGetFileSchema>
   (clients) => async (args) => {
     return wrapError(async () => {
       const result = await clients.figma.getFile(args.fileKey, {
-        depth: args.depth,
+        depth: args.depth ?? DEFAULT_TREE_DEPTH,
         ids: args.ids,
         geometry: args.geometry,
         version: args.version,
       });
-      // Slim node-tree: when depth is not set, drop document to avoid blowing context
-      if (!args.depth && result.document && typeof result.document === 'object' && !('_truncated' in result.document)) {
-        (result as unknown as Record<string, unknown>).document = {
-          truncated: true,
-          message: 'Use depth or ids to narrow the response',
-        };
-      }
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     });
   };
@@ -117,7 +140,7 @@ export const figmaGetFileHandler: ToolHandler<z.infer<typeof figmaGetFileSchema>
 export const figmaGetNodesHandler: ToolHandler<z.infer<typeof figmaGetNodesSchema>> =
   (clients) => async (args) => {
     return wrapError(async () => {
-      const result = await clients.figma.getNodes(args.fileKey, args.ids);
+      const result = await clients.figma.getNodes(args.fileKey, args.ids, args.depth ?? DEFAULT_TREE_DEPTH);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     });
   };
@@ -134,7 +157,7 @@ export const figmaGetCommentsHandler: ToolHandler<z.infer<typeof figmaGetComment
   (clients) => async (args) => {
     return wrapError(async () => {
       const result = await clients.figma.getComments(args.fileKey);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result.map(slimComment)) }] };
     });
   };
 
@@ -142,7 +165,7 @@ export const figmaGetStylesHandler: ToolHandler<z.infer<typeof figmaGetStylesSch
   (clients) => async (args) => {
     return wrapError(async () => {
       const result = await clients.figma.getStyles(args.fileKey);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result.map(slimStyle)) }] };
     });
   };
 
@@ -158,7 +181,7 @@ export const figmaGetVersionsHandler: ToolHandler<z.infer<typeof figmaGetVersion
   (clients) => async (args) => {
     return wrapError(async () => {
       const result = await clients.figma.getVersions(args.fileKey);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(result.map(slimVersion)) }] };
     });
   };
 
@@ -166,7 +189,7 @@ export const figmaPostCommentHandler: ToolHandler<z.infer<typeof figmaPostCommen
   (clients) => async (args) => {
     return wrapError(async () => {
       const result = await clients.figma.postComment(args.fileKey, args.message, args.parentId);
-      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      return { content: [{ type: 'text', text: JSON.stringify(slimComment(result)) }] };
     });
   };
 

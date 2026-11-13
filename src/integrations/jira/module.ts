@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { JiraClient, toSlimIssue, DEV_FIELDS } from '../../services/index.js';
 import type { SlimIssue, SearchResult, JiraIssue, GitHubClient, SlackClient } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { toListedComment } from '../../services/slim.js';
+import { MAX_INLINE_ATTACHMENT_BYTES } from '../../services/jira/attachment-limit.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
 import { attachIssueLinks } from './issue-links.js';
 
@@ -185,6 +187,10 @@ export const jiraGetCommentsSchema = z.object({
   key: z.string().max(20).describe('Issue key to fetch comments for.'),
   limit: z.number().optional().default(50).describe('Maximum items per page (default 50).'),
   cursor: z.string().optional().describe('Opaque pagination token from a previous response.'),
+  adf: z
+    .boolean()
+    .optional()
+    .describe('Also return each comment\'s raw ADF document as `bodyAdf` (mentions, media, hard breaks). `body` stays plain text. Off by default.'),
 });
 
 export const jiraListTransitionsSchema = z.object({
@@ -424,6 +430,25 @@ export const jiraGetAttachmentHandler: ToolHandler<z.infer<typeof jiraGetAttachm
   (_clients) => async (args) => {
     const result = await _clients.jira.getAttachmentContent(args.attachmentId);
 
+    // Over the size cap the client skipped the download: metadata only, no bytes.
+    if (result.contentBase64 === undefined) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              id: result.id,
+              filename: result.filename,
+              mimeType: result.mimeType,
+              size: result.size,
+              issueKey: args.issueKey ?? null,
+              message: `Not returned inline: the file is larger than the ${MAX_INLINE_ATTACHMENT_BYTES}-byte limit. Open the attachment in Jira to get it.`,
+            }),
+          },
+        ],
+      };
+    }
+
     // For images, return native MCP image content so clients render directly.
     if (result.mimeType.startsWith('image/')) {
       return {
@@ -468,7 +493,7 @@ export const jiraGetCommentsHandler: ToolHandler<z.infer<typeof jiraGetCommentsS
     // offset-based pagination: cursor is an offset string
     const offset = args.cursor ? parseInt(args.cursor, 10) : 0;
     const limit = args.limit ?? 50;
-    const items = all.slice(offset, offset + limit);
+    const items = all.slice(offset, offset + limit).map((c) => toListedComment(c, { adf: args.adf }));
     const nextOffset = offset + limit < all.length ? String(offset + limit) : undefined;
     return { content: [{ type: 'text', text: JSON.stringify(paginated(items, nextOffset)) }] };
   };
@@ -558,7 +583,7 @@ const COMMENT_FORMAT_HINT =
 export const jiraToolDescriptors = [
   {
     name: 'jira_whoami',
-    description: 'Return the authenticated Jira user profile.',
+    description: 'Return the authenticated Jira user (accountId, displayName).',
     inputSchema: zodToJsonSchema(jiraWhoamiSchema),
   },
   {
@@ -603,17 +628,17 @@ export const jiraToolDescriptors = [
   },
   {
     name: 'jira_get_attachment',
-    description: 'Download a Jira attachment by ID and return it as base64 + data URI.',
+    description: `Download a Jira attachment by ID: images come back as native image content, other files as base64. Files over ${MAX_INLINE_ATTACHMENT_BYTES} bytes return metadata only (id, filename, mimeType, size, message).`,
     inputSchema: zodToJsonSchema(jiraGetAttachmentSchema),
   },
   {
     name: 'jira_get_comments',
-    description: 'Get comments on a Jira issue.',
+    description: 'Get comments on a Jira issue, oldest first: id, author name, created, updated, plain-text body (`adf: true` adds the raw ADF as `bodyAdf`).',
     inputSchema: zodToJsonSchema(jiraGetCommentsSchema),
   },
   {
     name: 'jira_list_transitions',
-    description: 'List available transitions for a Jira issue.',
+    description: 'List available transitions for a Jira issue (id, name, `to` = destination status name).',
     inputSchema: zodToJsonSchema(jiraListTransitionsSchema),
   },
   {
@@ -623,7 +648,7 @@ export const jiraToolDescriptors = [
   },
   {
     name: 'jira_search_users',
-    description: 'Search for Jira users by display name or email.',
+    description: 'Search for Jira users by display name or email (accountId, displayName, active, emailAddress when Jira exposes it).',
     inputSchema: zodToJsonSchema(jiraSearchUsersSchema),
   },
   {

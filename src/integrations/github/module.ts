@@ -3,6 +3,8 @@ import { GitHubClient, JiraClient, ISSUE_KEY_PATTERN } from '../../services/inde
 import type { PrInfo, PullRequestDetail, PullRequestReview, PullRequestChecks, PrReviewComment, PrReviewSubmitted } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { paginated, zodToJsonSchema } from '../helpers.js';
+import type { PageResult } from '../../services/github/github-client.js';
+import { toPrCommentAck, toPrReviewAck, toPrReviewCommentAck, toPrUpdateAck } from '../../services/github/github-acks.js';
 
 // ---------------------------------------------------------------------------
 // Shared field schemas
@@ -116,6 +118,8 @@ export const githubGetPrReviewsSchema = z.object({
     .int()
     .positive()
     .describe('Pull request number.'),
+  limit: z.number().min(1).max(100).optional().default(20).describe('Maximum items per page (default 20).'),
+  cursor: z.string().max(50).optional().describe('Opaque pagination token from a previous response.'),
 });
 
 export const githubGetPrCommentsSchema = z.object({
@@ -206,6 +210,11 @@ export const githubGetPrFilesSchema = z.object({
   prNumber: z.number().int().positive().describe('Pull request number.'),
   limit: z.number().min(1).max(100).optional().default(20).describe('Maximum items per page (default 20).'),
   cursor: z.string().max(50).optional().describe('Opaque pagination token from a previous response.'),
+  includePatch: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Include each file\'s diff patch, truncated at 2000 characters (default false).'),
 });
 
 export const githubGetPrCommitsSchema = z.object({
@@ -219,6 +228,10 @@ export const githubGetFileContentsSchema = z.object({
   repo: repoField,
   path: z.string().min(1).max(1024).describe('File path relative to repo root (e.g., "src/file.ts").'),
   ref: z.string().max(255).optional().describe('Branch or commit SHA (defaults to the repo\'s default branch).'),
+  startLine: z.number().int().positive().optional().describe('First line to return, 1-based (default: start of file).'),
+  endLine: z.number().int().positive().optional().describe('Last line to return, inclusive (default: end of file).'),
+}).refine((data) => data.startLine === undefined || data.endLine === undefined || data.startLine <= data.endLine, {
+  message: 'startLine must be less than or equal to endLine',
 });
 
 export const githubUpdatePrSchema = z.object({
@@ -399,6 +412,18 @@ function parseOffsetCursor(cursor: string | undefined): number {
   return n;
 }
 
+/** Wrap one fetched page in the PaginatedResponse envelope; the cursor is the next page number. */
+function pageResponse<T>({ items, hasMore }: PageResult<T>, page: number) {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(paginated(items, hasMore ? String(page + 1) : undefined)),
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Handler Factories
 // ---------------------------------------------------------------------------
@@ -448,7 +473,8 @@ export const githubGetPrsHandler: ToolHandler<z.infer<typeof githubGetPrsSchema>
 
     if (issueKey) {
       const offset = parseOffsetCursor(cursor);
-      const maxResults = cursor ? offset + limit : limit;
+      // One extra PR past the page proves there is a next page; capped at offset + limit it never could.
+      const maxResults = offset + limit + 1;
       let prs = await _clients.github.searchPrs(issueKey, maxResults, state);
 
       // Optionally merge branch-name results
@@ -574,53 +600,35 @@ export const githubAddPrCommentHandler: ToolHandler<z.infer<typeof githubAddPrCo
       prNumber: args.prNumber,
       body: args.body,
     });
-    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(toPrCommentAck(comment)) }] };
   };
 
 export const githubGetPrCommentsHandler: ToolHandler<z.infer<typeof githubGetPrCommentsSchema>> =
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const comments = await _clients.github.getPrComments(args.repo, args.prNumber, {
-      perPage: limit + 1,
+    const result = await _clients.github.getPrComments(args.repo, args.prNumber, {
+      perPage: limit,
       page,
     });
-    const hasMore = comments.length > limit;
-    if (hasMore) comments.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(comments, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubUpdatePrCommentHandler: ToolHandler<z.infer<typeof githubUpdatePrCommentSchema>> =
   (_clients) => async (args) => {
     const comment = await _clients.github.updatePrComment(args.repo, args.commentId, args.body);
-    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(toPrCommentAck(comment)) }] };
   };
 
 export const githubListBranchesHandler: ToolHandler<z.infer<typeof githubListBranchesSchema>> =
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const branches = await _clients.github.listBranches(args.repo, {
-      perPage: limit + 1,
+    const result = await _clients.github.listBranches(args.repo, {
+      perPage: limit,
       page,
     });
-    const hasMore = branches.length > limit;
-    if (hasMore) branches.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(branches, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubGetPrDetailsHandler: ToolHandler<z.infer<typeof githubGetPrDetailsSchema>> =
@@ -631,8 +639,13 @@ export const githubGetPrDetailsHandler: ToolHandler<z.infer<typeof githubGetPrDe
 
 export const githubGetPrReviewsHandler: ToolHandler<z.infer<typeof githubGetPrReviewsSchema>> =
   (_clients) => async (args) => {
-    const reviews = await _clients.github.getPullRequestReviews(args.repo, args.prNumber);
-    return { content: [{ type: 'text', text: JSON.stringify(reviews) }] };
+    const limit = args.limit ?? 20;
+    const page = parsePageCursor(args.cursor);
+    const result = await _clients.github.getPullRequestReviews(args.repo, args.prNumber, {
+      perPage: limit,
+      page,
+    });
+    return pageResponse(result, page);
   };
 
 export const githubGetPrChecksHandler: ToolHandler<z.infer<typeof githubGetPrChecksSchema>> =
@@ -645,45 +658,31 @@ export const githubGetPrFilesHandler: ToolHandler<z.infer<typeof githubGetPrFile
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const files = await _clients.github.getPrFiles(args.repo, args.prNumber, {
-      perPage: limit + 1,
+    const result = await _clients.github.getPrFiles(args.repo, args.prNumber, {
+      perPage: limit,
       page,
+      includePatch: args.includePatch,
     });
-    const hasMore = files.length > limit;
-    if (hasMore) files.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(files, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubGetPrCommitsHandler: ToolHandler<z.infer<typeof githubGetPrCommitsSchema>> =
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const commits = await _clients.github.getPrCommits(args.repo, args.prNumber, {
-      perPage: limit + 1,
+    const result = await _clients.github.getPrCommits(args.repo, args.prNumber, {
+      perPage: limit,
       page,
     });
-    const hasMore = commits.length > limit;
-    if (hasMore) commits.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(commits, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubGetFileContentsHandler: ToolHandler<z.infer<typeof githubGetFileContentsSchema>> =
   (_clients) => async (args) => {
-    const result = await _clients.github.getFileContents(args.repo, args.path, args.ref);
+    const result = await _clients.github.getFileContents(args.repo, args.path, args.ref, {
+      startLine: args.startLine,
+      endLine: args.endLine,
+    });
     return {
       content: [
         {
@@ -715,34 +714,25 @@ export const githubUpdatePrHandler: ToolHandler<z.infer<typeof githubUpdatePrSch
     if (args.draft !== undefined) {
       detail = await _clients.github.setPullRequestDraft(args.repo, args.prNumber, args.draft);
     }
-    return { content: [{ type: 'text', text: JSON.stringify(detail) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(detail && toPrUpdateAck(detail)) }] };
   };
 
 export const githubSearchPrsHandler: ToolHandler<z.infer<typeof githubSearchPrsSchema>> =
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const prs = await _clients.github.searchPullRequestsByQuery({
+    const result = await _clients.github.searchPullRequestsByQuery({
       query: args.query,
       author: args.author,
       repo: args.repo,
       state: args.state,
-      perPage: limit + 1,
+      perPage: limit,
       page,
       label: args.label,
       reviewRequested: args.reviewRequested,
       base: args.base,
     });
-    const hasMore = prs.length > limit;
-    if (hasMore) prs.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(prs, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubCreatePrReviewCommentHandler: ToolHandler<z.infer<typeof githubCreatePrReviewCommentSchema>> =
@@ -763,33 +753,24 @@ export const githubCreatePrReviewCommentHandler: ToolHandler<z.infer<typeof gith
         side: args.side,
         startSide: args.startSide,
       });
-    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(toPrReviewCommentAck(comment)) }] };
   };
 
 export const githubGetPrReviewCommentsHandler: ToolHandler<z.infer<typeof githubGetPrReviewCommentsSchema>> =
   (_clients) => async (args) => {
     const limit = args.limit ?? 20;
     const page = parsePageCursor(args.cursor);
-    const comments = await _clients.github.getPrReviewComments(args.repo, args.prNumber, {
-      perPage: limit + 1,
+    const result = await _clients.github.getPrReviewComments(args.repo, args.prNumber, {
+      perPage: limit,
       page,
     });
-    const hasMore = comments.length > limit;
-    if (hasMore) comments.pop();
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(paginated(comments, hasMore ? String(page + 1) : undefined)),
-        },
-      ],
-    };
+    return pageResponse(result, page);
   };
 
 export const githubUpdatePrReviewCommentHandler: ToolHandler<z.infer<typeof githubUpdatePrReviewCommentSchema>> =
   (_clients) => async (args) => {
     const comment = await _clients.github.updatePrReviewComment(args.repo, args.commentId, args.body);
-    return { content: [{ type: 'text', text: JSON.stringify(comment) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(toPrReviewCommentAck(comment)) }] };
   };
 
 export const githubDeletePrReviewCommentHandler: ToolHandler<z.infer<typeof githubDeletePrReviewCommentSchema>> =
@@ -806,7 +787,7 @@ export const githubSubmitPrReviewHandler: ToolHandler<z.infer<typeof githubSubmi
       comments: args.comments,
       commitId: args.commitId,
     });
-    return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(toPrReviewAck(result)) }] };
   };
 
 export const githubGetPrReviewThreadsHandler: ToolHandler<z.infer<typeof githubGetPrReviewThreadsSchema>> =
@@ -939,7 +920,7 @@ export const githubToolDescriptors = [
   },
   {
     name: 'github_update_pr',
-    description: 'Update an existing pull request (title, body, state, base branch, draft status, or maintainer settings).',
+    description: 'Update an existing pull request (title, body, state, base branch, draft status, or maintainer settings). Returns a short ack (number, state, title, htmlUrl, updatedAt, branches), not the body.',
     inputSchema: zodToJsonSchema(githubUpdatePrSchema),
   },
   {
@@ -969,7 +950,7 @@ export const githubToolDescriptors = [
   },
   {
     name: 'github_get_pr_files',
-    description: 'Get the list of files changed in a pull request, with patch text truncated at 2000 characters.',
+    description: 'Get the list of files changed in a pull request (filename, status, additions, deletions). Set includePatch to also get each diff, truncated at 2000 characters.',
     inputSchema: zodToJsonSchema(githubGetPrFilesSchema),
   },
   {
@@ -979,7 +960,7 @@ export const githubToolDescriptors = [
   },
   {
     name: 'github_get_file_contents',
-    description: 'Get the contents of a file in a repository, base64-decoded up to 100KB.',
+    description: 'Get the contents of a file in a repository, base64-decoded up to 100KB. Optional startLine/endLine return only that line range.',
     inputSchema: zodToJsonSchema(githubGetFileContentsSchema),
   },
   {

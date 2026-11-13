@@ -659,7 +659,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrComments('Org/Repo', 42);
+      const { items: result } = await client.getPrComments('Org/Repo', 42);
 
       expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/issues/42/comments', {
         params: { per_page: 100, page: 1 },
@@ -685,7 +685,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: [] });
 
       const client = new GitHubClient();
-      const result = await client.getPrComments('Org/Repo', 42);
+      const { items: result } = await client.getPrComments('Org/Repo', 42);
 
       expect(result).toEqual([]);
     });
@@ -709,7 +709,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrComments('Org/Repo', 42);
+      const { items: result } = await client.getPrComments('Org/Repo', 42);
 
       expect(result[0].user).toBe('unknown');
     });
@@ -765,7 +765,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.listBranches('Org/Repo', { perPage: 50, page: 1 });
+      const { items: result } = await client.listBranches('Org/Repo', { perPage: 50, page: 1 });
 
       expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/branches', {
         params: { per_page: 50, page: 1 },
@@ -1259,7 +1259,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: apiFiles });
 
       const client = new GitHubClient();
-      const result = await client.getPrFiles('Org/Repo', 42);
+      const { items: result } = await client.getPrFiles('Org/Repo', 42, { includePatch: true });
 
       expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/files', {
         params: { per_page: 100, page: 1 },
@@ -1283,7 +1283,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrFiles('Org/Repo', 42);
+      const { items: result } = await client.getPrFiles('Org/Repo', 42);
 
       expect(result[0].previous_filename).toBe('src/old.ts');
     });
@@ -1297,7 +1297,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrFiles('Org/Repo', 42);
+      const { items: result } = await client.getPrFiles('Org/Repo', 42, { includePatch: true });
 
       expect(result[0].patch).toHaveLength(2000);
       expect(result[0].truncated).toBe(true);
@@ -1312,10 +1312,23 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrFiles('Org/Repo', 42);
+      const { items: result } = await client.getPrFiles('Org/Repo', 42, { includePatch: true });
 
       expect(result[0].patch).toHaveLength(100);
       expect(result[0].truncated).toBeUndefined();
+    });
+
+    it('omits patch and truncated by default', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [
+          { filename: 'f.ts', status: 'modified', additions: 1, deletions: 1, changes: 2, patch: 'x'.repeat(2500) },
+        ],
+      });
+
+      const client = new GitHubClient();
+      const { items: result } = await client.getPrFiles('Org/Repo', 42);
+
+      expect(result[0]).toEqual({ filename: 'f.ts', status: 'modified', additions: 1, deletions: 1, changes: 2 });
     });
 
     it('handles missing patch', async () => {
@@ -1326,7 +1339,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrFiles('Org/Repo', 42);
+      const { items: result } = await client.getPrFiles('Org/Repo', 42, { includePatch: true });
 
       expect(result[0].patch).toBeUndefined();
       expect(result[0].truncated).toBeUndefined();
@@ -1366,7 +1379,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: apiCommits });
 
       const client = new GitHubClient();
-      const result = await client.getPrCommits('Org/Repo', 42);
+      const { items: result } = await client.getPrCommits('Org/Repo', 42);
 
       expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/commits', {
         params: { per_page: 100, page: 1 },
@@ -1384,7 +1397,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: [] });
 
       const client = new GitHubClient();
-      const result = await client.getPrCommits('Org/Repo', 42);
+      const { items: result } = await client.getPrCommits('Org/Repo', 42);
 
       expect(result).toEqual([]);
     });
@@ -1401,7 +1414,7 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPrCommits('Org/Repo', 42);
+      const { items: result } = await client.getPrCommits('Org/Repo', 42);
 
       expect(result[0].sha).toBe('abc');
       expect(result[0].commit.author.name).toBe('');
@@ -1452,6 +1465,24 @@ describe('GitHubClient', () => {
       expect(result.truncated).toBe(false);
     });
 
+    it('returns only the requested line range and totalLines', async () => {
+      const raw = Buffer.from('l1\nl2\nl3\nl4\nl5').toString('base64');
+      http.get.mockResolvedValue({ data: { path: 'f.ts', content: raw, encoding: 'base64', size: 14, sha: 'abc' } });
+
+      const client = new GitHubClient();
+      const both = await client.getFileContents('Org/Repo', 'f.ts', undefined, { startLine: 2, endLine: 4 });
+      expect(both.content).toBe('l2\nl3\nl4');
+      expect(both.totalLines).toBe(5);
+      const startOnly = await client.getFileContents('Org/Repo', 'f.ts', undefined, { startLine: 4 });
+      expect(startOnly.content).toBe('l4\nl5');
+      const endOnly = await client.getFileContents('Org/Repo', 'f.ts', undefined, { endLine: 2 });
+      expect(endOnly.content).toBe('l1\nl2');
+      const none = await client.getFileContents('Org/Repo', 'f.ts');
+      expect(none.content).toBe('l1\nl2\nl3\nl4\nl5');
+      expect(none.totalLines).toBeUndefined();
+      http.get.mockReset();
+    });
+
     it('passes ref when provided', async () => {
       http.get.mockResolvedValueOnce({
         data: { path: 'f.ts', content: 'Y29uc29sZS5sb2coImhlbGxvIik7', encoding: 'base64', size: 24, sha: 'abc' },
@@ -1490,6 +1521,38 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('list pagination (per_page cap and hasMore)', () => {
+    const next = { link: '<https://api.github.com/x?page=2>; rel="next"' };
+
+    it.each([
+      ['getPrComments', (c: GitHubClient, o: any) => c.getPrComments('Org/Repo', 1, o), '/repos/Org/Repo/issues/1/comments'],
+      ['listBranches', (c: GitHubClient, o: any) => c.listBranches('Org/Repo', o), '/repos/Org/Repo/branches'],
+      ['getPrFiles', (c: GitHubClient, o: any) => c.getPrFiles('Org/Repo', 1, o), '/repos/Org/Repo/pulls/1/files'],
+      ['getPrCommits', (c: GitHubClient, o: any) => c.getPrCommits('Org/Repo', 1, o), '/repos/Org/Repo/pulls/1/commits'],
+      ['getPrReviewComments', (c: GitHubClient, o: any) => c.getPrReviewComments('Org/Repo', 1, o), '/repos/Org/Repo/pulls/1/comments'],
+      ['getPullRequestReviews', (c: GitHubClient, o: any) => c.getPullRequestReviews('Org/Repo', 1, o), '/repos/Org/Repo/pulls/1/reviews'],
+    ] as const)('%s never asks for more than 100 per page and takes hasMore from Link rel=next', async (_n, call, url) => {
+      http.get.mockResolvedValueOnce({ data: [], headers: next }).mockResolvedValueOnce({ data: [] });
+      const client = new GitHubClient();
+
+      const first = await call(client, { perPage: 101, page: 1 });
+      expect(http.get).toHaveBeenNthCalledWith(1, url, { params: { per_page: 100, page: 1 } });
+      expect(first.hasMore).toBe(true);
+
+      const last = await call(client, { perPage: 100, page: 2 });
+      expect(last.hasMore).toBe(false);
+    });
+
+    it('searchPullRequestsByQuery clamps per_page to 100', async () => {
+      http.get.mockResolvedValueOnce({ data: { items: [] } });
+      const client = new GitHubClient();
+      await client.searchPullRequestsByQuery({ author: 'alice', perPage: 101 });
+      expect(http.get).toHaveBeenCalledWith('/search/issues', {
+        params: expect.objectContaining({ per_page: 100, page: 1 }),
+      });
+    });
+  });
+
   describe('getPullRequestReviews', () => {
     it('returns reviews with correct field mapping', async () => {
       const reviews = [
@@ -1500,9 +1563,11 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: reviews });
 
       const client = new GitHubClient();
-      const result = await client.getPullRequestReviews('Org/Repo', 42);
+      const { items: result } = await client.getPullRequestReviews('Org/Repo', 42);
 
-      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews');
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+        params: { per_page: 100, page: 1 },
+      });
       expect(result).toHaveLength(3);
       expect(result[0].id).toBe(1);
       expect(result[0].user).toBe('alice');
@@ -1520,7 +1585,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: [] });
 
       const client = new GitHubClient();
-      const result = await client.getPullRequestReviews('Org/Repo', 42);
+      const { items: result } = await client.getPullRequestReviews('Org/Repo', 42);
       expect(result).toEqual([]);
     });
 
@@ -1532,13 +1597,46 @@ describe('GitHubClient', () => {
       });
 
       const client = new GitHubClient();
-      const result = await client.getPullRequestReviews('Org/Repo', 42);
+      const { items: result } = await client.getPullRequestReviews('Org/Repo', 42);
       expect(result[0].user).toBe('unknown');
     });
 
     it('throws for invalid repo format', async () => {
       const client = new GitHubClient();
       await expect(client.getPullRequestReviews('invalid', 42)).rejects.toThrow('Invalid repo format');
+    });
+
+    it('passes pagination options and reports hasMore from the Link header', async () => {
+      http.get.mockResolvedValueOnce({
+        data: [],
+        headers: { link: '<https://api.github.com/repositories/1/pulls/42/reviews?page=3>; rel="next"' },
+      });
+
+      const client = new GitHubClient();
+      const result = await client.getPullRequestReviews('Org/Repo', 42, { perPage: 50, page: 2 });
+
+      expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/reviews', {
+        params: { per_page: 50, page: 2 },
+      });
+      expect(result.hasMore).toBe(true);
+    });
+  });
+
+  describe('review lookups past the first page', () => {
+    const review = (id: number, login: string, state: string) =>
+      ({ id, user: { login }, state, body: null, submitted_at: '', commit_id: '' });
+    const nextLink = { link: '<https://api.github.com/repositories/1/pulls/42/reviews?page=2>; rel="next"' };
+
+    it('isPrApprovedByHuman finds an approval that sits on page 2', async () => {
+      http.get
+        .mockResolvedValueOnce({ data: [review(1, 'carol', 'COMMENTED')], headers: nextLink })
+        .mockResolvedValueOnce({ data: [review(2, 'alice', 'APPROVED')] });
+
+      const client = new GitHubClient();
+      expect(await client.isPrApprovedByHuman('Org/Repo', 42, 'jommar')).toBe(true);
+      expect(http.get).toHaveBeenNthCalledWith(2, '/repos/Org/Repo/pulls/42/reviews', {
+        params: { per_page: 100, page: 2 },
+      });
     });
   });
 
@@ -1718,7 +1816,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: { total_count: 1, items: [searchItem] } });
 
       const client = new GitHubClient();
-      const result = await client.searchPullRequestsByQuery({ author: 'alice' });
+      const { items: result } = await client.searchPullRequestsByQuery({ author: 'alice' });
 
       expect(http.get).toHaveBeenCalledWith('/search/issues', {
         params: expect.objectContaining({
@@ -1726,6 +1824,35 @@ describe('GitHubClient', () => {
         }),
       });
       expect(result).toHaveLength(1);
+    });
+
+    it('returns items without a reviewStatus field (it would take one reviews call per PR)', async () => {
+      http.get.mockResolvedValueOnce({ data: { total_count: 1, items: [searchItem] } });
+
+      const client = new GitHubClient();
+      const { items } = await client.searchPullRequestsByQuery({ author: 'alice' });
+
+      expect(items[0]).toEqual({
+        number: 42,
+        title: 'My PR Title',
+        state: 'open',
+        repo: 'Org/Repo',
+        author: 'alice',
+        createdAt: '2025-01-01T00:00:00Z',
+        htmlUrl: 'https://github.com/Org/Repo/pull/42',
+      });
+      expect('reviewStatus' in items[0]).toBe(false);
+      expect(http.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports hasMore from the Link header, not from the item count', async () => {
+      http.get.mockResolvedValueOnce({
+        data: { total_count: 250, items: [searchItem] },
+        headers: { link: '<https://api.github.com/search/issues?page=2>; rel="next"' },
+      });
+
+      const client = new GitHubClient();
+      expect((await client.searchPullRequestsByQuery({ author: 'alice', perPage: 100 })).hasMore).toBe(true);
     });
 
     it('sends repo filter in query', async () => {
@@ -1843,7 +1970,7 @@ describe('GitHubClient', () => {
       http.get.mockResolvedValueOnce({ data: { total_count: 0, items: [] } });
 
       const client = new GitHubClient();
-      await expect(client.searchPullRequestsByQuery({ label: 'bug' })).resolves.toEqual([]);
+      await expect(client.searchPullRequestsByQuery({ label: 'bug' })).resolves.toEqual({ items: [], hasMore: false });
     });
   });
 
@@ -2245,7 +2372,7 @@ describe('getPrReviewComments', () => {
     });
 
     const client = new GitHubClient();
-    const result = await client.getPrReviewComments('Org/Repo', 42);
+    const { items: result } = await client.getPrReviewComments('Org/Repo', 42);
 
     expect(http.get).toHaveBeenCalledWith('/repos/Org/Repo/pulls/42/comments', {
       params: { per_page: 100, page: 1 },
@@ -2278,7 +2405,7 @@ describe('getPrReviewComments', () => {
     http.get.mockResolvedValue({ data: [] });
 
     const client = new GitHubClient();
-    const result = await client.getPrReviewComments('Org/Repo', 42);
+    const { items: result } = await client.getPrReviewComments('Org/Repo', 42);
     expect(result).toEqual([]);
   });
 
@@ -2301,7 +2428,7 @@ describe('getPrReviewComments', () => {
     });
 
     const client = new GitHubClient();
-    const result = await client.getPrReviewComments('Org/Repo', 42);
+    const { items: result } = await client.getPrReviewComments('Org/Repo', 42);
     expect(result[0].author).toBe('unknown');
   });
 });

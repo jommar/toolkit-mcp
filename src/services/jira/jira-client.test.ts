@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { JiraClient, describeError } from './jira-client.js';
+import { JiraClient, describeError, MAX_INLINE_ATTACHMENT_BYTES } from './jira-client.js';
 import { toSlimComment } from '../slim.js';
 
 // Mock axios.create — keep real AxiosError and isAxiosError
@@ -61,6 +61,25 @@ function mockAxiosInstance(): MockAxiosInstance {
   return instance;
 }
 
+const RAW_USER = {
+  self: 'https://test.atlassian.net/rest/api/3/user?accountId=acc-1',
+  accountId: 'acc-1',
+  emailAddress: 'test.user@example.com',
+  avatarUrls: { '48x48': 'https://avatar.example.com/48', '24x24': 'https://avatar.example.com/24' },
+  displayName: 'Test User',
+  active: true,
+  timeZone: 'UTC',
+  locale: 'en_US',
+  accountType: 'atlassian',
+};
+
+/** The slim shapes must not carry avatar or `self` URLs. */
+function expectNoBoilerplate(value: unknown) {
+  const text = JSON.stringify(value);
+  expect(text).not.toContain('avatar');
+  expect(text).not.toContain('"self"');
+}
+
 describe('JiraClient', () => {
   let http: MockAxiosInstance;
 
@@ -92,15 +111,16 @@ describe('JiraClient', () => {
   });
 
   describe('whoami', () => {
-    it('calls GET /myself and returns the user', async () => {
-      const user = { accountId: 'abc', displayName: 'Test', emailAddress: 'test@test.com' };
-      http.get.mockResolvedValueOnce({ data: user });
+    it('calls GET /myself and returns only accountId and displayName', async () => {
+      http.get.mockResolvedValueOnce({ data: RAW_USER });
 
       const client = new JiraClient();
       const result = await client.whoami();
 
       expect(http.get).toHaveBeenCalledWith('/myself');
-      expect(result).toEqual(user);
+      expect(result).toEqual({ accountId: 'acc-1', displayName: 'Test User' });
+      expectNoBoilerplate(result);
+      expect(JSON.stringify(result)).not.toContain('example.com');
     });
   });
 
@@ -652,16 +672,46 @@ describe('JiraClient', () => {
   });
 
   describe('listTransitions', () => {
-    it('GETs /issue/{key}/transitions and returns transitions', async () => {
+    it('GETs /issue/{key}/transitions and returns id, name and destination status name only', async () => {
       http.get.mockResolvedValueOnce({
-        data: { transitions: [{ id: '41', name: 'In Progress' }] },
+        data: {
+          transitions: [
+            {
+              id: '41',
+              name: 'Start',
+              hasScreen: false,
+              isGlobal: true,
+              isInitial: false,
+              isAvailable: true,
+              isConditional: false,
+              isLooped: false,
+              to: {
+                self: 'https://test.atlassian.net/rest/api/3/status/3',
+                description: '',
+                iconUrl: 'https://test.atlassian.net/icon.png',
+                name: 'In Progress',
+                id: '3',
+                statusCategory: { self: 'https://test.atlassian.net/rest/api/3/statuscategory/4', id: 4, key: 'indeterminate', name: 'In Progress' },
+              },
+            },
+          ],
+        },
       });
 
       const client = new JiraClient();
       const result = await client.listTransitions('TAP-1');
 
       expect(http.get).toHaveBeenCalledWith('/issue/TAP-1/transitions');
-      expect(result).toEqual([{ id: '41', name: 'In Progress' }]);
+      expect(result).toEqual([{ id: '41', name: 'Start', to: 'In Progress' }]);
+      expectNoBoilerplate(result);
+    });
+
+    it('gives a null destination when Jira omits `to`', async () => {
+      http.get.mockResolvedValueOnce({ data: { transitions: [{ id: '5', name: 'Reopen' }] } });
+
+      const result = await new JiraClient().listTransitions('TAP-1');
+
+      expect(result).toEqual([{ id: '5', name: 'Reopen', to: null }]);
     });
   });
 
@@ -737,15 +787,19 @@ describe('JiraClient', () => {
   });
 
   describe('searchUsers', () => {
-    it('GETs /user/search with query param', async () => {
-      const users = [{ accountId: 'abc', displayName: 'John', emailAddress: 'john@example.com' }];
-      http.get.mockResolvedValueOnce({ data: users });
+    it('GETs /user/search with query param and returns accountId, displayName, active and email', async () => {
+      http.get.mockResolvedValueOnce({ data: [RAW_USER, { accountId: 'acc-2', displayName: 'Hidden Email', active: false }] });
 
       const client = new JiraClient();
-      const result = await client.searchUsers('John');
+      const result = await client.searchUsers('Test');
 
-      expect(http.get).toHaveBeenCalledWith('/user/search', { params: { query: 'John' } });
-      expect(result).toEqual(users);
+      expect(http.get).toHaveBeenCalledWith('/user/search', { params: { query: 'Test' } });
+      expect(result).toEqual([
+        { accountId: 'acc-1', displayName: 'Test User', active: true, emailAddress: 'test.user@example.com' },
+        { accountId: 'acc-2', displayName: 'Hidden Email', active: false },
+      ]);
+      expectNoBoilerplate(result);
+      expect(JSON.stringify(result)).not.toMatch(/timeZone|locale|accountType/);
     });
   });
 
@@ -790,15 +844,18 @@ describe('JiraClient', () => {
   });
 
   describe('listIssueLinkTypes', () => {
-    it('GETs /issueLinkType and returns types', async () => {
+    it('GETs /issueLinkType and returns id, name, inward and outward only', async () => {
       const types = [{ id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }];
-      http.get.mockResolvedValueOnce({ data: { issueLinkTypes: types } });
+      http.get.mockResolvedValueOnce({
+        data: { issueLinkTypes: types.map((t) => ({ ...t, self: 'https://test.atlassian.net/rest/api/3/issueLinkType/1' })) },
+      });
 
       const client = new JiraClient();
       const result = await client.listIssueLinkTypes();
 
       expect(http.get).toHaveBeenCalledWith('/issueLinkType');
       expect(result).toEqual(types);
+      expectNoBoilerplate(result);
     });
   });
 
@@ -880,6 +937,38 @@ describe('JiraClient', () => {
       const result = await client.getAttachmentContent('1');
 
       expect(result.size).toBe(5); // raw.length of 'hello'
+    });
+
+    it('skips the download and returns metadata only above the size cap', async () => {
+      http.get.mockResolvedValueOnce({
+        data: { id: '7', filename: 'video.mp4', mimeType: 'video/mp4', size: MAX_INLINE_ATTACHMENT_BYTES + 1 },
+      });
+
+      const result = await new JiraClient().getAttachmentContent('7');
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ id: '7', filename: 'video.mp4', mimeType: 'video/mp4', size: MAX_INLINE_ATTACHMENT_BYTES + 1 });
+      expect(result).not.toHaveProperty('contentBase64');
+    });
+
+    it('still returns the bytes for a file exactly at the cap', async () => {
+      http.get
+        .mockResolvedValueOnce({ data: { id: '8', filename: 'a.bin', mimeType: 'application/octet-stream', size: MAX_INLINE_ATTACHMENT_BYTES } })
+        .mockResolvedValueOnce({ data: Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES) });
+
+      const result = await new JiraClient().getAttachmentContent('8');
+
+      expect(result.contentBase64).toHaveLength(Math.ceil(MAX_INLINE_ATTACHMENT_BYTES / 3) * 4);
+    });
+
+    it('drops the bytes when Jira omitted the size but the download is over the cap', async () => {
+      http.get
+        .mockResolvedValueOnce({ data: { id: '9', filename: 'b.bin', mimeType: 'application/octet-stream' } })
+        .mockResolvedValueOnce({ data: Buffer.alloc(MAX_INLINE_ATTACHMENT_BYTES + 1) });
+
+      const result = await new JiraClient().getAttachmentContent('9');
+
+      expect(result).toEqual({ id: '9', filename: 'b.bin', mimeType: 'application/octet-stream', size: MAX_INLINE_ATTACHMENT_BYTES + 1 });
     });
   });
 

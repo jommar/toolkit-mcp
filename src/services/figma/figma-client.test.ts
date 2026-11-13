@@ -138,7 +138,15 @@ describe('FigmaClient', () => {
       const url = fetchMock.mock.calls[0][0] as string;
       expect(url).toContain('/v1/files/ABC123/nodes');
       expect(url).toContain('ids=1%3A2%2C3%3A4');
+      expect(url).not.toContain('depth=');
       expect(result).toEqual(nodes);
+    });
+
+    it('passes depth when given', async () => {
+      fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ nodes: {} }) });
+      const c = await createClient();
+      await c.getNodes('ABC123', '1:2', 3);
+      expect(fetchMock.mock.calls[0][0] as string).toContain('depth=3');
     });
   });
 

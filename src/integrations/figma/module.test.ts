@@ -92,13 +92,21 @@ describe("figmaGetFileHandler", () => {
     const handler = figmaGetFileHandler({ figma: mockFigma as any });
     const result = await handler({ fileKey: "ABC123def456" });
 
-    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123def456", {});
+    // No depth given: the default depth bound is applied and the document is returned
+    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123def456", { depth: 2 });
     const parsed = JSON.parse(result.content[0].text);
-    // Without depth, document should be slimmed
-    expect(parsed.document).toEqual({
-      truncated: true,
-      message: "Use depth or ids to narrow the response",
-    });
+    expect(parsed.document).toEqual(file.document);
+  });
+
+  it("keeps the requested nodes when ids is given without depth", async () => {
+    const file = { name: "T", lastModified: "", version: "1", document: { id: "0:0", children: [{ id: "1:2" }] }, schemaVersion: 0 };
+    mockFigma.getFile.mockResolvedValue(file);
+
+    const handler = figmaGetFileHandler({ figma: mockFigma as any });
+    const result = await handler({ fileKey: "ABC123", ids: "1:2" });
+
+    expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", { depth: 2, ids: "1:2" });
+    expect(JSON.parse(result.content[0].text).document).toEqual(file.document);
   });
 
   it("passes optional depth/ids/geometry/version params to getFile", async () => {
@@ -156,9 +164,18 @@ describe("figmaGetNodesHandler", () => {
     const handler = figmaGetNodesHandler({ figma: mockFigma as any });
     const result = await handler({ fileKey: "ABC123", ids: "1:2,3:4" });
 
-    expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2,3:4");
+    expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2,3:4", 2);
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(nodes);
+  });
+
+  it("passes an explicit depth through", async () => {
+    mockFigma.getNodes.mockResolvedValue({ nodes: {} });
+
+    const handler = figmaGetNodesHandler({ figma: mockFigma as any });
+    await handler({ fileKey: "ABC123", ids: "1:2", depth: 10 });
+
+    expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2", 10);
   });
 
   it("rejects empty ids via schema validation", async () => {
@@ -266,8 +283,10 @@ describe("figmaGetCommentsHandler", () => {
         id: "1",
         message: "Great design!",
         file_key: "ABC123",
-        user: { id: "u1", handle: "alice", img_url: "" },
+        user: { id: "u1", handle: "alice", img_url: "https://example.com/a.png" },
         created_at: "2025-01-01T00:00:00Z",
+        order_id: "3",
+        client_meta: { node_id: "1:2", x: 1, y: 2 },
       },
     ];
     mockFigma.getComments.mockResolvedValue(comments);
@@ -277,7 +296,15 @@ describe("figmaGetCommentsHandler", () => {
 
     expect(mockFigma.getComments).toHaveBeenCalledWith("ABC123");
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(comments);
+    expect(parsed).toEqual([
+      {
+        id: "1",
+        message: "Great design!",
+        user: { id: "u1", handle: "alice" },
+        created_at: "2025-01-01T00:00:00Z",
+        node_id: "1:2",
+      },
+    ]);
   });
 
   it("wraps client errors as McpError", async () => {
@@ -304,6 +331,10 @@ describe("figmaGetStylesHandler", () => {
         name: "Primary",
         style_type: "FILL" as const,
         description: "Primary color",
+        node_id: "9:9",
+        file_key: "ABC123",
+        thumbnail_url: "https://example.com/t.png",
+        user: { id: "u1", handle: "alice", img_url: "https://example.com/a.png" },
       },
     ];
     mockFigma.getStyles.mockResolvedValue(styles);
@@ -313,7 +344,9 @@ describe("figmaGetStylesHandler", () => {
 
     expect(mockFigma.getStyles).toHaveBeenCalledWith("ABC123");
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(styles);
+    expect(parsed).toEqual([
+      { key: "sk1", name: "Primary", style_type: "FILL", description: "Primary color", node_id: "9:9" },
+    ]);
   });
 
   it("wraps client errors as McpError", async () => {
@@ -373,7 +406,7 @@ describe("figmaPostCommentHandler", () => {
       id: "c1",
       message: "Great work!",
       file_key: "ABC123",
-      user: { id: "u1", handle: "alice", img_url: "" },
+      user: { id: "u1", handle: "alice", img_url: "https://example.com/a.png" },
       created_at: "2025-01-01T00:00:00Z",
     };
     mockFigma.postComment.mockResolvedValue(created);
@@ -383,7 +416,12 @@ describe("figmaPostCommentHandler", () => {
 
     expect(mockFigma.postComment).toHaveBeenCalledWith("ABC123", "Great work!", undefined);
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(created);
+    expect(parsed).toEqual({
+      id: "c1",
+      message: "Great work!",
+      user: { id: "u1", handle: "alice" },
+      created_at: "2025-01-01T00:00:00Z",
+    });
   });
 
   it("passes parentId for threaded replies", async () => {
@@ -423,7 +461,9 @@ describe("figmaGetVersionsHandler", () => {
       {
         id: "v1",
         created_at: "2025-01-01T00:00:00Z",
-        user: { id: "u1", handle: "alice" },
+        label: "v1",
+        user: { id: "u1", handle: "alice", img_url: "https://example.com/a.png" },
+        thumbnail_url: "https://example.com/t.png",
       },
     ];
     mockFigma.getVersions.mockResolvedValue(versions);
@@ -433,7 +473,9 @@ describe("figmaGetVersionsHandler", () => {
 
     expect(mockFigma.getVersions).toHaveBeenCalledWith("ABC123");
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(versions);
+    expect(parsed).toEqual([
+      { id: "v1", created_at: "2025-01-01T00:00:00Z", label: "v1", user: { id: "u1", handle: "alice" } },
+    ]);
   });
 
   it("wraps client errors as McpError", async () => {

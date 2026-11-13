@@ -221,6 +221,26 @@ describe('JenkinsClient', () => {
     });
   });
 
+  describe('getConsole tail', () => {
+    it('returns the last `limit` lines when tail is set', async () => {
+      http.get.mockResolvedValue({ data: 'l1\nl2\nl3\nl4\nl5\n' });
+      const client = new JenkinsClient();
+      const page = await client.getConsole('EZAT-backend-dev', undefined, { limit: 2, tail: true });
+      expect(page.lines).toEqual(['l4', 'l5']);
+      expect(page.fromLine).toBe(3);
+      expect(page.totalLines).toBe(5);
+      expect(page.hasMore).toBe(false);
+    });
+
+    it('returns the whole log when it is shorter than the tail window', async () => {
+      http.get.mockResolvedValue({ data: 'l1\nl2\n' });
+      const client = new JenkinsClient();
+      const page = await client.getConsole('EZAT-backend-dev', undefined, { limit: 10, tail: true });
+      expect(page.lines).toEqual(['l1', 'l2']);
+      expect(page.fromLine).toBe(0);
+    });
+  });
+
   describe('job name validation', () => {
     it('rejects an invalid job name', async () => {
       const client = new JenkinsClient();

@@ -1,6 +1,17 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
 import { JiraConfig, loadConfig } from '../config.js';
-import { DEV_FIELDS, SlimIssue, toSlimIssue, toSlimComment, toCommentAck, CommentAck } from '../slim.js';
+import { MAX_INLINE_ATTACHMENT_BYTES } from './attachment-limit.js';
+import {
+  DEV_FIELDS,
+  SlimIssue,
+  toSlimIssue,
+  toSlimComment,
+  toCommentAck,
+  CommentAck,
+  toSlimUser,
+  toSlimTransition,
+  toSlimLinkType,
+} from '../slim.js';
 import { installRetry } from '../http-retry.js';
 import { markdownToAdf, splitMentions } from './markdown-to-adf.js';
 import type { AdfDocument } from './markdown-to-adf.js';
@@ -11,6 +22,7 @@ export interface JiraUser {
   accountId: string;
   displayName: string;
   emailAddress?: string;
+  active?: boolean;
 }
 
 export interface JiraField {
@@ -41,6 +53,8 @@ export interface SearchResult {
 export interface JiraTransition {
   id: string;
   name: string;
+  /** Name of the status the transition leads to. */
+  to: string | null;
 }
 
 export interface JiraComment {
@@ -57,6 +71,8 @@ export interface IssueLinkType {
   inward: string;
   outward: string;
 }
+
+export { MAX_INLINE_ATTACHMENT_BYTES };
 
 /**
  * Minimal typed client over the Jira Cloud REST API (v3).
@@ -77,10 +93,10 @@ export class JiraClient {
     installRetry(this.http);
   }
 
-  /** Current authenticated user — the simplest way to verify credentials. */
+  /** Current authenticated user (`accountId` and `displayName` only) — the simplest way to verify credentials. */
   async whoami(): Promise<JiraUser> {
-    const { data } = await this.http.get<JiraUser>('/myself');
-    return data;
+    const { data } = await this.http.get('/myself');
+    return toSlimUser(data);
   }
 
   /** All fields on the instance — use to find custom field IDs (e.g. Story Points). */
@@ -233,12 +249,12 @@ export class JiraClient {
     await this.http.delete(`/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`);
   }
 
-  /** List the transitions available from the issue's current status. */
+  /** List the transitions available from the issue's current status (id, name, destination status name). */
   async listTransitions(key: string): Promise<JiraTransition[]> {
-    const { data } = await this.http.get<{ transitions: JiraTransition[] }>(
+    const { data } = await this.http.get<{ transitions: unknown[] }>(
       `/issue/${encodeURIComponent(key)}/transitions`,
     );
-    return data.transitions;
+    return data.transitions.map(toSlimTransition);
   }
 
   /**
@@ -268,12 +284,12 @@ export class JiraClient {
     return me;
   }
 
-  /** Search for users by display name or email (uses GET /rest/api/3/user/search). */
+  /** Search for users by display name or email (uses GET /rest/api/3/user/search); returns accountId, displayName, and active/emailAddress when Jira gives them. */
   async searchUsers(query: string): Promise<JiraUser[]> {
-    const { data } = await this.http.get<JiraUser[]>('/user/search', {
+    const { data } = await this.http.get<unknown[]>('/user/search', {
       params: { query },
     });
-    return data;
+    return data.map((u) => toSlimUser(u, { details: true }));
   }
 
   /** List a project's components (id + name) — the valid values for an issue's Components field. */
@@ -282,10 +298,10 @@ export class JiraClient {
     return data.map((c) => ({ id: c.id, name: c.name }));
   }
 
-  /** List the available issue link types (name + inward/outward labels). */
+  /** List the available issue link types (id, name + inward/outward labels). */
   async listIssueLinkTypes(): Promise<IssueLinkType[]> {
-    const { data } = await this.http.get<{ issueLinkTypes: IssueLinkType[] }>('/issueLinkType');
-    return data.issueLinkTypes;
+    const { data } = await this.http.get<{ issueLinkTypes: unknown[] }>('/issueLinkType');
+    return data.issueLinkTypes.map(toSlimLinkType);
   }
 
   /**
@@ -309,11 +325,12 @@ export class JiraClient {
 
   /**
    * Download an attachment's content and return it as base64.
-   * Steps: (1) fetch metadata (filename, mimeType), (2) download raw bytes.
+   * Steps: (1) fetch metadata (filename, mimeType, size), (2) download raw bytes.
+   * Over MAX_INLINE_ATTACHMENT_BYTES the download is skipped and `contentBase64` is absent.
    */
   async getAttachmentContent(
     attachmentId: string,
-  ): Promise<{ id: string; filename: string; mimeType: string; size: number; contentBase64: string }> {
+  ): Promise<{ id: string; filename: string; mimeType: string; size: number; contentBase64?: string }> {
     // First get attachment metadata
     const { data: meta } = await this.http.get<{
       id: string;
@@ -322,19 +339,21 @@ export class JiraClient {
       size: number;
     }>(`/attachment/${encodeURIComponent(attachmentId)}`);
 
+    if (meta.size > MAX_INLINE_ATTACHMENT_BYTES) {
+      return { id: meta.id, filename: meta.filename, mimeType: meta.mimeType, size: meta.size };
+    }
+
     // Download the raw file bytes (follows redirect to CDN automatically)
     const response = await this.http.get<ArrayBuffer>(`/attachment/content/${encodeURIComponent(attachmentId)}`, {
       responseType: 'arraybuffer',
     });
 
     const raw = Buffer.from(response.data);
-    return {
-      id: meta.id,
-      filename: meta.filename,
-      mimeType: meta.mimeType,
-      size: meta.size ?? raw.length,
-      contentBase64: raw.toString('base64'),
-    };
+    const size = meta.size ?? raw.length;
+    const base = { id: meta.id, filename: meta.filename, mimeType: meta.mimeType, size };
+    // Jira's reported size can be missing; the downloaded length is the final word.
+    if (raw.length > MAX_INLINE_ATTACHMENT_BYTES) return base;
+    return { ...base, contentBase64: raw.toString('base64') };
   }
 }
 

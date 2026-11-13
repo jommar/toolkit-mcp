@@ -106,14 +106,10 @@ describe("FigmaModule", () => {
       const handlers = mod.createToolHandlers({ figma: mockFigma as any });
       const result = await handlers.figma_get_file({ fileKey: "ABC123" });
 
-      expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", {});
+      expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", { depth: 2 });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.name).toBe("Test");
-      // Without depth, document is slimmed
-      expect(parsed.document).toEqual({
-        truncated: true,
-        message: "Use depth or ids to narrow the response",
-      });
+      expect(parsed.document).toEqual({ children: [] });
     });
 
     it("figma_get_nodes delegates to handler with parsed args", async () => {
@@ -127,7 +123,7 @@ describe("FigmaModule", () => {
         ids: "1:2",
       });
 
-      expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2");
+      expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2", 2);
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed.nodes["1:2"].schemaVersion).toBe(0);
     });

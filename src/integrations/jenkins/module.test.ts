@@ -98,6 +98,22 @@ describe('jenkins module handlers', () => {
     });
   });
 
+  describe('jenkinsGetConsoleHandler tail', () => {
+    it('passes tail through to the client', async () => {
+      jenkins.getConsole.mockResolvedValue({ lines: ['l4', 'l5'], totalLines: 5, fromLine: 3, hasMore: false });
+      const result = await jenkinsGetConsoleHandler({ jenkins: jenkins as any })({ job: 'EZAT-backend-dev', limit: 2, tail: true });
+      expect(jenkins.getConsole).toHaveBeenCalledWith('EZAT-backend-dev', undefined, { offset: 0, limit: 2, tail: true });
+      expect(JSON.parse(result.content[0].text).fromLine).toBe(3);
+    });
+
+    it('rejects tail combined with a cursor', async () => {
+      await expect(
+        jenkinsGetConsoleHandler({ jenkins: jenkins as any })({ job: 'EZAT-backend-dev', limit: 2, tail: true, cursor: '2' }),
+      ).rejects.toThrow('tail cannot be combined with cursor');
+      expect(jenkins.getConsole).not.toHaveBeenCalled();
+    });
+  });
+
   describe('jenkinsHealthcheckHandler', () => {
     const job = (name: string, lastBuildNumber: number | null, lastResult: string | null) => ({
       name,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toSlimIssue, toSlimComment, toSlimAttachment, adfToText } from './slim.js';
+import { toSlimIssue, toSlimComment, toListedComment, toSlimAttachment, toSlimUser, toSlimTransition, toSlimLinkType, adfToText } from './slim.js';
 import type { JiraIssue } from './jira/jira-client.js';
 
 describe('toSlimIssue', () => {
@@ -162,6 +162,27 @@ describe('toSlimIssue', () => {
     expect(slim.custom).toEqual({ customfield_10058: 5 });
   });
 
+  it('strips self and avatarUrls from custom values at any depth, keeping the rest raw', () => {
+    const issue: JiraIssue = {
+      id: '1',
+      key: 'TAP-1',
+      fields: {
+        summary: 's',
+        components: [{ self: 'https://example.com/c/1', id: '1', name: 'Core', description: 'd' }],
+        customfield_10001: { self: 'https://example.com/u', accountId: 'acc-1', displayName: 'Dana Example', avatarUrls: { '48x48': 'https://example.com/a' }, nested: { self: 'x', keep: 1 } },
+        customfield_10002: 7,
+        customfield_10003: 'text',
+      },
+    };
+    const slim = toSlimIssue(issue, ['components', 'customfield_10001', 'customfield_10002', 'customfield_10003']);
+    expect(slim.custom).toEqual({
+      components: [{ id: '1', name: 'Core', description: 'd' }],
+      customfield_10001: { accountId: 'acc-1', displayName: 'Dana Example', nested: { keep: 1 } },
+      customfield_10002: 7,
+      customfield_10003: 'text',
+    });
+  });
+
   it('drops null/undefined custom field values', () => {
     const issue: JiraIssue = {
       id: '1',
@@ -274,6 +295,59 @@ describe('toSlimComment', () => {
   });
 });
 
+describe('toListedComment', () => {
+  const raw = {
+    self: 'https://example.com/comment/1',
+    id: 'c1',
+    author: { accountId: 'acc-1', emailAddress: 'a@example.com', avatarUrls: { '48x48': 'https://example.com/a' }, displayName: 'Alice' },
+    updateAuthor: { accountId: 'acc-2', displayName: 'Bob' },
+    body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hi' }] }] },
+    created: '2025-01-01T00:00:00Z',
+    updated: '2025-01-02T00:00:00Z',
+    jsdPublic: true,
+  };
+
+  it('keeps id, author name, created, updated and the plain-text body', () => {
+    expect(toListedComment(raw)).toEqual({ id: 'c1', author: 'Alice', created: '2025-01-01T00:00:00Z', updated: '2025-01-02T00:00:00Z', body: 'Hi' });
+  });
+
+  it('handles an empty comment', () => {
+    expect(toListedComment({})).toEqual({ id: '', author: null, created: null, updated: null, body: null });
+  });
+
+  it('adds parentId and bodyAdf only when present and asked for', () => {
+    expect(toListedComment({ ...raw, parentId: 9 }, { adf: true })).toMatchObject({ parentId: '9', bodyAdf: raw.body });
+    expect(toListedComment(raw)).not.toHaveProperty('parentId');
+    expect(toListedComment(raw)).not.toHaveProperty('bodyAdf');
+  });
+
+  it('does not change toSlimComment, which issue reads keep using', () => {
+    expect(toSlimComment(raw)).toEqual({ id: 'c1', author: 'Alice', created: '2025-01-01T00:00:00Z', body: 'Hi' });
+  });
+});
+
+describe('toSlimUser / toSlimTransition / toSlimLinkType', () => {
+  const rawUser = { self: 'https://example.com/u', accountId: 'acc-1', emailAddress: 'a@example.com', avatarUrls: { '48x48': 'https://example.com/a' }, displayName: 'Alice', active: true, timeZone: 'UTC', locale: 'en', accountType: 'atlassian' };
+
+  it('toSlimUser returns only accountId and displayName by default', () => {
+    expect(toSlimUser(rawUser)).toEqual({ accountId: 'acc-1', displayName: 'Alice' });
+  });
+
+  it('toSlimUser with details adds active and emailAddress when present', () => {
+    expect(toSlimUser(rawUser, { details: true })).toEqual({ accountId: 'acc-1', displayName: 'Alice', active: true, emailAddress: 'a@example.com' });
+    expect(toSlimUser({ accountId: 'acc-2', displayName: 'No Mail' }, { details: true })).toEqual({ accountId: 'acc-2', displayName: 'No Mail' });
+  });
+
+  it('toSlimTransition keeps id, name and the destination status name', () => {
+    const t = toSlimTransition({ id: '1', name: 'Go', self: 'x', isGlobal: true, to: { name: 'Done', self: 'y', iconUrl: 'z', statusCategory: { key: 'done' } } });
+    expect(t).toEqual({ id: '1', name: 'Go', to: 'Done' });
+  });
+
+  it('toSlimLinkType keeps id, name, inward and outward', () => {
+    expect(toSlimLinkType({ id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks', self: 'x' })).toEqual({ id: '1', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' });
+  });
+});
+
 describe('toSlimAttachment', () => {
   it('maps all fields', () => {
     const raw = {
@@ -293,8 +367,18 @@ describe('toSlimAttachment', () => {
     expect(att.created).toBe('2025-01-01T00:00:00Z');
     expect(att.size).toBe(5000);
     expect(att.mimeType).toBe('application/pdf');
-    expect(att.content).toBe('http://example.com/file.pdf');
-    expect(att.thumbnail).toBe('http://example.com/thumb.png');
+  });
+
+  it('leaves out the download and thumbnail URLs', () => {
+    const att = toSlimAttachment({
+      id: 'a1',
+      filename: 'file.pdf',
+      content: 'http://example.com/file.pdf',
+      thumbnail: 'http://example.com/thumb.png',
+      self: 'http://example.com/self',
+    });
+    expect(Object.keys(att).sort()).toEqual(['author', 'created', 'filename', 'id', 'mimeType', 'size']);
+    expect(JSON.stringify(att)).not.toContain('http');
   });
 
   it('handles missing optional fields', () => {
@@ -304,7 +388,6 @@ describe('toSlimAttachment', () => {
     expect(att.created).toBeNull();
     expect(att.size).toBe(0);
     expect(att.mimeType).toBe('');
-    expect(att.thumbnail).toBeNull();
   });
 });
 

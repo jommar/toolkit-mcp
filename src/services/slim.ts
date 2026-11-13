@@ -1,4 +1,4 @@
-import { JiraIssue } from './jira/jira-client.js';
+import { JiraIssue, JiraUser, JiraTransition, IssueLinkType } from './jira/jira-client.js';
 
 /**
  * The narrow set of issue fields worth fetching for day-to-day dev work.
@@ -39,6 +39,7 @@ export interface CommentAck {
   url: string;
 }
 
+/** Download and thumbnail URLs are left out: `jira_get_attachment` fetches by `id`. */
 export interface SlimAttachment {
   id: string;
   filename: string;
@@ -46,8 +47,13 @@ export interface SlimAttachment {
   created: string | null;
   size: number;
   mimeType: string;
-  content: string;
-  thumbnail: string | null;
+}
+
+/** A comment as `jira_get_comments` lists it: SlimComment plus `updated`, `parentId` on thread replies and the raw ADF `bodyAdf` only when asked for. */
+export interface ListedComment extends SlimComment {
+  updated: string | null;
+  parentId?: string;
+  bodyAdf?: unknown;
 }
 
 export interface SlimIssue {
@@ -81,7 +87,8 @@ export function toSlimIssue(issue: JiraIssue, customIds?: string[], options: Sli
   const f = issue.fields as Record<string, any>;
   const entries = (customIds ?? [])
     .map((id) => [id, f[id]] as const)
-    .filter(([, v]) => v != null);
+    .filter(([, v]) => v != null)
+    .map(([id, v]) => [id, stripLinkBoilerplate(v)] as const);
   const slim: SlimIssue = {
     key: issue.key,
     summary: f.summary ?? '',
@@ -114,6 +121,14 @@ export function toSlimComment(c: any): SlimComment {
   };
 }
 
+/** Flatten a raw Jira comment for `jira_get_comments`: the slim shape plus `updated` and `parentId` (no accountId, email, avatars or `self` URLs). */
+export function toListedComment(c: any, options: SlimIssueOptions = {}): ListedComment {
+  const listed: ListedComment = { ...toSlimComment(c), updated: c?.updated ?? null };
+  if (c?.parentId != null) listed.parentId = String(c.parentId);
+  if (options.adf && c?.body != null) listed.bodyAdf = c.body;
+  return listed;
+}
+
 /** Reduce the raw comment Jira returns from a create/update to a CommentAck (no body, email, accountId, avatars or `self` URLs). */
 export function toCommentAck(c: any, key: string, baseUrl: string): CommentAck {
   const id = c?.id ?? '';
@@ -136,9 +151,37 @@ export function toSlimAttachment(a: any): SlimAttachment {
     created: a?.created ?? null,
     size: a.size ?? 0,
     mimeType: a.mimeType ?? '',
-    content: a.content ?? '',
-    thumbnail: a?.thumbnail ?? null,
   };
+}
+
+/** Reduce a raw Jira user to `{accountId, displayName}`; `active` and `emailAddress` only when Jira returned them (no avatars, `self`, locale or time zone). */
+export function toSlimUser(u: any, options: { details?: boolean } = {}): JiraUser {
+  const user: JiraUser = { accountId: u?.accountId ?? '', displayName: u?.displayName ?? '' };
+  if (!options.details) return user;
+  if (u?.active != null) user.active = u.active;
+  if (u?.emailAddress) user.emailAddress = u.emailAddress;
+  return user;
+}
+
+/** Reduce a raw Jira transition to `{id, name, to}`, where `to` is the destination status name (no icons, flags or `self`). */
+export function toSlimTransition(t: any): JiraTransition {
+  return { id: t?.id ?? '', name: t?.name ?? '', to: t?.to?.name ?? null };
+}
+
+/** Reduce a raw Jira issue link type to `{id, name, inward, outward}` (no `self`). */
+export function toSlimLinkType(t: any): IssueLinkType {
+  return { id: t?.id ?? '', name: t?.name ?? '', inward: t?.inward ?? '', outward: t?.outward ?? '' };
+}
+
+/** Drop the `self` and `avatarUrls` URL keys, at any depth, from a raw custom-field value; everything else is kept as Jira returned it. */
+function stripLinkBoilerplate(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripLinkBoilerplate);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([k]) => k !== 'self' && k !== 'avatarUrls')
+      .map(([k, v]) => [k, stripLinkBoilerplate(v)]),
+  );
 }
 
 /**

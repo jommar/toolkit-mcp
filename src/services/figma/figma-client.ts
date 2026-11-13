@@ -48,6 +48,7 @@ export interface FigmaComment {
   created_at: string;
   resolved_at?: string;
   order_id?: string;
+  client_meta?: { node_id?: string; [key: string]: unknown };
 }
 
 export interface FigmaStyle {
@@ -55,6 +56,7 @@ export interface FigmaStyle {
   name: string;
   style_type: 'FILL' | 'TEXT' | 'EFFECT' | 'GRID';
   description: string;
+  node_id?: string;
   [key: string]: unknown;
 }
 
@@ -209,8 +211,8 @@ export class FigmaClient {
   }
 
   /** Get specific nodes from a file by their IDs. */
-  async getNodes(fileKey: string, ids: string): Promise<FigmaNodesResponse> {
-    return this.request<FigmaNodesResponse>(`/v1/files/${encodeURIComponent(fileKey)}/nodes`, { ids });
+  async getNodes(fileKey: string, ids: string, depth?: number): Promise<FigmaNodesResponse> {
+    return this.request<FigmaNodesResponse>(`/v1/files/${encodeURIComponent(fileKey)}/nodes`, { ids, depth });
   }
 
   /** Export images for specific nodes. */

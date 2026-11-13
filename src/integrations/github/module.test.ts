@@ -61,6 +61,9 @@ import {
   githubGetCodeReviewReadySchema,
 } from './module.js';
 
+/** One page of a list endpoint, as the client now returns it. */
+const page = <T,>(items: T[], hasMore = false) => ({ items, hasMore });
+
 function makeMockGitHub() {
   return {
     getCopilotUnresolvedPrs: vi.fn(),
@@ -226,7 +229,7 @@ describe('githubGetPrsHandler', () => {
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
     const result = await handler({ issueKey: 'TAP-1267' });
 
-    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1267', 20, 'open');
+    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1267', 21, 'open');
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(prs);
     expect(parsed.hasMore).toBe(false);
@@ -332,13 +335,27 @@ describe('githubGetPrsHandler', () => {
     expect(parsed.items).toHaveLength(1);
   });
 
-  it('passes limit as maxResults to searchPrs (H3)', async () => {
+  it('asks searchPrs for one PR past the page so hasMore can be true (H3)', async () => {
     mockGitHub.searchPrs.mockResolvedValue([]);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
     await handler({ issueKey: 'TAP-1', limit: 10 });
 
-    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 10, 'open');
+    expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 11, 'open');
+  });
+
+  it('sets hasMore on the issueKey path when the extra PR comes back', async () => {
+    const found = Array.from({ length: 11 }, (_, i) => ({
+      number: i, title: `PR ${i}`, repo: 'Org/Repo', state: 'open' as const, htmlUrl: `url${i}`,
+    }));
+    mockGitHub.searchPrs.mockResolvedValue(found);
+
+    const handler = githubGetPrsHandler({ github: mockGitHub as any });
+    const parsed = JSON.parse((await handler({ issueKey: 'TAP-1', limit: 10 })).content[0].text);
+
+    expect(parsed.items).toHaveLength(10);
+    expect(parsed.hasMore).toBe(true);
+    expect(parsed.nextPageToken).toBe('10');
   });
 
   it('uses cursor as offset (C3)', async () => {
@@ -578,6 +595,14 @@ describe('githubCreatePrHandler', () => {
   });
 });
 
+const LEAKY_KEYS = ['avatar_url', 'node_id', '_links', 'url', 'html_url', 'user', 'body'];
+
+/** Fails when a trimmed ack still carries avatar/node_id/_links/url-family fields or a body echo. */
+function expectNoLeakyFields(parsed: Record<string, unknown>) {
+  for (const key of LEAKY_KEYS) expect(parsed).not.toHaveProperty(key);
+  expect(JSON.stringify(parsed)).not.toMatch(/avatar|node_id|_links|api\.github\.com/);
+}
+
 describe('githubAddPrCommentHandler', () => {
   let mockGitHub: ReturnType<typeof makeMockGitHub>;
 
@@ -587,7 +612,7 @@ describe('githubAddPrCommentHandler', () => {
   });
 
   it('calls addPrComment with correct args and returns the created comment', async () => {
-    const comment = { id: 555, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555', body: 'Looks good' };
+    const comment = { id: 555, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-555', body: 'Looks good', user: 'alice', createdAt: '2025-01-01T00:00:00Z' };
     mockGitHub.addPrComment.mockResolvedValue(comment);
 
     const handler = githubAddPrCommentHandler({ github: mockGitHub as any });
@@ -595,7 +620,8 @@ describe('githubAddPrCommentHandler', () => {
 
     expect(mockGitHub.addPrComment).toHaveBeenCalledWith({ repo: 'Org/Repo', prNumber: 42, body: 'Looks good' });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(comment);
+    expect(parsed).toEqual({ id: 555, htmlUrl: comment.htmlUrl });
+    expectNoLeakyFields(parsed);
   });
 });
 
@@ -612,13 +638,13 @@ describe('githubGetPrCommentsHandler', () => {
       { id: 1, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-1', body: 'First!', user: 'alice', createdAt: '2025-01-01T00:00:00Z' },
       { id: 2, htmlUrl: 'https://github.com/Org/Repo/pull/42#issuecomment-2', body: 'Second', user: 'bob', createdAt: '2025-01-02T00:00:00Z' },
     ];
-    mockGitHub.getPrComments.mockResolvedValue(comments);
+    mockGitHub.getPrComments.mockResolvedValue(page(comments));
 
     const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
 
     expect(mockGitHub.getPrComments).toHaveBeenCalledWith('Org/Repo', 42, {
-      perPage: 21,
+      perPage: 20,
       page: 1,
     });
     const parsed = JSON.parse(result.content[0].text);
@@ -627,27 +653,26 @@ describe('githubGetPrCommentsHandler', () => {
   });
 
   it('uses cursor as page number', async () => {
-    mockGitHub.getPrComments.mockResolvedValue([]);
+    mockGitHub.getPrComments.mockResolvedValue(page([]));
 
     const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' });
 
     expect(mockGitHub.getPrComments).toHaveBeenCalledWith('Org/Repo', 42, {
-      perPage: 11,
+      perPage: 10,
       page: 2,
     });
   });
 
-  it('sets hasMore using limit+1 probe', async () => {
-    // Return limit+1 items to signal another page
-    const comments = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const comments = Array.from({ length: 20 }, (_, i) => ({
       id: i,
       htmlUrl: `https://github.com/Org/Repo/pull/42#issuecomment-${i}`,
       body: 'comment',
       user: 'user',
       createdAt: '2025-01-01T00:00:00Z',
     }));
-    mockGitHub.getPrComments.mockResolvedValue(comments);
+    mockGitHub.getPrComments.mockResolvedValue(page(comments, true));
 
     const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -658,7 +683,7 @@ describe('githubGetPrCommentsHandler', () => {
     expect(parsed.nextPageToken).toBe('2');
   });
 
-  it('hasMore is false when fewer results than limit+1', async () => {
+  it('hasMore is false when the client reports no next page', async () => {
     const comments = Array.from({ length: 15 }, (_, i) => ({
       id: i,
       htmlUrl: `https://github.com/Org/Repo/pull/42#issuecomment-${i}`,
@@ -666,7 +691,7 @@ describe('githubGetPrCommentsHandler', () => {
       user: 'user',
       createdAt: '2025-01-01T00:00:00Z',
     }));
-    mockGitHub.getPrComments.mockResolvedValue(comments);
+    mockGitHub.getPrComments.mockResolvedValue(page(comments));
 
     const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -703,7 +728,8 @@ describe('githubUpdatePrCommentHandler', () => {
 
     expect(mockGitHub.updatePrComment).toHaveBeenCalledWith('Org/Repo', 555, 'Updated comment');
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(updated);
+    expect(parsed).toEqual({ id: 555, htmlUrl: updated.htmlUrl });
+    expectNoLeakyFields(parsed);
   });
 });
 
@@ -720,7 +746,7 @@ describe('githubListBranchesHandler', () => {
       { name: 'main', sha: 'abc123', protected: true },
       { name: 'develop', sha: 'def456', protected: false },
     ];
-    mockGitHub.listBranches.mockResolvedValue(branches);
+    mockGitHub.listBranches.mockResolvedValue(page(branches));
 
     const handler = githubListBranchesHandler({ github: mockGitHub as any });
     const result = await handler({
@@ -729,7 +755,7 @@ describe('githubListBranchesHandler', () => {
     });
 
     expect(mockGitHub.listBranches).toHaveBeenCalledWith('Org/Repo', {
-      perPage: 21,
+      perPage: 20,
       page: 1,
     });
     const parsed = JSON.parse(result.content[0].text);
@@ -738,7 +764,7 @@ describe('githubListBranchesHandler', () => {
   });
 
   it('uses cursor as page number', async () => {
-    mockGitHub.listBranches.mockResolvedValue([]);
+    mockGitHub.listBranches.mockResolvedValue(page([]));
 
     const handler = githubListBranchesHandler({ github: mockGitHub as any });
     await handler({
@@ -748,18 +774,18 @@ describe('githubListBranchesHandler', () => {
     });
 
     expect(mockGitHub.listBranches).toHaveBeenCalledWith('Org/Repo', {
-      perPage: 11,
+      perPage: 10,
       page: 2,
     });
   });
 
-  it('sets hasMore using limit+1 probe', async () => {
-    const branches = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const branches = Array.from({ length: 20 }, (_, i) => ({
       name: `branch-${i}`,
       sha: 'sha',
       protected: false,
     }));
-    mockGitHub.listBranches.mockResolvedValue(branches);
+    mockGitHub.listBranches.mockResolvedValue(page(branches, true));
 
     const handler = githubListBranchesHandler({ github: mockGitHub as any });
     const result = await handler({
@@ -773,13 +799,13 @@ describe('githubListBranchesHandler', () => {
     expect(parsed.nextPageToken).toBe('2');
   });
 
-  it('hasMore is false when fewer results than limit+1', async () => {
+  it('hasMore is false when the client reports no next page', async () => {
     const branches = Array.from({ length: 10 }, (_, i) => ({
       name: `branch-${i}`,
       sha: 'sha',
       protected: false,
     }));
-    mockGitHub.listBranches.mockResolvedValue(branches);
+    mockGitHub.listBranches.mockResolvedValue(page(branches));
 
     const handler = githubListBranchesHandler({ github: mockGitHub as any });
     const result = await handler({
@@ -862,25 +888,36 @@ describe('githubGetPrReviewsHandler', () => {
       { id: 1, user: 'bob', state: 'APPROVED', body: 'LGTM', submittedAt: '2025-01-01T12:00:00Z', commitId: 'abc' },
       { id: 2, user: 'carol', state: 'COMMENTED', body: 'Looks good', submittedAt: '2025-01-01T13:00:00Z', commitId: 'def' },
     ];
-    mockGitHub.getPullRequestReviews.mockResolvedValue(reviews);
+    mockGitHub.getPullRequestReviews.mockResolvedValue(page(reviews));
 
     const handler = githubGetPrReviewsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42 });
 
-    expect(mockGitHub.getPullRequestReviews).toHaveBeenCalledWith('Org/Repo', 42);
+    expect(mockGitHub.getPullRequestReviews).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(reviews);
-    expect(parsed).toHaveLength(2);
+    expect(parsed.items).toEqual(reviews);
+    expect(parsed.hasMore).toBe(false);
+  });
+
+  it('pages: cursor is the page number and hasMore comes from the client', async () => {
+    mockGitHub.getPullRequestReviews.mockResolvedValue(page([{ id: 31 }], true));
+
+    const handler = githubGetPrReviewsHandler({ github: mockGitHub as any });
+    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 100, cursor: '2' });
+
+    expect(mockGitHub.getPullRequestReviews).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 100, page: 2 });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual({ items: [{ id: 31 }], nextPageToken: '3', hasMore: true });
   });
 
   it('returns empty array when there are no reviews', async () => {
-    mockGitHub.getPullRequestReviews.mockResolvedValue([]);
+    mockGitHub.getPullRequestReviews.mockResolvedValue(page([]));
 
     const handler = githubGetPrReviewsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42 });
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual([]);
+    expect(parsed).toEqual({ items: [], hasMore: false });
   });
 });
 
@@ -938,7 +975,7 @@ describe('githubSearchPrsHandler', () => {
     const prs: Record<string, unknown>[] = [
       { number: 1, title: 'PR 1', state: 'open', repo: 'Org/Repo', author: 'alice', createdAt: '2025-01-01T00:00:00Z', htmlUrl: 'https://github.com/Org/Repo/pull/1', reviewStatus: 'APPROVED' },
     ];
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(prs);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page(prs));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     const result = await handler({ author: 'alice', state: 'open', limit: 20 });
@@ -948,7 +985,7 @@ describe('githubSearchPrsHandler', () => {
       author: 'alice',
       repo: undefined,
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: undefined,
       reviewRequested: undefined,
@@ -959,7 +996,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('searches by repo', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', state: 'open', limit: 20 });
@@ -969,7 +1006,7 @@ describe('githubSearchPrsHandler', () => {
       author: undefined,
       repo: 'Org/Repo',
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: undefined,
       reviewRequested: undefined,
@@ -978,7 +1015,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('filters by label', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ label: 'bug', state: 'open', limit: 20 });
@@ -988,7 +1025,7 @@ describe('githubSearchPrsHandler', () => {
       author: undefined,
       repo: undefined,
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: 'bug',
       reviewRequested: undefined,
@@ -997,7 +1034,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('filters by reviewRequested', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ reviewRequested: 'alice', state: 'open', limit: 20 });
@@ -1007,7 +1044,7 @@ describe('githubSearchPrsHandler', () => {
       author: undefined,
       repo: undefined,
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: undefined,
       reviewRequested: 'alice',
@@ -1016,7 +1053,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('filters by base branch', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ base: 'main', state: 'open', limit: 20 });
@@ -1026,7 +1063,7 @@ describe('githubSearchPrsHandler', () => {
       author: undefined,
       repo: undefined,
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: undefined,
       reviewRequested: undefined,
@@ -1035,7 +1072,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('searches by free-text query', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ query: 'bugfix', state: 'open', limit: 20 });
@@ -1045,7 +1082,7 @@ describe('githubSearchPrsHandler', () => {
       author: undefined,
       repo: undefined,
       state: 'open',
-      perPage: 21,
+      perPage: 20,
       page: 1,
       label: undefined,
       reviewRequested: undefined,
@@ -1053,9 +1090,8 @@ describe('githubSearchPrsHandler', () => {
     });
   });
 
-  it('returns paginated response using limit+1 probe', async () => {
-    // Return limit+1 items to signal another page
-    const prs = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const prs = Array.from({ length: 20 }, (_, i) => ({
       number: i,
       title: `PR ${i}`,
       state: 'open' as const,
@@ -1065,7 +1101,7 @@ describe('githubSearchPrsHandler', () => {
       htmlUrl: `https://github.com/Org/Repo/pull/${i}`,
       reviewStatus: 'APPROVED' as const,
     }));
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(prs);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page(prs, true));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     const result = await handler({ author: 'alice', state: 'open', limit: 20 });
@@ -1087,7 +1123,7 @@ describe('githubSearchPrsHandler', () => {
       htmlUrl: `https://github.com/Org/Repo/pull/${i}`,
       reviewStatus: 'APPROVED' as const,
     }));
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(prs);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page(prs));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     const result = await handler({ author: 'alice', state: 'open', limit: 20 });
@@ -1099,7 +1135,7 @@ describe('githubSearchPrsHandler', () => {
   });
 
   it('uses cursor as page number', async () => {
-    mockGitHub.searchPullRequestsByQuery.mockResolvedValue([]);
+    mockGitHub.searchPullRequestsByQuery.mockResolvedValue(page([]));
 
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
     await handler({ author: 'alice', state: 'open', limit: 10, cursor: '2' });
@@ -1109,7 +1145,7 @@ describe('githubSearchPrsHandler', () => {
       author: 'alice',
       repo: undefined,
       state: 'open',
-      perPage: 11,
+      perPage: 10,
       page: 2,
       label: undefined,
       reviewRequested: undefined,
@@ -1155,6 +1191,7 @@ describe('githubUpdatePrHandler', () => {
       changedFiles: 3,
       additions: 10,
       deletions: 2,
+      draft: false,
     };
     mockGitHub.updatePullRequest.mockResolvedValue(detail);
 
@@ -1173,8 +1210,17 @@ describe('githubUpdatePrHandler', () => {
       maintainerCanModify: undefined,
     });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(detail);
-    expect(parsed.title).toBe('Updated Title');
+    expect(parsed).toEqual({
+      number: 42,
+      state: 'open',
+      draft: false,
+      title: 'Updated Title',
+      htmlUrl: 'https://github.com/Org/Repo/pull/42',
+      updatedAt: '2025-01-02T00:00:00Z',
+      headBranch: 'feature',
+      baseBranch: 'main',
+    });
+    expectNoLeakyFields(parsed);
   });
 
   it('calls updatePullRequest with state "closed"', async () => {
@@ -1259,7 +1305,8 @@ describe('githubUpdatePrHandler', () => {
       maintainerCanModify: true,
     });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.body).toBe('Updated body');
+    expect(parsed).not.toHaveProperty('body');
+    expect(parsed.number).toBe(42);
   });
 
   it('rejects when no update fields are provided (schema validation)', () => {
@@ -1348,7 +1395,8 @@ describe('githubCreatePrReviewCommentHandler', () => {
       startLine: undefined,
     });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(comment);
+    expect(parsed).toEqual({ id: 1, path: 'src/file.ts', line: 42, htmlUrl: comment.htmlUrl });
+    expectNoLeakyFields(parsed);
   });
 
   it('wraps body with suggestion block when suggestedReplacement is provided', async () => {
@@ -1449,7 +1497,7 @@ describe('githubCreatePrReviewCommentHandler', () => {
 
     expect(mockGitHub.replyToPrReviewComment).toHaveBeenCalledWith('Org/Repo', 42, 5, 'Agreed');
     expect(mockGitHub.createPrReviewComment).not.toHaveBeenCalled();
-    expect(JSON.parse(result.content[0].text).inReplyToId).toBe(5);
+    expect(JSON.parse(result.content[0].text).id).toBe(reply.id);
   });
 
   it('appends a suggestion block to a reply', async () => {
@@ -1502,33 +1550,33 @@ describe('githubGetPrReviewCommentsHandler', () => {
     const comments = [
       { id: 1, path: 'a.ts', line: 10, body: 'Nice', commitId: 'a', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: '', inReplyToId: null, originalLine: null, originalStartLine: null },
     ];
-    mockGitHub.getPrReviewComments.mockResolvedValue(comments);
+    mockGitHub.getPrReviewComments.mockResolvedValue(page(comments));
 
     const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
 
-    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 21, page: 1 });
+    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(comments);
     expect(parsed.hasMore).toBe(false);
   });
 
   it('uses cursor as page number', async () => {
-    mockGitHub.getPrReviewComments.mockResolvedValue([]);
+    mockGitHub.getPrReviewComments.mockResolvedValue(page([]));
 
     const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '3' });
 
-    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 11, page: 3 });
+    expect(mockGitHub.getPrReviewComments).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 3 });
   });
 
-  it('sets hasMore using limit+1 probe', async () => {
-    const comments = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const comments = Array.from({ length: 20 }, (_, i) => ({
       id: i, path: 'f.ts', line: i, body: 'c', commitId: 'a', side: 'RIGHT' as const,
       startLine: null, startSide: null, author: 'u', createdAt: '', updatedAt: '', htmlUrl: '',
       inReplyToId: null, originalLine: null, originalStartLine: null,
     }));
-    mockGitHub.getPrReviewComments.mockResolvedValue(comments);
+    mockGitHub.getPrReviewComments.mockResolvedValue(page(comments, true));
 
     const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -1538,13 +1586,13 @@ describe('githubGetPrReviewCommentsHandler', () => {
     expect(parsed.nextPageToken).toBe('2');
   });
 
-  it('hasMore is false when fewer results than limit+1', async () => {
+  it('hasMore is false when the client reports no next page', async () => {
     const comments = Array.from({ length: 10 }, (_, i) => ({
       id: i, path: 'f.ts', line: i, body: 'c', commitId: 'a', side: 'RIGHT' as const,
       startLine: null, startSide: null, author: 'u', createdAt: '', updatedAt: '', htmlUrl: '',
       inReplyToId: null, originalLine: null, originalStartLine: null,
     }));
-    mockGitHub.getPrReviewComments.mockResolvedValue(comments);
+    mockGitHub.getPrReviewComments.mockResolvedValue(page(comments));
 
     const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -1572,7 +1620,7 @@ describe('githubUpdatePrReviewCommentHandler', () => {
   });
 
   it('calls updatePrReviewComment and returns updated comment', async () => {
-    const updated = { id: 1, path: 'f.ts', line: 10, body: 'Updated', commitId: 'a', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: '', inReplyToId: null, originalLine: null, originalStartLine: null };
+    const updated = { id: 1, path: 'f.ts', line: 10, body: 'Updated', commitId: 'a', side: 'RIGHT', startLine: null, startSide: null, author: 'alice', createdAt: '', updatedAt: '', htmlUrl: 'https://github.com/Org/Repo/pull/42#discussion_r1', inReplyToId: null, originalLine: null, originalStartLine: null };
     mockGitHub.updatePrReviewComment.mockResolvedValue(updated);
 
     const handler = githubUpdatePrReviewCommentHandler({ github: mockGitHub as any });
@@ -1580,7 +1628,8 @@ describe('githubUpdatePrReviewCommentHandler', () => {
 
     expect(mockGitHub.updatePrReviewComment).toHaveBeenCalledWith('Org/Repo', 1, 'Updated');
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(updated);
+    expect(parsed).toEqual({ id: 1, path: 'f.ts', line: 10, htmlUrl: updated.htmlUrl });
+    expectNoLeakyFields(parsed);
   });
 });
 
@@ -1614,7 +1663,7 @@ describe('githubSubmitPrReviewHandler', () => {
   });
 
   it('calls submitPrReview with APPROVE and returns result', async () => {
-    const submitted = { id: 100, state: 'APPROVED', body: 'LGTM', commitId: 'abc', htmlUrl: '' };
+    const submitted = { id: 100, state: 'APPROVED', body: 'LGTM', commitId: 'abc', htmlUrl: 'https://github.com/Org/Repo/pull/42#pullrequestreview-100' };
     mockGitHub.submitPrReview.mockResolvedValue(submitted);
 
     const handler = githubSubmitPrReviewHandler({ github: mockGitHub as any });
@@ -1632,7 +1681,9 @@ describe('githubSubmitPrReviewHandler', () => {
       commitId: undefined,
     });
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed).toEqual(submitted);
+    expect(parsed).toEqual({ id: 100, state: 'APPROVED', htmlUrl: submitted.htmlUrl });
+    expectNoLeakyFields(parsed);
+    expect(parsed).not.toHaveProperty('commitId');
   });
 
   it('passes comments array through', async () => {
@@ -1910,32 +1961,42 @@ describe('githubGetPrFilesHandler', () => {
     const files = [
       { filename: 'src/a.ts', status: 'modified', additions: 5, deletions: 2, changes: 7, patch: '@@ -1 +1 @@' },
     ];
-    mockGitHub.getPrFiles.mockResolvedValue(files);
+    mockGitHub.getPrFiles.mockResolvedValue(page(files));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
 
-    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 21, page: 1 });
+    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(files);
     expect(parsed.hasMore).toBe(false);
   });
 
+  it('defaults includePatch to false in the schema and forwards it when set', async () => {
+    expect(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42 }).includePatch).toBe(false);
+    mockGitHub.getPrFiles.mockResolvedValue(page([]));
+
+    const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
+    await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20, includePatch: true });
+
+    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1, includePatch: true });
+  });
+
   it('uses cursor as page number', async () => {
-    mockGitHub.getPrFiles.mockResolvedValue([]);
+    mockGitHub.getPrFiles.mockResolvedValue(page([]));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' });
 
-    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 11, page: 2 });
+    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 2 });
   });
 
-  it('sets hasMore using limit+1 probe', async () => {
-    const files = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const files = Array.from({ length: 20 }, (_, i) => ({
       filename: `file-${i}.ts`, status: 'modified', additions: 1, deletions: 0, changes: 1,
       patch: '@@ -1 +1 @@',
     }));
-    mockGitHub.getPrFiles.mockResolvedValue(files);
+    mockGitHub.getPrFiles.mockResolvedValue(page(files, true));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -1946,11 +2007,11 @@ describe('githubGetPrFilesHandler', () => {
     expect(parsed.nextPageToken).toBe('2');
   });
 
-  it('hasMore is false when fewer results than limit+1', async () => {
+  it('hasMore is false when the client reports no next page', async () => {
     const files = Array.from({ length: 10 }, (_, i) => ({
       filename: `file-${i}.ts`, status: 'modified', additions: 1, deletions: 0, changes: 1,
     }));
-    mockGitHub.getPrFiles.mockResolvedValue(files);
+    mockGitHub.getPrFiles.mockResolvedValue(page(files));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -1986,31 +2047,31 @@ describe('githubGetPrCommitsHandler', () => {
     const commits = [
       { sha: 'abc123', commit: { message: 'Fix bug', author: { name: 'Alice', email: 'alice@example.com', date: '2025-01-01T00:00:00Z' } }, author: { login: 'alice' } },
     ];
-    mockGitHub.getPrCommits.mockResolvedValue(commits);
+    mockGitHub.getPrCommits.mockResolvedValue(page(commits));
 
     const handler = githubGetPrCommitsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
 
-    expect(mockGitHub.getPrCommits).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 21, page: 1 });
+    expect(mockGitHub.getPrCommits).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(commits);
     expect(parsed.hasMore).toBe(false);
   });
 
   it('uses cursor as page number', async () => {
-    mockGitHub.getPrCommits.mockResolvedValue([]);
+    mockGitHub.getPrCommits.mockResolvedValue(page([]));
 
     const handler = githubGetPrCommitsHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' });
 
-    expect(mockGitHub.getPrCommits).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 11, page: 2 });
+    expect(mockGitHub.getPrCommits).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 2 });
   });
 
-  it('sets hasMore using limit+1 probe', async () => {
-    const commits = Array.from({ length: 21 }, (_, i) => ({
+  it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
+    const commits = Array.from({ length: 20 }, (_, i) => ({
       sha: `sha${i}`, commit: { message: `Commit ${i}`, author: { name: 'A', email: 'a@b.com', date: '2025-01-01T00:00:00Z' } }, author: { login: 'user' },
     }));
-    mockGitHub.getPrCommits.mockResolvedValue(commits);
+    mockGitHub.getPrCommits.mockResolvedValue(page(commits, true));
 
     const handler = githubGetPrCommitsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -2021,11 +2082,11 @@ describe('githubGetPrCommitsHandler', () => {
     expect(parsed.nextPageToken).toBe('2');
   });
 
-  it('hasMore is false when fewer results than limit+1', async () => {
+  it('hasMore is false when the client reports no next page', async () => {
     const commits = Array.from({ length: 10 }, (_, i) => ({
       sha: `sha${i}`, commit: { message: `Commit ${i}`, author: { name: 'A', email: 'a@b.com', date: '2025-01-01T00:00:00Z' } }, author: { login: 'user' },
     }));
-    mockGitHub.getPrCommits.mockResolvedValue(commits);
+    mockGitHub.getPrCommits.mockResolvedValue(page(commits));
 
     const handler = githubGetPrCommitsHandler({ github: mockGitHub as any });
     const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
@@ -2064,7 +2125,7 @@ describe('githubGetFileContentsHandler', () => {
     const handler = githubGetFileContentsHandler({ github: mockGitHub as any });
     const response = await handler({ repo: 'Org/Repo', path: 'src/file.ts' });
 
-    expect(mockGitHub.getFileContents).toHaveBeenCalledWith('Org/Repo', 'src/file.ts', undefined);
+    expect(mockGitHub.getFileContents).toHaveBeenCalledWith('Org/Repo', 'src/file.ts', undefined, { startLine: undefined, endLine: undefined });
     const parsed = JSON.parse(response.content[0].text);
     expect(parsed.content).toBe('console.log("hello");');
     expect(parsed.truncated).toBe(false);
@@ -2076,7 +2137,22 @@ describe('githubGetFileContentsHandler', () => {
     const handler = githubGetFileContentsHandler({ github: mockGitHub as any });
     await handler({ repo: 'Org/Repo', path: 'f.ts', ref: 'main' });
 
-    expect(mockGitHub.getFileContents).toHaveBeenCalledWith('Org/Repo', 'f.ts', 'main');
+    expect(mockGitHub.getFileContents).toHaveBeenCalledWith('Org/Repo', 'f.ts', 'main', { startLine: undefined, endLine: undefined });
+  });
+
+  it('passes startLine and endLine through', async () => {
+    mockGitHub.getFileContents.mockResolvedValue({ path: 'f.ts', content: 'b', encoding: 'base64', size: 5, truncated: false, totalLines: 3 });
+
+    const handler = githubGetFileContentsHandler({ github: mockGitHub as any });
+    const response = await handler({ repo: 'Org/Repo', path: 'f.ts', startLine: 2, endLine: 2 });
+
+    expect(mockGitHub.getFileContents).toHaveBeenCalledWith('Org/Repo', 'f.ts', undefined, { startLine: 2, endLine: 2 });
+    expect(JSON.parse(response.content[0].text).totalLines).toBe(3);
+  });
+
+  it('rejects startLine greater than endLine (schema validation)', () => {
+    expect(() => githubGetFileContentsSchema.parse({ repo: 'Org/Repo', path: 'f.ts', startLine: 5, endLine: 2 })).toThrow();
+    expect(githubGetFileContentsSchema.parse({ repo: 'Org/Repo', path: 'f.ts' })).toEqual({ repo: 'Org/Repo', path: 'f.ts' });
   });
 
   it('rejects invalid repo format (schema validation)', () => {
@@ -2085,5 +2161,52 @@ describe('githubGetFileContentsHandler', () => {
 
   it('rejects empty path (schema validation)', () => {
     expect(() => githubGetFileContentsSchema.parse({ repo: 'Org/Repo', path: '' })).toThrow();
+  });
+});
+
+describe('list tools page through GitHub without skipping or repeating items', () => {
+  const TOTAL = 250;
+  const MAX_PER_PAGE = 100; // GitHub clamps per_page to 100
+
+  /** A fake GitHub list endpoint: clamps per_page like GitHub and reports hasMore like its Link rel="next". */
+  const fakeEndpoint = vi.fn(async (opts: { perPage?: number; page?: number }) => {
+    const perPage = Math.min(opts.perPage ?? 30, MAX_PER_PAGE);
+    const page = opts.page ?? 1;
+    const start = (page - 1) * perPage;
+    const items = Array.from({ length: Math.max(0, Math.min(perPage, TOTAL - start)) }, (_, i) => ({ id: start + i }));
+    return { items, hasMore: start + perPage < TOTAL };
+  });
+
+  const tools: [string, (args: any) => Promise<{ content: { text: string }[] }>][] = [
+    ['github_get_pr_comments', (a) => githubGetPrCommentsHandler({ github: { getPrComments: (_r: string, _n: number, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', prNumber: 1, ...a })],
+    ['github_list_branches', (a) => githubListBranchesHandler({ github: { listBranches: (_r: string, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', ...a })],
+    ['github_get_pr_files', (a) => githubGetPrFilesHandler({ github: { getPrFiles: (_r: string, _n: number, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', prNumber: 1, ...a })],
+    ['github_get_pr_commits', (a) => githubGetPrCommitsHandler({ github: { getPrCommits: (_r: string, _n: number, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', prNumber: 1, ...a })],
+    ['github_get_pr_review_comments', (a) => githubGetPrReviewCommentsHandler({ github: { getPrReviewComments: (_r: string, _n: number, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', prNumber: 1, ...a })],
+    ['github_search_prs', (a) => githubSearchPrsHandler({ github: { searchPullRequestsByQuery: (o: any) => fakeEndpoint(o) } as any })({ author: 'alice', ...a })],
+    ['github_get_pr_reviews', (a) => githubGetPrReviewsHandler({ github: { getPullRequestReviews: (_r: string, _n: number, o: any) => fakeEndpoint(o) } as any })({ repo: 'Org/Repo', prNumber: 1, ...a })],
+  ];
+
+  describe.each(tools)('%s', (_name, call) => {
+    it.each([100, 20, 7])('walks every item exactly once at limit %i', async (limit) => {
+      const seen: number[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const res = JSON.parse((await call({ limit, cursor })).content[0].text);
+        seen.push(...res.items.map((i: { id: number }) => i.id));
+        expect(res.hasMore).toBe(res.nextPageToken !== undefined);
+        cursor = res.nextPageToken;
+        pages++;
+      } while (cursor && pages < 100);
+
+      expect(seen).toEqual(Array.from({ length: TOTAL }, (_, i) => i));
+    });
+
+    it('never asks GitHub for more than 100 per page at limit 100', async () => {
+      fakeEndpoint.mockClear();
+      await call({ limit: 100 });
+      expect(fakeEndpoint).toHaveBeenCalledWith(expect.objectContaining({ perPage: 100, page: 1 }));
+    });
   });
 });

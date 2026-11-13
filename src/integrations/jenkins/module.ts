@@ -63,6 +63,10 @@ export const jenkinsGetConsoleSchema = z.object({
     .describe('Build number. Omit for the most recent build.'),
   limit: z.number().min(1).max(2000).optional().default(200).describe('Maximum log lines per page (default 200).'),
   cursor: cursorField,
+  tail: z
+    .boolean()
+    .optional()
+    .describe('Return the last `limit` lines of the log (where failures usually are) instead of the first. Cannot be combined with cursor.'),
 });
 
 export const jenkinsHealthcheckSchema = z.object({
@@ -122,8 +126,15 @@ export const jenkinsGetBuildHandler: ToolHandler<z.infer<typeof jenkinsGetBuildS
 export const jenkinsGetConsoleHandler: ToolHandler<z.infer<typeof jenkinsGetConsoleSchema>> =
   (clients) => async (args) => {
     try {
+      if (args.tail && args.cursor) {
+        throw new McpError(ErrorCode.InvalidParams, 'tail cannot be combined with cursor.');
+      }
       const offset = offsetFromCursor(args.cursor);
-      const page = await clients.jenkins.getConsole(args.job, args.buildNumber, { offset, limit: args.limit });
+      const page = await clients.jenkins.getConsole(args.job, args.buildNumber, {
+        offset,
+        limit: args.limit,
+        tail: args.tail,
+      });
       const body = {
         ...paginated(page.lines, page.hasMore ? String(page.nextOffset) : undefined),
         totalLines: page.totalLines,
@@ -201,7 +212,7 @@ export const jenkinsToolDescriptors = [
   },
   {
     name: 'jenkins_get_console',
-    description: 'Get a build console log, paginated by line; omit buildNumber for the most recent build.',
+    description: 'Get a build console log, paginated by line from the start; set tail=true for the last lines. Omit buildNumber for the most recent build.',
     inputSchema: zodToJsonSchema(jenkinsGetConsoleSchema),
   },
   {
