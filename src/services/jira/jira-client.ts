@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, isAxiosError } from 'axios';
 import { JiraConfig, loadConfig } from '../config.js';
-import { DEV_FIELDS, SlimIssue, toSlimIssue, toSlimComment } from '../slim.js';
+import { DEV_FIELDS, SlimIssue, toSlimIssue, toSlimComment, toCommentAck, CommentAck } from '../slim.js';
 import { installRetry } from '../http-retry.js';
 import { markdownToAdf, splitMentions } from './markdown-to-adf.js';
 import type { AdfDocument } from './markdown-to-adf.js';
@@ -64,8 +64,10 @@ export interface IssueLinkType {
  */
 export class JiraClient {
   private readonly http: AxiosInstance;
+  private readonly baseUrl: string;
 
   constructor(config: JiraConfig = loadConfig()) {
+    this.baseUrl = config.baseUrl;
     this.http = axios.create({
       baseURL: `${config.baseUrl}/rest/api/3`,
       auth: { username: config.email, password: config.token },
@@ -198,32 +200,32 @@ export class JiraClient {
     await this.http.put(`/issue/${encodeURIComponent(key)}`, { fields });
   }
 
-  /** Add a comment (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). Pass `parentId` to reply in that comment's thread. */
+  /** Add a comment, returning a CommentAck (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). Pass `parentId` to reply in that comment's thread. */
   async addComment(
     key: string,
     body: string,
     parentId?: string,
     format: CommentFormat = 'text',
-  ): Promise<{ id: string }> {
-    const { data } = await this.http.post<{ id: string }>(
+  ): Promise<CommentAck> {
+    const { data } = await this.http.post(
       `/issue/${encodeURIComponent(key)}/comment`,
       { body: toCommentBody(body, format), ...(parentId ? { parentId } : {}) },
     );
-    return data;
+    return toCommentAck(data, key, this.baseUrl);
   }
 
-  /** Replace an existing comment's body (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). */
+  /** Replace an existing comment's body, returning a CommentAck (Atlassian Document Format built from `body` per `format`, see `toCommentBody`). */
   async updateComment(
     key: string,
     commentId: string,
     body: string,
     format: CommentFormat = 'text',
-  ): Promise<{ id: string }> {
-    const { data } = await this.http.put<{ id: string }>(
+  ): Promise<CommentAck> {
+    const { data } = await this.http.put(
       `/issue/${encodeURIComponent(key)}/comment/${encodeURIComponent(commentId)}`,
       { body: toCommentBody(body, format) },
     );
-    return data;
+    return toCommentAck(data, key, this.baseUrl);
   }
 
   /** Delete a comment by issue key and comment id. Returns nothing on success (204). */

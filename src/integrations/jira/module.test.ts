@@ -1246,7 +1246,7 @@ describe('jiraAddCommentHandler', () => {
   });
 
   it('adds a comment and returns it', async () => {
-    const comment = { id: '12345', body: 'Thanks!' };
+    const comment = { id: '12345', key: 'TAP-1', created: '2026-01-02T03:04:05.000+0000', updated: null, author: 'Dev One', url: 'https://test.atlassian.net/browse/TAP-1?focusedCommentId=12345' };
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
@@ -1257,7 +1257,7 @@ describe('jiraAddCommentHandler', () => {
   });
 
   it('replies in a thread when parentId is given and returns the posted comment', async () => {
-    const comment = { id: '48838', parentId: '48106' };
+    const comment = { id: '48838', key: 'TAP-1', created: '2026-01-02T03:04:05.000+0000', updated: null, author: 'Dev One', url: 'https://test.atlassian.net/browse/TAP-1?focusedCommentId=48838' };
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
@@ -1277,7 +1277,7 @@ describe('jiraUpdateCommentHandler', () => {
   });
 
   it('updates a comment and returns it', async () => {
-    const comment = { id: '38560', body: 'Revised.' };
+    const comment = { id: '38560', key: 'TAP-799', created: '2026-01-02T03:04:05.000+0000', updated: null, author: 'Dev One', url: 'https://test.atlassian.net/browse/TAP-799?focusedCommentId=38560' };
     mockJira.updateComment.mockResolvedValue(comment);
 
     const handler = jiraUpdateCommentHandler({ jira: mockJira as any });
@@ -1368,6 +1368,17 @@ describe('comment format', () => {
     expect(description).toContain('"markdown"');
     expect(description).toContain('"adf"');
     expect(description).toContain(tableExample);
+  });
+
+  it.each(commentTools)('%s steers structured content to markdown and warns that text is one paragraph', (name) => {
+    const { description, inputSchema } = jiraToolDescriptors.find((d) => d.name === name)!;
+    const properties = (inputSchema as { properties: Record<string, { description: string }> }).properties;
+
+    expect(description).toContain('ONE paragraph');
+    expect(description).toContain('one option per bullet');
+    expect(properties.format.description).toContain('ONE paragraph');
+    expect(properties.format.description).toContain('use "markdown"');
+    expect(properties.body.description).toContain('format: "markdown"');
   });
 
   it('leaves the other Jira tools without a format parameter', () => {

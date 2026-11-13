@@ -29,6 +29,16 @@ export interface SlimComment {
   body: string | null;
 }
 
+/** What a comment write returns: ids, timestamps, author name and a browse link, never the body. */
+export interface CommentAck {
+  id: string;
+  key: string;
+  created: string | null;
+  updated: string | null;
+  author: string | null;
+  url: string;
+}
+
 export interface SlimAttachment {
   id: string;
   filename: string;
@@ -101,6 +111,19 @@ export function toSlimComment(c: any): SlimComment {
     author: c?.author?.displayName ?? null,
     created: c?.created ?? null,
     body: adfToText(c?.body),
+  };
+}
+
+/** Reduce the raw comment Jira returns from a create/update to a CommentAck (no body, email, accountId, avatars or `self` URLs). */
+export function toCommentAck(c: any, key: string, baseUrl: string): CommentAck {
+  const id = c?.id ?? '';
+  return {
+    id,
+    key,
+    created: c?.created ?? null,
+    updated: c?.updated ?? null,
+    author: c?.author?.displayName ?? null,
+    url: `${baseUrl}/browse/${encodeURIComponent(key)}?focusedCommentId=${encodeURIComponent(id)}`,
   };
 }
 

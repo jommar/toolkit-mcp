@@ -558,6 +558,37 @@ describe('JiraClient', () => {
 
       expect(Object.keys(http.post.mock.calls[0][1])).toEqual(['body']);
     });
+
+    it('returns only id, key, timestamps, author name and browse url', async () => {
+      const raw = {
+      self: 'https://test.atlassian.net/rest/api/3/issue/1/comment/12345',
+      id: '12345',
+      author: {
+        accountId: 'acc-1',
+        emailAddress: 'someone@example.com',
+        displayName: 'Dev One',
+        avatarUrls: { '48x48': 'https://avatar.example/48' },
+      },
+      updateAuthor: { accountId: 'acc-1', emailAddress: 'someone@example.com', displayName: 'Dev One' },
+      body: { type: 'doc', version: 1, content: [] },
+      created: '2026-01-02T03:04:05.000+0000',
+      updated: '2026-01-02T03:04:06.000+0000',
+    };
+      http.post.mockResolvedValueOnce({ data: raw });
+
+      const result = await new JiraClient().addComment('TAP-1', 'Nice work');
+
+      expect(result).toEqual({
+        id: '12345',
+        key: 'TAP-1',
+        created: '2026-01-02T03:04:05.000+0000',
+        updated: '2026-01-02T03:04:06.000+0000',
+        author: 'Dev One',
+        url: 'https://test.atlassian.net/browse/TAP-1?focusedCommentId=12345',
+      });
+      const text = JSON.stringify(result);
+      for (const leaked of ['someone@example.com', 'acc-1', 'avatar', 'self', 'body']) expect(text).not.toContain(leaked);
+    });
   });
 
   describe('updateComment', () => {
@@ -575,6 +606,37 @@ describe('JiraClient', () => {
         },
       });
       expect(result.id).toBe('38560');
+    });
+
+    it('returns only id, key, timestamps, author name and browse url', async () => {
+      const raw = {
+      self: 'https://test.atlassian.net/rest/api/3/issue/1/comment/38560',
+      id: '38560',
+      author: {
+        accountId: 'acc-1',
+        emailAddress: 'someone@example.com',
+        displayName: 'Dev One',
+        avatarUrls: { '48x48': 'https://avatar.example/48' },
+      },
+      updateAuthor: { accountId: 'acc-1', emailAddress: 'someone@example.com', displayName: 'Dev One' },
+      body: { type: 'doc', version: 1, content: [] },
+      created: '2026-01-02T03:04:05.000+0000',
+      updated: '2026-01-02T03:04:06.000+0000',
+    };
+      http.put.mockResolvedValueOnce({ data: raw });
+
+      const result = await new JiraClient().updateComment('TAP-1', '38560', 'Revised');
+
+      expect(result).toEqual({
+        id: '38560',
+        key: 'TAP-1',
+        created: '2026-01-02T03:04:05.000+0000',
+        updated: '2026-01-02T03:04:06.000+0000',
+        author: 'Dev One',
+        url: 'https://test.atlassian.net/browse/TAP-1?focusedCommentId=38560',
+      });
+      const text = JSON.stringify(result);
+      for (const leaked of ['someone@example.com', 'acc-1', 'avatar', 'self', 'body']) expect(text).not.toContain(leaked);
     });
   });
 

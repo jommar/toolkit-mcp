@@ -123,7 +123,9 @@ const jiraCommentFormatSchema = z
   .optional()
   .default('text')
   .describe(
-    'Format of `body`: "text" is plain text (default; only `[~accountid:<accountId>]` mentions are converted); ' +
+    'Format of `body`: "text" is plain text (default) and renders the WHOLE body as ONE paragraph, so lists, ' +
+      'options and headings collapse into a dense block (only `[~accountid:<accountId>]` mentions are converted); ' +
+      'use "markdown" for any structured comment; ' +
       '"markdown" is converted to rich text — paragraphs, headings, bold, italic, inline code, links, ' +
       'bullet/ordered lists (nestable), fenced code blocks, blockquotes, rules and GFM pipe tables, with ' +
       'single newlines kept as line breaks and mentions still converted; ' +
@@ -137,7 +139,7 @@ export const jiraAddCommentSchema = z.object({
     .string()
     .max(65536)
     .describe(
-      'Comment body — see `format` for the accepted representation. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
+      'Comment body — see `format`. Structured content (headings, one option per bullet, tables) needs `format: "markdown"`; the default "text" is one paragraph. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
     ),
   format: jiraCommentFormatSchema,
   parentId: z
@@ -155,7 +157,7 @@ export const jiraUpdateCommentSchema = z.object({
     .string()
     .max(65536)
     .describe(
-      'New comment body, replacing the existing content — see `format` for the accepted representation. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
+      'New comment body, replacing the existing content — see `format`. Structured content (headings, one option per bullet, tables) needs `format: "markdown"`; the default "text" is one paragraph. Mention a user with `[~accountid:<accountId>]` (find the ID with `jira_search_users`); not converted for "adf".',
     ),
   format: jiraCommentFormatSchema,
 });
@@ -548,8 +550,8 @@ export const jiraLinkIssuesHandler: ToolHandler<z.infer<typeof jiraLinkIssuesSch
   };
 
 const COMMENT_FORMAT_HINT =
-  '`format` is "text" (default, plain text), ' +
-  '"markdown" (rich text: headings, bold, lists, code, links and tables, e.g. "| A | B |\\n|---|---|\\n| 1 | 2 |") ' +
+  '`format` is "text" (default, plain text) which makes the whole body ONE paragraph, ' +
+  '"markdown" (use it for headings, bullet/ordered lists with one option per bullet, bold, code, links and tables, e.g. "| A | B |\\n|---|---|\\n| 1 | 2 |") ' +
   'or "adf" (a complete ADF JSON document, sent unchanged)';
 
 /** All tool descriptors for the ListToolsRequestSchema response. */
