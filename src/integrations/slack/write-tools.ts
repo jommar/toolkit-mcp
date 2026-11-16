@@ -38,7 +38,7 @@ const postItemSchema = z.object({
   ref: refField,
   destination: destinationField,
   expected_destination: expectedDestinationField,
-  text: z.string().min(1).max(40_000).describe('Message text, sent with link_names off.'),
+  text: z.string().min(1).max(40_000).describe('Message text in Slack mrkdwn (*bold*, _italic_, `code`, <url|label>, "•" bullets; not **bold**, # headings or [x](url)), sent with link_names off.'),
   thread: threadField,
   reply_broadcast: z.boolean().optional().describe('Also show a thread reply in the channel.'),
 });

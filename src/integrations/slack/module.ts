@@ -196,7 +196,7 @@ const WRITE_ITEM_JSON = {
       type: 'string',
       description: 'Required with a destination id: the channel name, the DM partner id or handle, or the other members\' handles for a group DM.',
     },
-    text: { type: 'string', maxLength: 40000, description: 'post: message text, sent with link_names off.' },
+    text: { type: 'string', maxLength: 40000, description: 'post: message text in Slack mrkdwn (*bold*, _italic_, `code`, <url|label>, "•" bullets; not **bold**, # headings or [x](url)), sent with link_names off.' },
     thread: { type: 'string', description: 'post and upload: a Slack ts or a message link to reply in.' },
     reply_broadcast: { type: 'boolean', description: 'post: also show the reply in the channel.' },
     message: { ...LINK_OR_REF_JSON, description: 'react: a message link, or {channel, ts}.' },
