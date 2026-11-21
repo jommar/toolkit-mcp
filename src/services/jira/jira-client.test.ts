@@ -1297,4 +1297,362 @@ describe('JiraClient', () => {
       });
     });
   });
+
+  describe('getChangelogs', () => {
+    function makeChangelogEntry(
+      n: number,
+      items: Array<{
+        field: string;
+        fieldId?: string;
+        from?: string | null;
+        fromString?: string | null;
+        to?: string | null;
+        toString?: string | null;
+      }> = [{ field: 'status', fieldId: 'status', fromString: 'Open', toString: 'In Progress' }],
+    ) {
+      return {
+        id: `c${n}`,
+        author: { displayName: `User ${n}` },
+        created: `2026-01-01T00:00:${String(n % 60).padStart(2, '0')}.000+0000`,
+        items,
+      };
+    }
+
+    function makeRange(startOneBased: number, count: number) {
+      return Array.from({ length: count }, (_, i) => makeChangelogEntry(startOneBased + i));
+    }
+
+    it('returns newest-first entries in a single HTTP request when total <= 100', async () => {
+      http.get.mockResolvedValueOnce({
+        data: {
+          startAt: 0,
+          maxResults: 100,
+          total: 3,
+          isLast: true,
+          values: [makeChangelogEntry(1), makeChangelogEntry(2), makeChangelogEntry(3)],
+        },
+      });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1');
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(http.get).toHaveBeenCalledWith('/issue/TAP-1/changelog', {
+        params: { startAt: 0, maxResults: 100 },
+      });
+      expect(result.entries.map((e) => e.id)).toEqual(['c3', 'c2', 'c1']);
+      expect(result.total).toBe(3);
+      expect(result.hasMore).toBe(false);
+      expect(result.nextOffset).toBeUndefined();
+    });
+
+    it('uses tail-jump pagination in 2 HTTP requests when total > 100', async () => {
+      http.get
+        .mockResolvedValueOnce({
+          data: {
+            startAt: 0,
+            maxResults: 100,
+            total: 250,
+            isLast: false,
+            values: makeRange(1, 100),
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            startAt: 230,
+            maxResults: 20,
+            total: 250,
+            isLast: true,
+            values: makeRange(231, 20),
+          },
+        });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1', { limit: 20 });
+
+      expect(http.get).toHaveBeenCalledTimes(2);
+      expect(http.get).toHaveBeenNthCalledWith(1, '/issue/TAP-1/changelog', {
+        params: { startAt: 0, maxResults: 100 },
+      });
+      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TAP-1/changelog', {
+        params: { startAt: 230, maxResults: 20 },
+      });
+      expect(result.entries).toHaveLength(20);
+      expect(result.entries[0].id).toBe('c250');
+      expect(result.entries[19].id).toBe('c231');
+      expect(result.total).toBe(250);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextOffset).toBe(20);
+    });
+
+    it('paginates backward with startOffset using tail-jump', async () => {
+      http.get
+        .mockResolvedValueOnce({
+          data: {
+            startAt: 0,
+            maxResults: 100,
+            total: 250,
+            isLast: false,
+            values: makeRange(1, 100),
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            startAt: 210,
+            maxResults: 20,
+            total: 250,
+            isLast: false,
+            values: makeRange(211, 20),
+          },
+        });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1', { limit: 20, startOffset: 20 });
+
+      expect(http.get).toHaveBeenCalledTimes(2);
+      expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TAP-1/changelog', {
+        params: { startAt: 210, maxResults: 20 },
+      });
+      expect(result.entries).toHaveLength(20);
+      expect(result.entries[0].id).toBe('c230');
+      expect(result.entries[19].id).toBe('c211');
+      expect(result.total).toBe(250);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextOffset).toBe(40);
+    });
+
+    it('reuses page 0 without a second HTTP request when windowEnd <= 100', async () => {
+      http.get.mockResolvedValueOnce({
+        data: {
+          startAt: 0,
+          maxResults: 100,
+          total: 150,
+          isLast: false,
+          values: makeRange(1, 100),
+        },
+      });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1', { limit: 20, startOffset: 60 });
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(result.entries).toHaveLength(20);
+      expect(result.entries[0].id).toBe('c90');
+      expect(result.entries[19].id).toBe('c71');
+      expect(result.total).toBe(150);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextOffset).toBe(80);
+    });
+
+    it('returns empty results when total is 0', async () => {
+      http.get.mockResolvedValueOnce({
+        data: { startAt: 0, maxResults: 100, total: 0, isLast: true, values: [] },
+      });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1');
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ entries: [], total: 0, hasMore: false });
+    });
+
+    it('returns empty results when startOffset >= total', async () => {
+      http.get.mockResolvedValueOnce({
+        data: {
+          startAt: 0,
+          maxResults: 100,
+          total: 5,
+          isLast: true,
+          values: makeRange(1, 5),
+        },
+      });
+
+      const client = new JiraClient();
+      const result = await client.getChangelogs('TAP-1', { startOffset: 5 });
+
+      expect(http.get).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ entries: [], total: 5, hasMore: false });
+    });
+
+    describe('fields filter', () => {
+      it('matches field and fieldId case-insensitively and drops emptied entries', async () => {
+        http.get.mockResolvedValueOnce({
+          data: {
+            startAt: 0,
+            maxResults: 100,
+            total: 3,
+            isLast: true,
+            values: [
+              makeChangelogEntry(1, [
+                { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'In Progress' },
+                { field: 'description', fieldId: 'description', fromString: 'old', toString: 'new' },
+              ]),
+              makeChangelogEntry(2, [
+                { field: 'description', fieldId: 'description', fromString: 'a', toString: 'b' },
+              ]),
+              makeChangelogEntry(3, [
+                { field: 'Story Points', fieldId: 'customfield_10016', fromString: '3', toString: '5' },
+              ]),
+            ],
+          },
+        });
+
+        const client = new JiraClient();
+        const result = await client.getChangelogs('TAP-1', {
+          fields: ['STATUS', 'customfield_10016'],
+        });
+
+        expect(result.entries.map((e) => e.id)).toEqual(['c3', 'c1']);
+        expect(result.entries[0].items).toEqual([
+          { field: 'Story Points', fieldId: 'customfield_10016', fromString: '3', toString: '5' },
+        ]);
+        expect(result.entries[1].items).toEqual([
+          { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'In Progress' },
+        ]);
+        expect(result.total).toBe(3);
+        expect(result.hasMore).toBe(false);
+        expect(result.scanCapped).toBeUndefined();
+      });
+
+      it('stops at the 10-page backward scan cap and sets scanCapped with nextOffset', async () => {
+        const nonMatchingPage = (startAt: number) => ({
+          data: {
+            startAt,
+            maxResults: 100,
+            total: 1500,
+            isLast: startAt + 100 >= 1500,
+            values: Array.from({ length: 100 }, (_, i) =>
+              makeChangelogEntry(startAt + i + 1, [
+                { field: 'description', fieldId: 'description', fromString: 'a', toString: 'b' },
+              ]),
+            ),
+          },
+        });
+
+        http.get.mockImplementation(async (_url: string, cfg?: { params?: { startAt?: number } }) =>
+          nonMatchingPage(cfg?.params?.startAt ?? 0),
+        );
+
+        const client = new JiraClient();
+        const result = await client.getChangelogs('TAP-1', { limit: 20, fields: ['status'] });
+
+        expect(http.get).toHaveBeenCalledTimes(11);
+        expect(result.entries).toEqual([]);
+        expect(result.total).toBe(1500);
+        expect(result.hasMore).toBe(true);
+        expect(result.nextOffset).toBe(1000);
+        expect(result.scanCapped).toBe(true);
+      });
+
+      it('stops mid-chunk at limit and resumes via nextOffset without duplicating entries', async () => {
+        const matchingIndices = new Set([180, 210, 230, 245]);
+        const makeSlice = (startAt: number, maxResults: number) => ({
+          data: {
+            startAt,
+            maxResults,
+            total: 250,
+            isLast: startAt + maxResults >= 250,
+            values: Array.from({ length: Math.min(maxResults, 250 - startAt) }, (_, i) => {
+              const idx = startAt + i;
+              return makeChangelogEntry(idx + 1, [
+                matchingIndices.has(idx)
+                  ? { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'Done' }
+                  : { field: 'description', fieldId: 'description', fromString: 'a', toString: 'b' },
+              ]);
+            }),
+          },
+        });
+
+        http.get.mockImplementation(
+          async (_url: string, cfg?: { params?: { startAt?: number; maxResults?: number } }) =>
+            makeSlice(cfg?.params?.startAt ?? 0, cfg?.params?.maxResults ?? 100),
+        );
+
+        const client = new JiraClient();
+        const page1 = await client.getChangelogs('TAP-1', { limit: 2, fields: ['status'] });
+
+        expect(http.get).toHaveBeenCalledTimes(2);
+        expect(page1.entries.map((e) => e.id)).toEqual(['c246', 'c231']);
+        expect(page1.hasMore).toBe(true);
+        expect(page1.nextOffset).toBe(20);
+        expect(page1.scanCapped).toBeUndefined();
+
+        http.get.mockClear();
+        const page2 = await client.getChangelogs('TAP-1', {
+          limit: 2,
+          fields: ['status'],
+          startOffset: page1.nextOffset,
+        });
+
+        expect(http.get).toHaveBeenCalledTimes(2);
+        expect(page2.entries.map((e) => e.id)).toEqual(['c211', 'c181']);
+        expect(page2.hasMore).toBe(true);
+        expect(page2.nextOffset).toBe(70);
+        expect(page2.scanCapped).toBeUndefined();
+      });
+
+      it('reuses page 0 without an extra HTTP call when filtered backward scan crosses below index 100', async () => {
+        const matchingIndices = new Set([10, 120]);
+        const makeSlice = (startAt: number, maxResults: number) => ({
+          data: {
+            startAt,
+            maxResults,
+            total: 150,
+            isLast: startAt + maxResults >= 150,
+            values: Array.from({ length: Math.min(maxResults, 150 - startAt) }, (_, i) => {
+              const idx = startAt + i;
+              return makeChangelogEntry(idx + 1, [
+                matchingIndices.has(idx)
+                  ? { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'Done' }
+                  : { field: 'description', fieldId: 'description', fromString: 'a', toString: 'b' },
+              ]);
+            }),
+          },
+        });
+
+        http.get.mockImplementation(
+          async (_url: string, cfg?: { params?: { startAt?: number; maxResults?: number } }) =>
+            makeSlice(cfg?.params?.startAt ?? 0, cfg?.params?.maxResults ?? 100),
+        );
+
+        const client = new JiraClient();
+        const result = await client.getChangelogs('TAP-1', { limit: 5, fields: ['status'] });
+
+        expect(http.get).toHaveBeenCalledTimes(2);
+        expect(http.get).toHaveBeenNthCalledWith(1, '/issue/TAP-1/changelog', {
+          params: { startAt: 0, maxResults: 100 },
+        });
+        expect(http.get).toHaveBeenNthCalledWith(2, '/issue/TAP-1/changelog', {
+          params: { startAt: 50, maxResults: 100 },
+        });
+        expect(result.entries.map((e) => e.id)).toEqual(['c121', 'c11']);
+        expect(result.total).toBe(150);
+        expect(result.hasMore).toBe(false);
+        expect(result.nextOffset).toBeUndefined();
+      });
+
+      it('skips malformed entries whose items field is not an array', async () => {
+        http.get.mockResolvedValueOnce({
+          data: {
+            startAt: 0,
+            maxResults: 100,
+            total: 2,
+            isLast: true,
+            values: [
+              { id: 'c1', created: '2026-11-01T00:00:00.000+0000' } as any,
+              makeChangelogEntry(2, [
+                { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'Done' },
+              ]),
+            ],
+          },
+        });
+
+        const client = new JiraClient();
+        const result = await client.getChangelogs('TAP-1', { fields: ['status'] });
+
+        expect(result.entries.map((e) => e.id)).toEqual(['c2']);
+        expect(result.hasMore).toBe(false);
+      });
+    });
+  });
 });

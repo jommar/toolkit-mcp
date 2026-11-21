@@ -1,16 +1,24 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { AxiosError } from 'axios';
+import { zodToJsonSchema } from '../helpers.js';
 
 // Mock jira-cli so toSlimIssue is available (JiraClient constructor unused by these tests)
-vi.mock('../../services/index.js', async () => ({
-  JiraClient: class MockJiraClient {},
-  toSlimIssue: vi.fn((issue: any) => issue),
-  DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
-  describeGitHubError: (await vi.importActual<typeof import('../../services/github/github-client.js')>(
-    '../../services/github/github-client.js',
-  )).describeGitHubError,
-}));
+vi.mock('../../services/index.js', async () => {
+  const actualSlim = await vi.importActual<Record<string, unknown>>('../../services/slim.js');
+  return {
+    JiraClient: class MockJiraClient {},
+    toSlimIssue: vi.fn((issue: any) => issue),
+    toSlimChangelog: actualSlim.toSlimChangelog,
+    DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
+    describeError: (await vi.importActual<typeof import('../../services/jira/jira-client.js')>(
+      '../../services/jira/jira-client.js',
+    )).describeError,
+    describeGitHubError: (await vi.importActual<typeof import('../../services/github/github-client.js')>(
+      '../../services/github/github-client.js',
+    )).describeGitHubError,
+  };
+});
 
 import {
   jiraWhoamiHandler,
@@ -25,6 +33,8 @@ import {
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
   jiraGetCommentsHandler,
+  jiraGetChangelogsHandler,
+  jiraGetChangelogsSchema,
   jiraListTransitionsHandler,
   jiraListIssueLinkTypesHandler,
   jiraSearchUsersHandler,
@@ -68,6 +78,7 @@ function makeMockJira() {
     updateComment: vi.fn(),
     deleteComment: vi.fn(),
     getComments: vi.fn(),
+    getChangelogs: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     linkIssues: vi.fn(),
     getAttachmentContent: vi.fn(),
@@ -1891,5 +1902,286 @@ describe('jiraGetAttachmentHandler', () => {
       issueKey: 'TAP-1',
       message: expect.stringContaining(String(MAX_INLINE_ATTACHMENT_BYTES)),
     });
+  });
+});
+
+describe('jiraGetChangelogsHandler', () => {
+  let mockJira: MockJira;
+
+  const rawChangelog = (
+    id: string,
+    created: string,
+    displayName: string,
+    items: Array<Record<string, unknown>>,
+  ) => ({
+    id,
+    created,
+    author: {
+      accountId: `acc-${id}`,
+      displayName,
+      emailAddress: `${displayName.toLowerCase()}@example.com`,
+      avatarUrls: { '48x48': 'https://avatar.example.com/48' },
+      self: `https://test.atlassian.net/rest/api/3/user?accountId=acc-${id}`,
+      active: true,
+    },
+    items,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockJira = makeMockJira();
+  });
+
+  it('returns newest-first slimmed changelogs for a single key without nextPageToken or warnings', async () => {
+    mockJira.getChangelogs.mockResolvedValue({
+      entries: [
+        rawChangelog('3', '2026-11-03T10:00:00.000+0000', 'Alice', [
+          { field: 'status', fieldId: 'status', fromString: 'In Progress', toString: 'Done' },
+        ]),
+        rawChangelog('2', '2026-11-02T10:00:00.000+0000', 'Bob', [
+          { field: 'assignee', fieldId: 'assignee', fromString: null, toString: 'Alice' },
+        ]),
+        rawChangelog('1', '2026-11-01T10:00:00.000+0000', 'Alice', [
+          { field: 'status', fieldId: 'status', fromString: 'To Do', toString: 'In Progress' },
+        ]),
+      ],
+      total: 3,
+      hasMore: false,
+    });
+
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+    const result = await handler({ keys: ['TAP-1'], limit: 20, maxValueChars: 200 });
+
+    expect(mockJira.getChangelogs).toHaveBeenCalledTimes(1);
+    expect(mockJira.getChangelogs).toHaveBeenCalledWith(
+      'TAP-1',
+      expect.objectContaining({ limit: 20, startOffset: 0 }),
+    );
+    const text = result.content[0].text;
+    expect(text).not.toContain('\n');
+    const parsed = JSON.parse(text);
+    expect(parsed).toEqual({
+      items: [
+        {
+          key: 'TAP-1',
+          total: 3,
+          changelogs: [
+            {
+              id: '3',
+              author: 'Alice',
+              created: '2026-11-03T10:00:00.000+0000',
+              items: [{ field: 'status', from: 'In Progress', to: 'Done' }],
+            },
+            {
+              id: '2',
+              author: 'Bob',
+              created: '2026-11-02T10:00:00.000+0000',
+              items: [{ field: 'assignee', from: null, to: 'Alice' }],
+            },
+            {
+              id: '1',
+              author: 'Alice',
+              created: '2026-11-01T10:00:00.000+0000',
+              items: [{ field: 'status', from: 'To Do', to: 'In Progress' }],
+            },
+          ],
+          hasMore: false,
+        },
+      ],
+    });
+    expect(parsed.items[0]).not.toHaveProperty('nextPageToken');
+    expect(parsed).not.toHaveProperty('warnings');
+  });
+
+  it('handles multi-key batching, deduplicates keys in order, and isolates partial failures into warnings', async () => {
+    const notFound = new AxiosError('Request failed with status code 404', 'ERR_BAD_REQUEST', undefined, undefined, {
+      status: 404,
+      data: { errorMessages: ['Issue does not exist'] },
+      statusText: 'Not Found',
+      headers: {},
+      config: {} as any,
+    } as any);
+
+    mockJira.getChangelogs.mockImplementation(async (key: string) => {
+      if (key === 'TAP-1') {
+        return {
+          entries: [
+            rawChangelog('10', '2026-11-03T10:00:00.000+0000', 'Alice', [
+              { field: 'status', fieldId: 'status', fromString: 'To Do', toString: 'Done' },
+            ]),
+          ],
+          total: 1,
+          hasMore: false,
+        };
+      }
+      if (key === 'TAP-2') {
+        return {
+          entries: [
+            rawChangelog('20', '2026-11-02T10:00:00.000+0000', 'Bob', [
+              { field: 'priority', fieldId: 'priority', fromString: 'Low', toString: 'High' },
+            ]),
+          ],
+          total: 2,
+          hasMore: true,
+          nextOffset: 1,
+        };
+      }
+      throw notFound;
+    });
+
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+    const result = await handler({
+      keys: ['TAP-1', 'TAP-2', 'TAP-1', 'TAP-404'],
+      limit: 20,
+      maxValueChars: 200,
+    });
+
+    expect(mockJira.getChangelogs).toHaveBeenCalledTimes(3);
+    expect(mockJira.getChangelogs.mock.calls.map((call) => call[0])).toEqual(['TAP-1', 'TAP-2', 'TAP-404']);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items.map((item: any) => item.key)).toEqual(['TAP-1', 'TAP-2']);
+    expect(parsed.items[0].hasMore).toBe(false);
+    expect(parsed.items[1].hasMore).toBe(true);
+    expect(parsed.items[1].nextPageToken).toBe('1');
+    expect(parsed.warnings).toEqual([
+      {
+        key: 'TAP-404',
+        message: 'Jira API error (404): Issue does not exist',
+      },
+    ]);
+  });
+
+  it('emits a scan cap warning with hasMore and nextPageToken when getChangelogs reports scanCapped', async () => {
+    mockJira.getChangelogs.mockResolvedValue({
+      entries: [
+        rawChangelog('50', '2026-11-03T10:00:00.000+0000', 'Alice', [
+          { field: 'status', fieldId: 'status', fromString: 'Open', toString: 'Closed' },
+        ]),
+      ],
+      total: 1500,
+      hasMore: true,
+      nextOffset: 1000,
+      scanCapped: true,
+    });
+
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+    const result = await handler({
+      keys: ['TAP-1'],
+      limit: 20,
+      fields: ['status'],
+      maxValueChars: 200,
+    });
+
+    expect(mockJira.getChangelogs).toHaveBeenCalledWith(
+      'TAP-1',
+      expect.objectContaining({ limit: 20, startOffset: 0, fields: ['status'] }),
+    );
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items[0].hasMore).toBe(true);
+    expect(parsed.items[0].nextPageToken).toBe('1000');
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0]).toMatchObject({
+      key: 'TAP-1',
+      message: expect.stringMatching(/scan|cap|page/i),
+    });
+  });
+
+  it('parses a valid single-key cursor and forwards it as startOffset to getChangelogs', async () => {
+    mockJira.getChangelogs.mockResolvedValue({
+      entries: [],
+      total: 40,
+      hasMore: false,
+    });
+
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+    await handler({
+      keys: ['TAP-1'],
+      cursor: '20',
+      limit: 20,
+      maxValueChars: 200,
+    });
+
+    expect(mockJira.getChangelogs).toHaveBeenCalledWith(
+      'TAP-1',
+      expect.objectContaining({ limit: 20, startOffset: 20 }),
+    );
+  });
+
+  it.each([
+    ['multi-key cursor', { keys: ['TAP-1', 'TAP-2'], cursor: '20', limit: 20, maxValueChars: 200 }],
+    ['non-numeric cursor', { keys: ['TAP-1'], cursor: 'abc', limit: 20, maxValueChars: 200 }],
+    ['negative cursor', { keys: ['TAP-1'], cursor: '-1', limit: 20, maxValueChars: 200 }],
+  ])('rejects invalid cursor (%s) with McpError(InvalidParams) without calling getChangelogs', async (_label, args) => {
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+
+    await expect(handler(args)).rejects.toThrow(McpError);
+    await expect(handler(args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    expect(mockJira.getChangelogs).not.toHaveBeenCalled();
+  });
+
+  it('enforces bounded concurrency of at most 5 in-flight getChangelogs calls', async () => {
+    const keys = Array.from({ length: 12 }, (_, i) => `TAP-${i + 1}`);
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    mockJira.getChangelogs.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      inFlight -= 1;
+      return { entries: [], total: 0, hasMore: false };
+    });
+
+    const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
+    const result = await handler({ keys, limit: 20, maxValueChars: 200 });
+
+    expect(mockJira.getChangelogs).toHaveBeenCalledTimes(12);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.items.map((item: any) => item.key)).toEqual(keys);
+  });
+});
+
+describe('jiraGetChangelogsSchema', () => {
+  it('rejects empty keys, more than 20 keys, and limit outside 1..100', () => {
+    expect(jiraGetChangelogsSchema.safeParse({ keys: [] }).success).toBe(false);
+    expect(
+      jiraGetChangelogsSchema.safeParse({
+        keys: Array.from({ length: 21 }, (_, i) => `TAP-${i + 1}`),
+      }).success,
+    ).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'], limit: 101 }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'], limit: 0 }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'], maxValueChars: -1 }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'], maxValueChars: 10001 }).success).toBe(false);
+  });
+
+  it('applies defaults for limit and maxValueChars and accepts maxValueChars: 0', () => {
+    const defaults = jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'] });
+    expect(defaults.success).toBe(true);
+    if (defaults.success) {
+      expect(defaults.data.limit).toBe(20);
+      expect(defaults.data.maxValueChars).toBe(200);
+    }
+
+    const unlimited = jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1'], maxValueChars: 0 });
+    expect(unlimited.success).toBe(true);
+    if (unlimited.success) {
+      expect(unlimited.data.maxValueChars).toBe(0);
+    }
+  });
+
+  it('rejects dot-segment keys while accepting issue keys and numeric IDs, and keeps JSON schema items as string', () => {
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['.'] }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['..'] }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1', '..'] }).success).toBe(false);
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1', '10001'] }).success).toBe(true);
+
+    const jsonSchema = zodToJsonSchema(jiraGetChangelogsSchema) as {
+      properties: { keys: { type: string; items: { type: string } } };
+    };
+    expect(jsonSchema.properties.keys.type).toBe('array');
+    expect(jsonSchema.properties.keys.items).toEqual({ type: 'string' });
   });
 });

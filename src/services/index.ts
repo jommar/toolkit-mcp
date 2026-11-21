@@ -13,6 +13,11 @@ export type {
   JiraTransition,
   JiraComment,
   IssueLinkType,
+  JiraChangelogItem,
+  JiraChangelogEntry,
+  JiraChangelogPage,
+  GetChangelogsOptions,
+  GetChangelogsResult,
 } from './jira/jira-client.js';
 export type { PrInfo, PrSearchResult, PrCreated, PrComment, BranchInfo, PullRequestDetail, PullRequestReview, CheckRun, PullRequestChecks, PrSearchOptions, PrReviewComment, CreateReviewCommentInput, PrReviewSubmitted, PrReviewEvent, SubmitPrReviewInput, ReviewThread, MergeResult, CopilotUnresolvedPrsOptions, CopilotUnresolvedPrsResult } from './github/github-client.js';
 export type {
@@ -38,5 +43,5 @@ export type {
   JenkinsBuildDetail,
   JenkinsConsolePage,
 } from './jenkins/jenkins-client.js';
-export { DEV_FIELDS, toSlimIssue, toSlimComment, toSlimAttachment, adfToText } from './slim.js';
-export type { SlimIssue, SlimComment, SlimAttachment } from './slim.js';
+export { DEV_FIELDS, toSlimIssue, toSlimComment, toSlimAttachment, toSlimChangelog, adfToText } from './slim.js';
+export type { SlimIssue, SlimComment, SlimAttachment, SlimChangelogItem, SlimChangelogEntry, SlimChangelogOptions } from './slim.js';

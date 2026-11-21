@@ -141,6 +141,8 @@ Parameters accepted by every list tool:
 
 **Stated exception: the Slack read tools.** Each takes an array of 1 to n items and returns `{results, truncated}`, one entry per input item in input order, each with its own `items`, `hasMore` and `nextPageToken`. The `cursor` is a per-item field, not a top-level parameter: a continuation is an item holding only `{cursor}`, and a cursor is bound to the tool and target that issued it (`invalid_cursor` otherwise). `limit` applies per target. The no-auto-fetch rule still holds. See `docs/slack.md` (Batches and results, Pagination).
 
+**Stated exception: `jira_get_changelogs`.** Takes `keys: string[]` (1 to 20 issue keys, deduplicated preserving order) and returns a multi-key grouped envelope `{ items: [{ key, total, changelogs, hasMore, nextPageToken? }], warnings?: [{ key, message }] }` (`warnings` omitted when empty). `limit` applies per issue (default 20, max 100), and `cursor` is accepted only for single-key requests. Per-key failures and 10-page filtered scan caps are reported in `warnings` without failing healthy keys.
+
 ### Polymorphic Tools (Always Return PaginatedResponse)
 
 `jira_get_issues` accepts `key` (single issue) OR `jql` (search). **Always returns `PaginatedResponse<SlimIssue>`** — even a single-issue lookup returns a one-item array with `hasMore: false`. This gives LLMs a consistent response shape regardless of the input mode.
@@ -162,6 +164,7 @@ Exactly one sentence. Concise. No filler.
 | Tool | Description |
 |------|-------------|
 | `jira_get_issues` | "Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search." |
+| `jira_get_changelogs` | "Get changelog entries for one or more Jira issues, newest first, grouped by issue key." |
 | `jira_list_fields` | "List Jira fields (id, name, custom) — use to find custom field IDs like Story Points." |
 | `jira_list_components` | "List a Jira project's components (id, name) — use to find valid names for the Components field." |
 | `jira_create_issue` | "Create a new Jira issue in a project." |

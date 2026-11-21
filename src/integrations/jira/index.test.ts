@@ -2,12 +2,19 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
 // Resolve the jira-cli import (used as a type in the module implementation)
-vi.mock('../../services/index.js', () => ({
-  JiraClient: class MockJiraClient {},
-  toSlimIssue: vi.fn((issue: any) => issue),
-  DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
-  ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
-}));
+vi.mock('../../services/index.js', async () => {
+  const actualSlim = await vi.importActual<Record<string, unknown>>('../../services/slim.js');
+  return {
+    JiraClient: class MockJiraClient {},
+    toSlimIssue: vi.fn((issue: any) => issue),
+    toSlimChangelog: actualSlim.toSlimChangelog,
+    describeError: (await vi.importActual<typeof import('../../services/jira/jira-client.js')>(
+      '../../services/jira/jira-client.js',
+    )).describeError,
+    DEV_FIELDS: ['summary', 'status', 'issuetype', 'assignee', 'reporter', 'priority', 'labels', 'created', 'updated', 'parent', 'subtasks', 'description', 'comment', 'attachment'],
+    ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
+  };
+});
 
 import { JiraModule } from './index.js';
 
@@ -29,6 +36,7 @@ function makeMockJira() {
     updateComment: vi.fn(),
     deleteComment: vi.fn(),
     getComments: vi.fn(),
+    getChangelogs: vi.fn(),
     listIssueLinkTypes: vi.fn(),
     listProjectComponents: vi.fn(),
     linkIssues: vi.fn(),
@@ -100,9 +108,9 @@ describe('JiraModule', () => {
       mockJira = makeMockJira();
     });
 
-    it('returns all 17 handlers', () => {
+    it('returns all 18 handlers', () => {
       const handlers = mod.createToolHandlers({ jira: mockJira as any });
-      expect(Object.keys(handlers)).toHaveLength(17);
+      expect(Object.keys(handlers)).toHaveLength(18);
       expect(handlers).toHaveProperty('jira_whoami');
       expect(handlers).toHaveProperty('jira_get_issues');
       expect(handlers).toHaveProperty('jira_create_issue');
@@ -114,6 +122,7 @@ describe('JiraModule', () => {
       expect(handlers).toHaveProperty('jira_link_issues');
       expect(handlers).toHaveProperty('jira_get_attachment');
       expect(handlers).toHaveProperty('jira_get_comments');
+      expect(handlers).toHaveProperty('jira_get_changelogs');
       expect(handlers).toHaveProperty('jira_list_transitions');
       expect(handlers).toHaveProperty('jira_list_issue_link_types');
       expect(handlers).toHaveProperty('jira_search_users');
@@ -305,9 +314,24 @@ describe('JiraModule', () => {
   });
 
   describe('getToolDescriptors', () => {
-    it('returns 17 tool descriptors', () => {
+    it('returns 18 tool descriptors', () => {
       const descriptors = mod.getToolDescriptors();
-      expect(descriptors).toHaveLength(17);
+      expect(descriptors).toHaveLength(18);
+    });
+
+    it('registers jira_get_changelogs with a keys array string schema', () => {
+      const descriptor = mod.getToolDescriptors().find((d) => d.name === 'jira_get_changelogs');
+      expect(descriptor).toBeDefined();
+      expect(descriptor!.description).toBeTruthy();
+      const schema = descriptor!.inputSchema as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      expect(schema.required).toContain('keys');
+      expect(schema.properties?.keys).toMatchObject({
+        type: 'array',
+        items: { type: 'string' },
+      });
     });
 
     it('has a descriptor for every handler', () => {

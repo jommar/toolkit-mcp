@@ -79,6 +79,7 @@ Tools are grouped by integration; all are conditional except the built-in `mcp_g
 |---|---|---|
 | `jira_whoami` | Return the authenticated Jira user profile. | *(none)* |
 | `jira_get_issues` | Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search. | `key`, `jql`, `limit`, `cursor`, `fields`, `adf`, `includeGithubPrs`, `includeSlackThreads` (see [Linked pull requests and Slack threads](#linked-pull-requests-and-slack-threads)) |
+| `jira_get_changelogs` | Get changelog entries for one or more Jira issues, newest first, grouped by issue key (e.g. `["PROJ-1", "EXAMPLE-1"]`). | `keys` (1–20), `limit` (per issue, default 20), `cursor` (single-key only), `fields`, `maxValueChars` (default 200; `0` = unlimited) |
 | `jira_list_components` | List a Jira project's components (id, name) — use to find valid names for the Components field. | `projectKey` |
 | `jira_create_issue` | Create a new Jira issue in a project. | `projectKey`, `issueType`, `summary`, `description`, `fields`, `components` |
 | `jira_update_issue` | Update fields on an existing Jira issue. | `key`, `fields` and/or `components` |
@@ -246,6 +247,7 @@ All list-style tools return a uniform envelope:
 | `limit` | number | 20 | Items per page (max 100) |
 
 - `jira_get_issues` with `key` always returns a one-item `PaginatedResponse` with `hasMore: false` — consistent shape regardless of input mode.
+- `jira_get_changelogs` accepts 1–20 issue `keys` (e.g. `["PROJ-1", "EXAMPLE-1"]`) and returns a grouped per-issue envelope `{ items: [{ key, total, changelogs, hasMore, nextPageToken? }], warnings?: [{ key, message }] }` (`warnings` omitted when empty). `limit` applies per issue, and `cursor` is supported on single-key requests only.
 - `jira_get_issues` accepts `includeGithubPrs` and `includeSlackThreads` to attach linked pull requests and Slack threads to each issue; a lookup that is limited, unavailable or fails adds a `warnings` array (`{source, message}`) beside `items` and `hasMore` instead of failing the call. Details in [Linked pull requests and Slack threads](#linked-pull-requests-and-slack-threads).
 - `jira_get_issues` flattens `description` to plain text; pass `adf: true` to also get the raw ADF document as `descriptionAdf` (omitted when the issue has no description), e.g. to append to a description via `jira_update_issue` without losing its structure.
 - `jira_create_issue` / `jira_update_issue` take `components` as names (case-insensitive), resolved to ids against `jira_list_components`; an unknown name is rejected with the project's valid names. On update it replaces the issue's components, and omitting it leaves them untouched; `fields` is optional there when `components` is given, but a call with neither is rejected. `jira_list_components` returns every component in one page (`hasMore: false`).

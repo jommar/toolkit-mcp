@@ -72,6 +72,53 @@ export interface IssueLinkType {
   outward: string;
 }
 
+export interface JiraChangelogItem {
+  field: string;
+  fieldtype?: string;
+  fieldId?: string;
+  from?: string | null;
+  fromString?: string | null;
+  to?: string | null;
+  toString?: string | null;
+  tmpFromAccountId?: string | null;
+  tmpToAccountId?: string | null;
+}
+
+export interface JiraChangelogEntry {
+  id: string;
+  author?: { displayName?: string } | null;
+  created?: string;
+  items: JiraChangelogItem[];
+  historyMetadata?: unknown;
+}
+
+export interface JiraChangelogPage {
+  startAt: number;
+  maxResults: number;
+  total: number;
+  isLast: boolean;
+  values: JiraChangelogEntry[];
+}
+
+export interface GetChangelogsOptions {
+  limit?: number;
+  startOffset?: number;
+  fields?: string[];
+  maxPages?: number;
+}
+
+export interface GetChangelogsResult {
+  entries: JiraChangelogEntry[];
+  total: number;
+  hasMore: boolean;
+  nextOffset?: number;
+  scanCapped?: boolean;
+}
+
+const CHANGELOG_PAGE_SIZE = 100;
+const DEFAULT_CHANGELOG_LIMIT = 20;
+const MAX_CHANGELOG_SCAN_PAGES = 10;
+
 export { MAX_INLINE_ATTACHMENT_BYTES };
 
 /**
@@ -143,6 +190,94 @@ export class JiraClient {
       if (data.comments.length === 0 || startAt >= data.total) break;
     }
     return out;
+  }
+
+  /** Fetch a single oldest-first page of an issue's changelog. */
+  async getChangelogPage(
+    key: string,
+    opts: { startAt?: number; maxResults?: number } = {},
+  ): Promise<JiraChangelogPage> {
+    const { data } = await this.http.get<JiraChangelogPage>(
+      `/issue/${encodeURIComponent(key)}/changelog`,
+      { params: { startAt: opts.startAt ?? 0, maxResults: opts.maxResults ?? CHANGELOG_PAGE_SIZE } },
+    );
+    return data;
+  }
+
+  /**
+   * Fetch an issue's changelog newest-first without draining its full history.
+   * Uses a tail-jump when unfiltered and a bounded backward scan when `fields` is set.
+   */
+  async getChangelogs(key: string, opts: GetChangelogsOptions = {}): Promise<GetChangelogsResult> {
+    const limit = opts.limit ?? DEFAULT_CHANGELOG_LIMIT;
+    const startOffset = opts.startOffset ?? 0;
+    const fields = opts.fields;
+    const maxPages = opts.maxPages ?? MAX_CHANGELOG_SCAN_PAGES;
+
+    const page0 = await this.getChangelogPage(key, { startAt: 0, maxResults: CHANGELOG_PAGE_SIZE });
+    const total = page0.total ?? page0.values.length;
+    if (total === 0 || startOffset >= total) {
+      return { entries: [], total, hasMore: false };
+    }
+
+    if (!fields || fields.length === 0) {
+      const windowEnd = Math.max(0, total - startOffset);
+      const windowStart = Math.max(0, windowEnd - limit);
+      let entries: JiraChangelogEntry[];
+      if (windowEnd <= page0.values.length) {
+        entries = page0.values.slice(windowStart, windowEnd).reverse();
+      } else {
+        const tailPage = await this.getChangelogPage(key, {
+          startAt: windowStart,
+          maxResults: windowEnd - windowStart,
+        });
+        entries = [...tailPage.values].reverse();
+      }
+      const hasMore = windowStart > 0;
+      return {
+        entries,
+        total,
+        hasMore,
+        ...(hasMore ? { nextOffset: total - windowStart } : {}),
+      };
+    }
+
+    const wanted = new Set(fields.map((f) => f.toLowerCase()));
+    const collected: JiraChangelogEntry[] = [];
+    let chunkEnd = total - startOffset;
+    let scannedTo = chunkEnd;
+    let pagesScanned = 0;
+
+    while (chunkEnd > 0 && collected.length < limit && pagesScanned < maxPages) {
+      const chunkStart = Math.max(0, chunkEnd - CHANGELOG_PAGE_SIZE);
+      const chunk =
+        chunkEnd <= page0.values.length
+          ? page0.values.slice(chunkStart, chunkEnd)
+          : (await this.getChangelogPage(key, { startAt: chunkStart, maxResults: chunkEnd - chunkStart })).values;
+      pagesScanned += 1;
+
+      for (let i = chunk.length - 1; i >= 0; i--) {
+        scannedTo = chunkStart + i;
+        const matched = filterChangelogEntry(chunk[i], wanted);
+        if (matched) {
+          collected.push(matched);
+          if (collected.length >= limit) break;
+        }
+      }
+      if (collected.length >= limit) break;
+      scannedTo = chunkStart;
+      chunkEnd = chunkStart;
+    }
+
+    const hasMore = scannedTo > 0;
+    const scanCapped = hasMore && collected.length < limit && pagesScanned >= maxPages;
+    return {
+      entries: collected,
+      total,
+      hasMore,
+      ...(hasMore ? { nextOffset: total - scannedTo } : {}),
+      ...(scanCapped ? { scanCapped: true } : {}),
+    };
   }
 
   /** JQL search returning compact dev-shaped issues (narrow fields + flattened). */
@@ -394,6 +529,20 @@ function toCommentBody(body: string, format: CommentFormat) {
   if (format === 'markdown') return markdownToAdf(body);
   if (format === 'adf') return parseAdfDocument(body);
   return toCommentAdf(body);
+}
+
+/** Keep only changelog items matching `wanted` (lowercased field or fieldId), or return null if none match. */
+function filterChangelogEntry(
+  entry: JiraChangelogEntry,
+  wanted: Set<string>,
+): JiraChangelogEntry | null {
+  if (!Array.isArray(entry.items)) return null;
+  const items = entry.items.filter(
+    (item) =>
+      wanted.has(item.field.toLowerCase()) ||
+      (item.fieldId != null && wanted.has(item.fieldId.toLowerCase())),
+  );
+  return items.length > 0 ? { ...entry, items } : null;
 }
 
 /** Turn an axios error into a concise, readable message (status + Jira error body). */

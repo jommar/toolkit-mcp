@@ -1,4 +1,10 @@
-import { JiraIssue, JiraUser, JiraTransition, IssueLinkType } from './jira/jira-client.js';
+import {
+  JiraIssue,
+  JiraUser,
+  JiraTransition,
+  IssueLinkType,
+  JiraChangelogEntry,
+} from './jira/jira-client.js';
 
 /**
  * The narrow set of issue fields worth fetching for day-to-day dev work.
@@ -171,6 +177,70 @@ export function toSlimTransition(t: any): JiraTransition {
 /** Reduce a raw Jira issue link type to `{id, name, inward, outward}` (no `self`). */
 export function toSlimLinkType(t: any): IssueLinkType {
   return { id: t?.id ?? '', name: t?.name ?? '', inward: t?.inward ?? '', outward: t?.outward ?? '' };
+}
+
+const DEFAULT_MAX_CHANGELOG_VALUE_CHARS = 200;
+
+export interface SlimChangelogItem {
+  field: string;
+  fieldId?: string;
+  from: string | null;
+  to: string | null;
+  truncated?: true;
+}
+
+export interface SlimChangelogEntry {
+  id: string;
+  author: string | null;
+  created: string | null;
+  items: SlimChangelogItem[];
+}
+
+export interface SlimChangelogOptions {
+  maxValueChars?: number;
+}
+
+function truncateChangelogValue(
+  value: string | null,
+  maxValueChars: number,
+): { text: string | null; truncated: boolean } {
+  if (value == null || maxValueChars <= 0 || value.length <= maxValueChars) {
+    return { text: value, truncated: false };
+  }
+  return { text: `${value.slice(0, maxValueChars)}…`, truncated: true };
+}
+
+/** Flatten a raw Jira changelog entry into the compact shape, dropping metadata and truncating long values. */
+export function toSlimChangelog(
+  entry: JiraChangelogEntry,
+  options: SlimChangelogOptions = {},
+): SlimChangelogEntry {
+  const maxValueChars = options.maxValueChars ?? DEFAULT_MAX_CHANGELOG_VALUE_CHARS;
+  const items: SlimChangelogItem[] = Array.isArray(entry.items)
+    ? entry.items.map((item) => {
+        const from = truncateChangelogValue(item.fromString ?? item.from ?? null, maxValueChars);
+        const to = truncateChangelogValue(item.toString ?? item.to ?? null, maxValueChars);
+        const slimItem: SlimChangelogItem = {
+          field: item.field,
+          from: from.text,
+          to: to.text,
+        };
+        if (item.fieldId && item.fieldId !== item.field) {
+          slimItem.fieldId = item.fieldId;
+        }
+        if (from.truncated || to.truncated) {
+          slimItem.truncated = true;
+        }
+        return slimItem;
+      })
+    : [];
+
+  return {
+    id: entry.id ?? '',
+    author: entry.author?.displayName ?? null,
+    created: entry.created ?? null,
+    items,
+  };
 }
 
 /** Drop the `self` and `avatarUrls` URL keys, at any depth, from a raw custom-field value; everything else is kept as Jira returned it. */

@@ -12,6 +12,7 @@ import {
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
   jiraGetCommentsHandler,
+  jiraGetChangelogsHandler,
   jiraListTransitionsHandler,
   jiraListIssueLinkTypesHandler,
   jiraSearchUsersHandler,
@@ -29,6 +30,7 @@ import {
   jiraLinkIssuesSchema,
   jiraGetAttachmentSchema,
   jiraGetCommentsSchema,
+  jiraGetChangelogsSchema,
   jiraListTransitionsSchema,
   jiraListIssueLinkTypesSchema,
   jiraSearchUsersSchema,
@@ -97,6 +99,10 @@ export class JiraModule implements IntegrationModule<JiraToolClients> {
       jira_get_comments: async (args) => {
         const parsed = jiraGetCommentsSchema.parse(args);
         return await jiraGetCommentsHandler(clients)(parsed);
+      },
+      jira_get_changelogs: async (args) => {
+        const parsed = jiraGetChangelogsSchema.parse(args);
+        return await jiraGetChangelogsHandler(clients)(parsed);
       },
       jira_list_transitions: async (args) => {
         const parsed = jiraListTransitionsSchema.parse(args);

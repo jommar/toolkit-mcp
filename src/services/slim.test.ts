@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toSlimIssue, toSlimComment, toListedComment, toSlimAttachment, toSlimUser, toSlimTransition, toSlimLinkType, adfToText } from './slim.js';
+import { toSlimIssue, toSlimComment, toListedComment, toSlimAttachment, toSlimUser, toSlimTransition, toSlimLinkType, toSlimChangelog, adfToText } from './slim.js';
 import type { JiraIssue } from './jira/jira-client.js';
 
 describe('toSlimIssue', () => {
@@ -492,5 +492,128 @@ describe('adfToText', () => {
       ],
     };
     expect(adfToText(node)).toBe('A\nB');
+  });
+});
+
+describe('toSlimChangelog', () => {
+  const rawEntry = {
+    id: '10001',
+    author: {
+      self: 'https://test.atlassian.net/rest/api/3/user?accountId=acc-1',
+      accountId: 'acc-1',
+      emailAddress: 'alice@example.com',
+      avatarUrls: { '48x48': 'https://avatar.example.com/48' },
+      displayName: 'Alice Example',
+      active: true,
+      timeZone: 'UTC',
+      locale: 'en_US',
+      accountType: 'atlassian',
+    },
+    created: '2026-01-15T10:00:00.000+0000',
+    historyMetadata: { type: 'jira', description: 'Status changed' },
+    items: [
+      {
+        field: 'status',
+        fieldtype: 'jira',
+        fieldId: 'status',
+        from: '1',
+        fromString: 'Open',
+        to: '3',
+        toString: 'In Progress',
+        tmpFromAccountId: null,
+        tmpToAccountId: null,
+      },
+      {
+        field: 'Story Points',
+        fieldtype: 'custom',
+        fieldId: 'customfield_10016',
+        from: null,
+        fromString: '3',
+        to: null,
+        toString: '5',
+      },
+    ],
+  };
+
+  it('strips user, item, and historyMetadata boilerplate while retaining custom fieldId and omitting matching fieldId', () => {
+    const slim = toSlimChangelog(rawEntry);
+
+    expect(slim).toEqual({
+      id: '10001',
+      author: 'Alice Example',
+      created: '2026-01-15T10:00:00.000+0000',
+      items: [
+        { field: 'status', from: 'Open', to: 'In Progress' },
+        { field: 'Story Points', fieldId: 'customfield_10016', from: '3', to: '5' },
+      ],
+    });
+    expect('fieldId' in slim.items[0]).toBe(false);
+    const json = JSON.stringify(slim);
+    for (const leaked of ['avatar', '"self"', 'accountId', 'emailAddress', 'historyMetadata', 'fieldtype', 'tmpFromAccountId', 'tmpToAccountId', 'timeZone', 'locale', 'accountType']) {
+      expect(json).not.toContain(leaked);
+    }
+  });
+
+  it('falls back to raw from/to when fromString/toString are absent and returns null when both are absent', () => {
+    const slim = toSlimChangelog({
+      id: '10002',
+      author: { displayName: 'Bob' },
+      created: '2026-01-16T10:00:00.000+0000',
+      items: [
+        { field: 'assignee', fieldId: 'assignee', from: 'raw-from', fromString: null, to: 'raw-to', toString: undefined },
+        { field: 'labels', from: null, fromString: null, to: null, toString: null },
+      ],
+    });
+
+    expect(slim.items).toEqual([
+      { field: 'assignee', from: 'raw-from', to: 'raw-to' },
+      { field: 'labels', from: null, to: null },
+    ]);
+    expect('fieldId' in slim.items[1]).toBe(false);
+  });
+
+  it('truncates values over maxValueChars (default 200) with ellipsis and truncated flag, and allows unlimited when maxValueChars is 0', () => {
+    const longText = 'x'.repeat(500);
+    const exact200 = 'y'.repeat(200);
+    const entry = {
+      id: '10003',
+      author: { displayName: 'Alice' },
+      created: '2026-01-17T10:00:00.000+0000',
+      items: [
+        { field: 'description', fieldId: 'description', fromString: exact200, toString: longText },
+      ],
+    };
+
+    const truncatedDefault = toSlimChangelog(entry);
+    expect(truncatedDefault.items[0]).toEqual({
+      field: 'description',
+      from: exact200,
+      to: `${'x'.repeat(200)}…`,
+      truncated: true,
+    });
+
+    const unlimited = toSlimChangelog(entry, { maxValueChars: 0 });
+    expect(unlimited.items[0]).toEqual({
+      field: 'description',
+      from: exact200,
+      to: longText,
+    });
+    expect('truncated' in unlimited.items[0]).toBe(false);
+  });
+
+  it('handles null author and empty items', () => {
+    const slim = toSlimChangelog({
+      id: '10004',
+      author: null,
+      created: '2026-01-18T10:00:00.000+0000',
+      items: [],
+    });
+
+    expect(slim).toEqual({
+      id: '10004',
+      author: null,
+      created: '2026-01-18T10:00:00.000+0000',
+      items: [],
+    });
   });
 });

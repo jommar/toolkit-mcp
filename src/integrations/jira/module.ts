@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { JiraClient, toSlimIssue, DEV_FIELDS } from '../../services/index.js';
-import type { SlimIssue, SearchResult, JiraIssue, GitHubClient, SlackClient } from '../../services/index.js';
+import { JiraClient, describeError, toSlimIssue, toSlimChangelog, DEV_FIELDS } from '../../services/index.js';
+import type { SlimIssue, SlimChangelogEntry, SearchResult, JiraIssue, GitHubClient, SlackClient } from '../../services/index.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { toListedComment } from '../../services/slim.js';
 import { MAX_INLINE_ATTACHMENT_BYTES } from '../../services/jira/attachment-limit.js';
@@ -191,6 +191,47 @@ export const jiraGetCommentsSchema = z.object({
     .boolean()
     .optional()
     .describe('Also return each comment\'s raw ADF document as `bodyAdf` (mentions, media, hard breaks). `body` stays plain text. Off by default.'),
+});
+
+export const jiraGetChangelogsSchema = z.object({
+  keys: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(20)
+        .refine((k) => k !== '.' && k !== '..', {
+          message: 'Issue key must not be "." or ".."',
+        }),
+    )
+    .min(1)
+    .max(20)
+    .describe('Issue keys to fetch changelogs for (1 to 20 keys, deduplicated preserving order).'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .default(20)
+    .describe('Maximum changelog entries per issue (1 to 100, default 20).'),
+  cursor: z
+    .string()
+    .optional()
+    .describe('Opaque pagination token from a previous response (single-key requests only).'),
+  fields: z
+    .array(z.string().min(1).max(100))
+    .max(20)
+    .optional()
+    .describe('Optional case-insensitive field name or fieldId filter (max 20 entries).'),
+  maxValueChars: z
+    .number()
+    .int()
+    .min(0)
+    .max(10000)
+    .optional()
+    .default(200)
+    .describe('Maximum characters per from/to value before truncation (0 disables truncation, default 200).'),
 });
 
 export const jiraListTransitionsSchema = z.object({
@@ -498,6 +539,121 @@ export const jiraGetCommentsHandler: ToolHandler<z.infer<typeof jiraGetCommentsS
     return { content: [{ type: 'text', text: JSON.stringify(paginated(items, nextOffset)) }] };
   };
 
+const CHANGELOG_CONCURRENCY = 5;
+
+async function mapSettledWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        const value = await fn(items[index]);
+        results[index] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+export const jiraGetChangelogsHandler: ToolHandler<z.infer<typeof jiraGetChangelogsSchema>> =
+  (_clients) => async (args) => {
+    const uniqueKeys = [...new Set(args.keys)];
+    let startOffset = 0;
+
+    if (args.cursor !== undefined) {
+      if (uniqueKeys.length > 1) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'cursor is only supported when querying a single issue key',
+        );
+      }
+      if (!/^\d+$/.test(args.cursor)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'cursor must be a non-negative integer offset',
+        );
+      }
+      startOffset = Number.parseInt(args.cursor, 10);
+      if (!Number.isSafeInteger(startOffset)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'cursor must be a non-negative integer offset',
+        );
+      }
+    }
+
+    const limit = args.limit ?? 20;
+    const maxValueChars = args.maxValueChars ?? 200;
+    const opts = {
+      limit,
+      startOffset,
+      ...(args.fields && args.fields.length > 0 ? { fields: args.fields } : {}),
+    };
+
+    const settledResults = await mapSettledWithConcurrency(
+      uniqueKeys,
+      CHANGELOG_CONCURRENCY,
+      (key) => _clients.jira.getChangelogs(key, opts),
+    );
+
+    const items: {
+      key: string;
+      total: number;
+      changelogs: SlimChangelogEntry[];
+      hasMore: boolean;
+      nextPageToken?: string;
+    }[] = [];
+    const warnings: { key: string; message: string }[] = [];
+
+    for (let i = 0; i < uniqueKeys.length; i++) {
+      const key = uniqueKeys[i];
+      const settled = settledResults[i];
+      if (settled.status === 'rejected') {
+        warnings.push({ key, message: describeError(settled.reason) });
+        continue;
+      }
+
+      const res = settled.value;
+      const item: {
+        key: string;
+        total: number;
+        changelogs: SlimChangelogEntry[];
+        hasMore: boolean;
+        nextPageToken?: string;
+      } = {
+        key,
+        total: res.total,
+        changelogs: res.entries.map((entry) => toSlimChangelog(entry, { maxValueChars })),
+        hasMore: res.hasMore,
+      };
+      if (res.hasMore && res.nextOffset !== undefined) {
+        item.nextPageToken = String(res.nextOffset);
+      }
+      items.push(item);
+
+      if (res.scanCapped) {
+        warnings.push({
+          key,
+          message: 'Scan capped after 10 changelog pages; pass nextPageToken as cursor to continue scanning older entries.',
+        });
+      }
+    }
+
+    const body = warnings.length > 0 ? { items, warnings } : { items };
+    return { content: [{ type: 'text', text: JSON.stringify(body) }] };
+  };
+
 export const jiraListTransitionsHandler: ToolHandler<z.infer<typeof jiraListTransitionsSchema>> =
   (_clients) => async (args) => {
     const transitions = await _clients.jira.listTransitions(args.key);
@@ -635,6 +791,11 @@ export const jiraToolDescriptors = [
     name: 'jira_get_comments',
     description: 'Get comments on a Jira issue, oldest first: id, author name, created, updated, plain-text body (`adf: true` adds the raw ADF as `bodyAdf`).',
     inputSchema: zodToJsonSchema(jiraGetCommentsSchema),
+  },
+  {
+    name: 'jira_get_changelogs',
+    description: 'Get changelog entries for one or more Jira issues, newest first, grouped by issue key.',
+    inputSchema: zodToJsonSchema(jiraGetChangelogsSchema),
   },
   {
     name: 'jira_list_transitions',
