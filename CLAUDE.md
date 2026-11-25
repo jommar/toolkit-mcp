@@ -25,6 +25,7 @@ src/
 ├── mcp-server.ts              # Entry: buildRuntime/assembleRuntime (clients, handlers, once per process), createServer (McpServer factory for serveStdio), process hooks
 ├── mcp-config.ts              # MCP_LOG_LEVEL and the stderr logger
 ├── mcp-health.ts              # mcp_get_health descriptor and handler (always registered)
+├── mcp-skills.ts              # loadServedSkills: skills/ as an MCP Skills extension catalog (always served)
 ├── server-info.ts             # Server name and version, read once from package.json
 ├── services/
 │   ├── index.ts               # Barrel — re-exports all service classes/types
@@ -124,6 +125,15 @@ Handlers receive input the SDK has already validated against the zod schema (def
 4. `serveStdio(() => createServer(runtime))` builds an `McpServer` per connection; the factory only registers, it creates no client and makes no network call
 
 `serveStdio` serves both protocol eras: a 2025-era `initialize` (2025-11-25 or older) as before, and 2026-07-28 requests statelessly, with one-hour private cache hints on the four list methods. The server stops cleanly on SIGINT, SIGTERM or stdin end (exit 0); an uncaught exception is logged and exits 1; an unhandled rejection is logged and the server keeps serving. Only protocol messages go to stdout; logs go to stderr.
+
+### Served Skill
+
+`skills/toolkit-mcp/` (`SKILL.md` plus `references/`) is the agent guide to the tools, served over the MCP Skills extension (`io.modelcontextprotocol/skills`). `buildRuntime` loads it once with `loadServedSkills` and `createServer` attaches it to each connection's server. A skill problem is logged and that skill skipped; a catalog that cannot be built is logged and the server runs without skills. Skill files are resources, so `resources` and the extension are always advertised, even to legacy clients, which see `skill://toolkit-mcp/SKILL.md` in `resources/list` and the `skill://{+path}` template.
+
+The catalog records each file's digest at startup, so a running server refuses to serve a skill file edited after it started (`-32603 … changed since the skills catalog was loaded`). After editing or pulling changes to `skills/`, restart the server (for example `/mcp` reconnect).
+
+- **Keep it in step with the tools.** Adding, renaming or removing a tool or a top-level parameter means updating the guide: `src/mcp-skills.test.ts` fails when a registered tool is not named in it, it names a tool that does not exist, or a tool's table row in `references/` leaves out one of its top-level parameters.
+- **Workspace-neutral.** Examples use placeholders (`PROJ-123`, `acme/api`, `main`); no real project key, org, repo, site or channel. A workspace's own conventions belong in that workspace's skills. Every file of the skill is in the `workspace-neutral` scan.
 
 ### Error Model
 
@@ -304,10 +314,11 @@ This avoids needing real credentials or network calls.
 | `src/integrations/register.test.ts` | Adapter: `describeToolError` branches, debug log line per call |
 | `src/integrations/annotation-presets.test.ts` | Every module takes its hints from the shared presets |
 | `src/mcp-server.test.ts` | In-memory client on `createServer`: tools/list contents, schemas and size, tool errors, input validation, resources, prompts, conditional registration, factory, process hooks |
-| `src/stdio.e2e.test.ts` | Spawned server over stdio: legacy (2025-11-25, 2025-06-18) and 2026-07-28 clients, health, shutdown |
+| `src/stdio.e2e.test.ts` | Spawned server over stdio: legacy (2025-11-25, 2025-06-18) and 2026-07-28 clients, `skills/list` and skill files, health, shutdown |
 | `src/project-contract.test.ts` | Dependency pins, SDK imports, removed names in docs, CHANGELOG heading |
 | `src/mcp-config.test.ts` | Log level and logger |
 | `src/mcp-health.test.ts` | Health handler |
+| `src/mcp-skills.test.ts` | Served skill: strict catalog build, every file published, guide names exactly the registered tools and every top-level parameter, load failures |
 | `src/node-version.test.ts` | Node guard: `assertSupportedNode`, and `MINIMUM_NODE_MAJOR` read from `engines.node` |
 | `src/launcher.e2e.test.ts` | `bin/toolkit-mcp` with fake nvm and PATH `node` shims: picks the `.nvmrc` node, falls back to PATH, runs from the repo root, nothing on stdout (POSIX only) |
 | `src/services/slack/*.test.ts` | Slack service layer — credential store, app config, login and loopback listener, client, model, links, cursors, batch runner, upload source, scope table |
@@ -317,7 +328,7 @@ Slack tests keep their synthetic builders and fakes in `__fixtures__/` folders b
 
 Shared MCP test helpers live in `src/__fixtures__/` (`mcp.ts`: in-memory client connection, raw handlers, listed input schemas, `axiosError`; `source-files.ts`). `@modelcontextprotocol/client` is a devDependency imported only by tests and fixtures.
 
-Coverage includes: `src/mcp-server.ts`, `src/mcp-config.ts`, `src/mcp-health.ts`, `src/server-info.ts`, `src/integrations/**/*.ts`, `src/services/**/*.ts`.
+Coverage includes: `src/mcp-server.ts`, `src/mcp-config.ts`, `src/mcp-health.ts`, `src/mcp-skills.ts`, `src/server-info.ts`, `src/integrations/**/*.ts`, `src/services/**/*.ts`.
 
 ## Important Constraints
 

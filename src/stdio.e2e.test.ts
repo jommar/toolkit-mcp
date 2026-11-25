@@ -142,7 +142,7 @@ afterEach(() => {
 
 describe('legacy client', () => {
   it.each(LEGACY_VERSIONS)(
-    'negotiates %s, reports package info, advertises tools only and lists exactly mcp_get_health',
+    'negotiates %s, reports package info, advertises tools and the skill resources only and lists exactly mcp_get_health',
     async (version) => {
       const session = spawnServer();
       const init = await initializeLegacy(session, version);
@@ -151,13 +151,22 @@ describe('legacy client', () => {
       expect(init.result.protocolVersion).toBe(version);
       expect(init.result.serverInfo).toMatchObject({ name: 'toolkit-mcp', version: PKG.version });
       expect(init.result.capabilities.tools).toBeDefined();
-      expect(init.result.capabilities.resources).toBeUndefined();
+      // The Skills extension serves its files as resources, so even a legacy client sees the resources capability.
+      expect(init.result.capabilities.resources).toBeDefined();
       expect(init.result.capabilities.prompts).toBeUndefined();
 
       const list = await session.request(2, 'tools/list');
       expect(list.error).toBeUndefined();
       expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['mcp_get_health']);
       expect(list.result).not.toHaveProperty('ttlMs');
+
+      // The skill's files are resources: SKILL.md is listed, and every file reads through the skill template.
+      const resources = await session.request(3, 'resources/list');
+      expect(resources.result.resources.map((r: { uri: string }) => r.uri)).toEqual(['skill://toolkit-mcp/SKILL.md']);
+      const templates = await session.request(4, 'resources/templates/list');
+      expect(templates.result.resourceTemplates.map((t: { uriTemplate: string }) => t.uriTemplate)).toEqual(['skill://{+path}']);
+      const read = await session.request(5, 'resources/read', { uri: 'skill://toolkit-mcp/references/slack.md' });
+      expect(read.result.contents[0].text).toContain('slack_prepare_write');
     },
     TEST_TIMEOUT_MS,
   );
@@ -182,6 +191,30 @@ describe('modern client', () => {
         name: 'toolkit-mcp',
         version: PKG.version,
       });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'serves the toolkit-mcp skill: the extension in server/discover, skills/list, and its files over resources/read',
+    async () => {
+      const session = spawnServer();
+      const meta = {
+        ...MODERN_META,
+        'io.modelcontextprotocol/clientCapabilities': { extensions: { 'io.modelcontextprotocol/skills': {} } },
+      };
+
+      const discover = await session.request(1, 'server/discover', { _meta: meta });
+      expect(discover.result.capabilities.extensions).toHaveProperty(['io.modelcontextprotocol/skills']);
+
+      const list = await session.request(2, 'skills/list', { _meta: meta });
+      expect(list.error).toBeUndefined();
+      expect(list.result.skills.map((s: { uri: string }) => s.uri)).toEqual(['skill://toolkit-mcp/SKILL.md']);
+      expect(list.result.skills[0].frontmatter.name).toBe('toolkit-mcp');
+
+      const read = await session.request(3, 'resources/read', { uri: 'skill://toolkit-mcp/references/jira.md', _meta: meta });
+      expect(read.error).toBeUndefined();
+      expect(read.result.contents[0].text).toContain('jira_get_issues');
     },
     TEST_TIMEOUT_MS,
   );
