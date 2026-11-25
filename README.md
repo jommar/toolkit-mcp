@@ -292,6 +292,12 @@ JQL in `jira://search/{+jql}` is URI-encoded (e.g., `jira://search/project%20%3D
 | `create-issue` | `projectKey`, `issueType`, `summary` (required); `description`, `priority`, `labels` (optional; `labels` is a comma-separated string, e.g. `frontend,ux`) | Produces a guided issue-creation message prompting the agent to call `jira_create_issue`. |
 | `triage-issue` | `key` | Fetches the issue + available transitions + comments, returns a structured analysis: summary, status, assignee, priority, description, available transitions, comment history. |
 
+## Skills
+
+The server ships an agent guide, [`skills/toolkit-mcp/`](skills/toolkit-mcp/SKILL.md), over the MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640): which tool to call, how to chain them, the response shapes to expect and the write rules. A 2026-07-28 client that supports the extension finds it with `skills/list` and reads `skill://toolkit-mcp/SKILL.md` and its `references/` over `resources/read`. It is always served, whichever integrations are active, so the `resources` capability is always advertised. Clients without the extension can copy or point at the folder instead.
+
+The guide is workspace-neutral (placeholders such as `PROJ-123` and `acme/api`). Put your own conventions — project keys, required fields, repos, channels — in a skill in your workspace that sits on top of it. `src/mcp-skills.test.ts` fails when a registered tool is missing from the guide or the guide names a tool that does not exist.
+
 ---
 
 ## Conditional Registration Behavior
@@ -387,6 +393,7 @@ src/
 ├── mcp-server.ts              # Entry: runtime built once, McpServer factory served by serveStdio, process hooks
 ├── mcp-config.ts              # MCP_LOG_LEVEL and the stderr logger
 ├── mcp-health.ts              # mcp_get_health descriptor and handler
+├── mcp-skills.ts              # Loads skills/ for the MCP Skills extension
 ├── server-info.ts             # Server name and version, read once from package.json
 ├── services/
 │   ├── index.ts               # Barrel — re-exports all service classes/types

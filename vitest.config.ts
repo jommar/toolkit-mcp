@@ -11,6 +11,7 @@ export default defineConfig({
         'src/mcp-server.ts',
         'src/mcp-config.ts',
         'src/mcp-health.ts',
+        'src/mcp-skills.ts',
         'src/server-info.ts',
         'src/integrations/**/*.ts',
         'src/services/**/*.ts',

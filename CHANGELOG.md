@@ -5,6 +5,16 @@ All notable changes to the toolkit-mcp project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Served agent guide** — `skills/toolkit-mcp/` (`SKILL.md` plus six `references/`) is served over the MCP Skills extension (`io.modelcontextprotocol/skills`): `skills/list` returns `skill://toolkit-mcp/SKILL.md` and its files read over `resources/read`. The guide is workspace-neutral, covers every registered tool (including `jira_get_changelogs` and `slack_download_file`), and a test fails when it drifts from the registered tools.
+
+### Changed
+
+- **`resources` is always advertised** — The skill files are resources, so the capability is present even with no integration active, for legacy and 2026-07-28 clients alike.
+
 ## [0.4.0] — 2026-11-25
 
 **Rollout:** the dependencies changed, so run `npm ci` in the checkout the MCP client launches before restarting any client session; without it the server fails at import. Sessions already running keep the old process until they restart. Existing client configuration keeps working with `node --import tsx src/mcp-server.ts`; `bin/toolkit-mcp` is the new recommended command. Under a Node below 24 the server refuses to start, and `npm ci` refuses to install (`engine-strict`). Rollback is the previous commit plus `npm ci`.

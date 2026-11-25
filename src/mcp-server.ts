@@ -2,10 +2,12 @@ import type { EventEmitter } from 'node:events';
 import os from 'node:os';
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server/stdio';
+import type { SkillsExtension } from '@modelcontextprotocol/server/ext/skills';
 import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient, SlackClient } from './services/index.js';
 import { slackPaths } from './services/slack/credential-store.js';
 import { createLogger, loadMcpConfig } from './mcp-config.js';
 import { createHealthHandler, healthDescriptor } from './mcp-health.js';
+import { loadServedSkills } from './mcp-skills.js';
 import { modules } from './integrations/index.js';
 import { messageOf } from './integrations/helpers.js';
 import {
@@ -31,6 +33,8 @@ export interface Runtime {
   toolHandlers: Record<string, ToolHandlerFn>;
   resources: Array<{ descriptors: ResourceDescriptor[]; handler: ResourceHandlerFn }>;
   prompts: Array<{ descriptors: PromptDescriptor[]; handler: PromptHandlerFn }>;
+  /** The served skills catalog (MCP Skills extension); absent when it could not be loaded. */
+  skills?: SkillsExtension;
 }
 
 type Clients = Record<string, unknown>;
@@ -120,7 +124,9 @@ export async function buildRuntime(log: Logger): Promise<Runtime> {
     }
   }
 
-  return assembleRuntime(clients, log);
+  const runtime = assembleRuntime(clients, log);
+  runtime.skills = await loadServedSkills(log);
+  return runtime;
 }
 
 /** Collects every eligible module's descriptors and handlers. Each module's handler factory runs here, once. */
@@ -179,12 +185,13 @@ export function assembleRuntime(clients: Clients, log: Logger): Runtime {
   return runtime;
 }
 
-/** A new, unconnected server with the runtime's tools, resources and prompts. Creates no client and makes no network call. */
+/** A new, unconnected server with the runtime's tools, resources, prompts and skills. Creates no client and makes no network call. */
 export function createServer(runtime: Runtime): McpServer {
   const server = new McpServer(SERVER_INFO, { cacheHints: LIST_CACHE_HINTS });
   registerModuleTools(server, runtime.tools, runtime.toolHandlers, runtime.log);
   for (const { descriptors, handler } of runtime.resources) registerModuleResources(server, descriptors, handler);
   for (const { descriptors, handler } of runtime.prompts) registerModulePrompts(server, descriptors, handler);
+  runtime.skills?.attach(server);
   return server;
 }
 

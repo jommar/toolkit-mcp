@@ -13,7 +13,15 @@ import {
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const SOURCE_DIRECTORIES = ['src/integrations/slack', 'src/services/slack'];
-const SHIPPED_FILES = ['README.md', 'docs/slack.md', 'docs/slack-app-manifest.json', '.env.example', 'CHANGELOG.md'];
+const SHIPPED_FILES = [
+  'README.md',
+  'docs/slack.md',
+  'docs/slack-app-manifest.json',
+  '.env.example',
+  'CHANGELOG.md',
+  'skills/toolkit-mcp/SKILL.md',
+  'skills/toolkit-mcp/references/slack.md',
+];
 
 const SLACK_DOMAIN = ['slack', 'com'].join('.');
 
