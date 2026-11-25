@@ -5,6 +5,7 @@ import { SERVER_INFO } from './server-info.js';
 
 export interface HealthResult {
   serverVersion: string;
+  node: string;
   integrations: {
     jira: boolean;
     github: boolean;
@@ -35,6 +36,7 @@ export function createHealthHandler(
   return async () => {
     const result: HealthResult = {
       serverVersion: SERVER_INFO.version,
+      node: process.version,
       integrations: {
         jira: jiraActive,
         github: githubActive,

@@ -34,6 +34,11 @@ describe('createHealthHandler', () => {
     });
   });
 
+  it('reports the running Node version as node', async () => {
+    const body = JSON.parse(((await createHealthHandler(false, false, false)({})).content[0] as { text: string }).text);
+    expect(body.node).toBe(process.version);
+  });
+
   it('defaults slack to false when the flag is omitted', async () => {
     const handler = createHealthHandler(true, true, true, true, true);
     const body = JSON.parse(((await handler({})).content[0] as { text: string }).text);

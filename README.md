@@ -229,7 +229,7 @@ Slack's list-shaped results do not use the single envelope below: each input ite
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `mcp_get_health` | Report which integrations are active (`jira`, `github`, `figma`, `confluence`, `jenkins`, `slack`). | *(none)* |
+| `mcp_get_health` | Report which integrations are active (`jira`, `github`, `figma`, `confluence`, `jenkins`, `slack`) and the running Node version (`node`). | *(none)* |
 
 ### Paginated Response Shape
 
@@ -303,7 +303,7 @@ JQL in `jira://search/{+jql}` is URI-encoded (e.g., `jira://search/project%20%3D
 - **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. It needs no other environment variable: `slack_login` adopts the web session dev-dashboard captured in `~/.config/slack/session.json` (or `SLACK_SESSION_FILE`), and only falls back to the Slack app login — which answers `app_not_configured` until the client id is in `~/.config/slack/toolkit-mcp/app.json` — when no captured session exists (see [`docs/slack.md`](docs/slack.md)).
 - **Fallback** — if no env vars are set, the server starts with only `mcp_get_health`. No crashes.
 - The server logs active integrations at startup: `[mcp] Jira integration: active`.
-- `mcp_get_health` reports each integration, including `slack`, as a boolean.
+- `mcp_get_health` reports each integration, including `slack`, as a boolean, plus `serverVersion` and `node` (the running `process.version`, for example `v26.13.1`).
 
 ---
 
@@ -338,14 +338,15 @@ All tool handlers are testable via **dependency injection** — mock clients are
 
 ## MCP Client Configuration (AI IDEs)
 
+Point the client at `bin/toolkit-mcp`, the recommended launcher. It runs the server from the repo root with the Node version in `.nvmrc` (`$HOME/.nvm/versions/node/v<version>/bin/node`) when that is installed, and otherwise with `node` from `PATH`. It writes nothing to stdout, which carries the protocol. The server refuses to start on a Node below 24 (`engines.node`): it prints the running version and the minimum to stderr and exits 1. `.npmrc` sets `engine-strict=true`, so `npm ci` refuses the same Node versions.
+
 ### OpenCode / Claude Desktop
 
 ```json
 {
   "mcpServers": {
     "toolkit-mcp": {
-      "command": "node",
-      "args": ["--import", "tsx", "/path/to/toolkit-mcp/src/mcp-server.ts"],
+      "command": "/path/to/toolkit-mcp/bin/toolkit-mcp",
       "env": {
         "JIRA_BASE_URL": "https://pathwise.atlassian.net",
         "JIRA_EMAIL": "you@pathwisek12.com",
@@ -363,8 +364,7 @@ All tool handlers are testable via **dependency injection** — mock clients are
 {
   "mcpServers": {
     "toolkit-mcp": {
-      "command": "node",
-      "args": ["--import", "tsx", "/path/to/toolkit-mcp/src/mcp-server.ts"],
+      "command": "/path/to/toolkit-mcp/bin/toolkit-mcp",
       "env": {
         "JIRA_BASE_URL": "https://pathwise.atlassian.net",
         "JIRA_EMAIL": "you@pathwisek12.com",

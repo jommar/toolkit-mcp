@@ -82,7 +82,7 @@ class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... 
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` are all set (read-only tools).
 - **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json` (`SLACK_SESSION_FILE` overrides) and keeps its own copy in `~/.config/slack/toolkit-mcp/token.json`; without one it falls back to the app login, whose client id is not an env var but `~/.config/slack/toolkit-mcp/app.json`. Writes (post, react, upload) go only through `slack_prepare_write` then `slack_confirm_write`. Setup, limits and error codes: `docs/slack.md`.
-- **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations.
+- **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations and the running Node version (`node`).
 - The server logs which integration sets are active at startup.
 
 ### Dependency Injection (DI)
@@ -247,12 +247,13 @@ Full `.env.example` in project root.
 
 ### MCP Client Config (for AI IDEs)
 
+Use `bin/toolkit-mcp` as the launcher. It runs the server from the repo root with the Node version in `.nvmrc` when `$HOME/.nvm/versions/node/v<version>/bin/node` exists, and otherwise with `node` from `PATH`. It writes nothing to stdout. The server refuses to start on a Node below 24 (`engines.node`), printing the running version and the minimum to stderr and exiting 1. `.npmrc` sets `engine-strict=true`, so `npm ci` refuses the same Node versions.
+
 ```json
 {
   "mcpServers": {
     "toolkit-mcp": {
-      "command": "node",
-      "args": ["--import", "tsx", "/path/to/toolkit-mcp/src/mcp-server.ts"],
+      "command": "/path/to/toolkit-mcp/bin/toolkit-mcp",
       "env": {
         "JIRA_BASE_URL": "https://pathwise.atlassian.net",
         "JIRA_EMAIL": "you@pathwisek12.com",
@@ -307,6 +308,8 @@ This avoids needing real credentials or network calls.
 | `src/project-contract.test.ts` | Dependency pins, SDK imports, removed names in docs, CHANGELOG heading |
 | `src/mcp-config.test.ts` | Log level and logger |
 | `src/mcp-health.test.ts` | Health handler |
+| `src/node-version.test.ts` | Node guard: `assertSupportedNode`, and `MINIMUM_NODE_MAJOR` read from `engines.node` |
+| `src/launcher.e2e.test.ts` | `bin/toolkit-mcp` with fake nvm and PATH `node` shims: picks the `.nvmrc` node, falls back to PATH, runs from the repo root, nothing on stdout (POSIX only) |
 | `src/services/slack/*.test.ts` | Slack service layer — credential store, app config, login and loopback listener, client, model, links, cursors, batch runner, upload source, scope table |
 | `src/integrations/slack/*.test.ts` | Slack module — session, read and write tools, write gate, registration; plus the cross-cutting `secrets`, `privacy`, `write-gating` and `workspace-neutral` suites |
 

@@ -189,6 +189,8 @@ describe('modern client', () => {
 
 describe('health', () => {
   const ALL_INACTIVE = { jira: false, github: false, figma: false, confluence: false, jenkins: false, slack: false };
+  /** The server runs on `process.execPath` (see spawnServer), so its Node is the runner's. */
+  const SPAWNED_NODE_VERSION = process.version;
 
   it(
     'legacy era: reports the package version with six inactive integrations, and refuses parameters as isError',
@@ -198,7 +200,8 @@ describe('health', () => {
 
       const ok = await session.request(2, 'tools/call', { name: 'mcp_get_health', arguments: {} });
       expect(ok.error).toBeUndefined();
-      expect(healthBody(ok)).toEqual({ serverVersion: PKG.version, integrations: ALL_INACTIVE });
+      expect(healthBody(ok).node).toMatch(/^v\d+\.\d+\.\d+$/);
+      expect(healthBody(ok)).toEqual({ serverVersion: PKG.version, node: SPAWNED_NODE_VERSION, integrations: ALL_INACTIVE });
 
       const refused = await session.request(3, 'tools/call', { name: 'mcp_get_health', arguments: { a: 1 } });
       expect(refused.error).toBeUndefined();
@@ -214,7 +217,8 @@ describe('health', () => {
 
       const ok = await session.request(1, 'tools/call', { name: 'mcp_get_health', arguments: {}, _meta: MODERN_META });
       expect(ok.error).toBeUndefined();
-      expect(healthBody(ok)).toEqual({ serverVersion: PKG.version, integrations: ALL_INACTIVE });
+      expect(healthBody(ok).node).toMatch(/^v\d+\.\d+\.\d+$/);
+      expect(healthBody(ok)).toEqual({ serverVersion: PKG.version, node: SPAWNED_NODE_VERSION, integrations: ALL_INACTIVE });
 
       const refused = await session.request(2, 'tools/call', {
         name: 'mcp_get_health',
@@ -266,6 +270,99 @@ describe('shutdown', () => {
 
       expect(outcome).toEqual({ code: 0, signal: null });
       expectProtocolOnlyStdout(session);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+describe('stdout drain on stdin end', () => {
+  /**
+   * Dummy credentials for every integration that registers without a network call at startup (Jenkins
+   * pings, so it stays off). Hosts are `.invalid`, so nothing could resolve even if a client tried.
+   * With these the tools/list reply is about 70 KB, larger than one 64 KiB pipe buffer.
+   */
+  const MANY_TOOLS_ENV = {
+    JIRA_BASE_URL: 'https://jira.example.invalid',
+    JIRA_EMAIL: 'e2e@example.invalid',
+    JIRA_TOKEN: 'dummy',
+    GH_TOKEN: 'dummy',
+    FIGMA_TOKEN: 'dummy',
+    SLACK_ENABLED: 'true',
+  };
+  const PIPE_BUFFER_BYTES = 64 * 1024;
+  /** How long the reader waits before draining; the server has long finished writing by then. */
+  const READER_DELAY_S = 2;
+  const SERVER_EXIT_WITHIN_MS = 5_000;
+  const EXIT_MARKER = /server-exit=(\d+)/;
+
+  it(
+    'flushes the whole tools/list reply to a slow pipe reader before exiting 0',
+    async () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'toolkit-mcp-e2e-'));
+      // The server's stdout is a kernel pipe to a reader that sleeps first, as a slow MCP client would be.
+      // A Node pipe on the test side would buffer another 64 KiB in user space and hide the bug.
+      const script = `{ "$@"; echo "server-exit=$?" >&2; } | { sleep ${READER_DELAY_S}; cat; }`;
+      const child = spawn('/bin/sh', ['-c', script, 'sh', process.execPath, '--import', TSX_LOADER, ENTRY], {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? '', HOME: dir, ...MANY_TOOLS_ENV },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        detached: true,
+      });
+      live.push({ child, dir });
+
+      const stdoutChunks: Buffer[] = [];
+      let stderr = '';
+      let stdinEndedAt = 0;
+      const serverExit = new Promise<{ code: number; afterMs: number }>((resolve) => {
+        child.stderr!.on('data', (d) => {
+          stderr += String(d);
+          const match = EXIT_MARKER.exec(stderr);
+          if (match) resolve({ code: Number(match[1]), afterMs: Date.now() - stdinEndedAt });
+        });
+      });
+      child.stdout!.on('data', (d: Buffer) => stdoutChunks.push(d));
+      const closed = new Promise<void>((resolve) => child.on('close', () => resolve()));
+
+      const send = (message: unknown) => child.stdin!.write(`${JSON.stringify(message)}\n`);
+      send({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: LEGACY_VERSION, capabilities: {}, clientInfo: { name: 'e2e', version: '0' } },
+      });
+      send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+      child.stdin!.end();
+      stdinEndedAt = Date.now();
+
+      const exit = await Promise.race([
+        serverExit,
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), SERVER_EXIT_WITHIN_MS + 1_000)),
+      ]);
+      await closed;
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+
+      expect(exit, `server did not exit; stderr:\n${stderr}`).not.toBe('timeout');
+      const { code, afterMs } = exit as { code: number; afterMs: number };
+      expect(code).toBe(0);
+      expect(afterMs).toBeLessThan(SERVER_EXIT_WITHIN_MS);
+
+      const lines = stdout.split('\n').filter((line) => line.trim());
+      const replies = lines.map((line, i) => {
+        try {
+          return JSON.parse(line) as JsonRpcMessage;
+        } catch (err) {
+          throw new Error(
+            `stdout line ${i + 1} of ${lines.length} is not complete JSON (${Buffer.byteLength(line)} bytes, ` +
+              `${Buffer.byteLength(stdout)} stdout bytes in total): ${(err as Error).message}`,
+          );
+        }
+      });
+      const list = replies.find((reply) => reply.id === 2);
+      expect(list, `no tools/list reply in ${Buffer.byteLength(stdout)} stdout bytes`).toBeDefined();
+      expect(list!.result.tools.length).toBeGreaterThan(1);
+      // Guards the premise: a reply that fits one pipe buffer would pass even with the bug.
+      expect(Buffer.byteLength(lines.find((line) => line.includes('"id":2'))!)).toBeGreaterThan(PIPE_BUFFER_BYTES);
     },
     TEST_TIMEOUT_MS,
   );

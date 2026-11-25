@@ -50,6 +50,11 @@ describe('dependencies', () => {
     expect(pkg.engines?.node).toBe('>=24');
     expect(read('.nvmrc').trim()).toBe('26.13.1');
   });
+
+  it('makes npm refuse an unsupported Node: .npmrc sets engine-strict=true', () => {
+    expect(existsSync(path.join(ROOT, '.npmrc'))).toBe(true);
+    expect(read('.npmrc')).toMatch(/^engine-strict=true$/m);
+  });
 });
 
 describe('source imports', () => {

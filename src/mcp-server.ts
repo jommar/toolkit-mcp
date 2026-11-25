@@ -22,7 +22,7 @@ import type {
   ToolDescriptor,
   ToolHandlerFn,
 } from './integrations/index.js';
-import { SERVER_INFO } from './server-info.js';
+import { NODE_ENGINES, SERVER_INFO } from './server-info.js';
 
 /** What every connection's server registers. Built once per process, so each module's handlers exist once. */
 export interface Runtime {
@@ -43,6 +43,30 @@ const LIST_CACHE_HINTS = {
   'resources/list': HOUR_PRIVATE_CACHE,
   'resources/templates/list': HOUR_PRIVATE_CACHE,
 };
+/** Longest shutdown waits for queued stdout to reach the reader, so a stuck or gone pipe cannot hang the exit. */
+const STDOUT_FLUSH_TIMEOUT_MS = 3_000;
+
+/** The major of an `engines.node` range such as `>=24`, the lowest Node the package declares it runs on. */
+function majorOfEnginesRange(range: string): number {
+  const match = /^>=\s*(\d+)$/.exec(range.trim());
+  if (!match) throw new Error(`package.json engines.node must be ">=<major>", got "${range}"`);
+  return Number(match[1]);
+}
+
+export const MINIMUM_NODE_MAJOR: number = majorOfEnginesRange(NODE_ENGINES);
+
+/**
+ * Throws when `version` (as in `process.version`, e.g. `v23.9.0`) has a major below `minimumMajor`.
+ * An unparsable version fails the check.
+ */
+export function assertSupportedNode(version: string, minimumMajor: number): void {
+  const major = Number(/^v(\d+)\./.exec(version)?.[1]);
+  if (!(major >= minimumMajor)) {
+    throw new Error(
+      `toolkit-mcp needs Node ${minimumMajor} or later; this process runs Node ${version}. Start it with the Node in .nvmrc (bin/toolkit-mcp selects it).`,
+    );
+  }
+}
 
 function createClient<T>(name: string, log: Logger, create: () => T): T | undefined {
   try {
@@ -193,7 +217,32 @@ export function installProcessHooks(
   });
 }
 
+/**
+ * Resolves once everything written to stdout so far has been handed to the OS, on a stdout error (EPIPE: the reader
+ * is gone), or after STDOUT_FLUSH_TIMEOUT_MS. Writes are ordered, so the empty write's callback runs after them.
+ */
+function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      clearTimeout(timer);
+      process.stdout.off('error', settle);
+      resolve();
+    };
+    timer = setTimeout(settle, STDOUT_FLUSH_TIMEOUT_MS);
+    process.stdout.once('error', settle);
+    process.stdout.write('', settle);
+  });
+}
+
 export async function main(): Promise<void> {
+  try {
+    assertSupportedNode(process.version, MINIMUM_NODE_MAJOR);
+  } catch (err) {
+    console.error(messageOf(err));
+    process.exit(1);
+  }
+
   const log = createLogger(loadMcpConfig().logLevel);
   log.info(`toolkit-mcp ${SERVER_INFO.version} starting`);
 
@@ -204,6 +253,7 @@ export async function main(): Promise<void> {
     } catch (err) {
       log.error(`Shutdown error: ${messageOf(err)}`);
     }
+    await flushStdout();
     process.exit(code);
   };
   installProcessHooks(process, process.stdin, log, shutdown);
