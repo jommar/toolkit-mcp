@@ -9,7 +9,7 @@ are set.
 | Tool | Use for | Key params |
 |------|---------|-----------|
 | `jira_whoami` | Authenticated user profile (your own accountId) | _none_ |
-| `jira_get_issues` | Fetch one issue **or** search; custom field ids (e.g. story points) go in `fields[]` — find them with `jira_list_fields` | `key` **or** `jql`; `limit`(20), `cursor`, `fields[]`, `adf?`, `includeGithubPrs?`, `includeSlackThreads?` |
+| `jira_get_issues` | Fetch one issue **or** search; custom field ids (e.g. story points) go in `fields[]` — find them with `jira_list_fields` | `key` **or** `jql`; `limit`(20), `cursor`, `fields[]`, `fieldsOnly?`, `adf?`, `includeGithubPrs?`, `includeSlackThreads?` |
 | `jira_get_changelogs` | Field-change history for 1 to 20 issues, newest first, grouped by key | `keys[]`; `limit`(20, per issue), `cursor` (single key only), `fields[]?` (filter by field name or id), `maxValueChars`(200) |
 | `jira_list_fields` | Find field ids by name (e.g. `search: "story"` → `customfield_XXXXX`) | `search?` |
 | `jira_list_components` | A project's components (`{id, name}`) — the only valid values for `components` | `projectKey` |
@@ -29,7 +29,7 @@ are set.
 
 ## Behaviors
 
-- **`jira_get_issues` is always slim:** status, assignee, description and comments, with ADF flattened to plain text. `fields: [...]` does not switch to raw output: standard fields stay flattened and any other field id lands raw under `custom`. Pass `adf: true` to also get `descriptionAdf`, the raw document, which you need before appending to a description with `jira_update_issue`. Large results may be saved to a file by the client; extract with `jq`.
+- **`jira_get_issues` is always slim:** status, assignee, description and comments, with ADF flattened to plain text. `fields: [...]` does not switch to raw output: standard fields stay flattened and any other field id lands raw under `custom`. Add `fieldsOnly: true` to get back only `key` and the names in `fields` (`summary`, `status`, `type`, `assignee`, `comments` and the like, or custom field ids), with nothing else fetched: the way to list many issues without their descriptions and comments. Pass `adf: true` to also get `descriptionAdf`, the raw document, which you need before appending to a description with `jira_update_issue`. Large results may be saved to a file by the client; extract with `jq`.
 - **Links in the same call:** `includeGithubPrs: true` adds `pullRequests: [{number,title,state,repo,htmlUrl,reviewStatus}]` per issue (any PR state, same search as `github_get_prs`, first 20 issues). `includeSlackThreads: true` adds `slackThreads: [{permalink,channel,channelId,threadTs,at}]` — up to 5 channel threads that mention the key, newest first (links only, no DMs or bot posts, first 10 issues; needs Slack enabled and logged in). Read a thread with `slack_get_threads { threads: [{ thread: <permalink> }] }` (the permalink points at the thread root). `[]` means looked and found nothing; a **missing key means not looked up**, so read the envelope's `warnings: [{source,message}]` (integration inactive, API error, or the 20 / 10 issue cap). Two limits: Slack finds only threads where someone typed the key, and if only *some* GitHub searches fail, their keys also come back `[]` with no warning. Prefer these flags over a separate `github_get_prs` / `slack_search_messages` call when you only need the links.
 - **Changelogs:** `jira_get_changelogs` returns each issue's entries newest first. A failing key or a capped scan (10 pages when filtering by `fields`) lands in `warnings` without failing the other keys; continue a capped single-key scan with its `nextPageToken` as `cursor`.
 - **Comment shape differs by tool:** `jira_get_issues` returns comments **newest-first** and flattened (mentions and media dropped). `jira_get_comments` returns them **oldest-first** with plain-text bodies; pass `adf: true` for each comment's raw ADF as `bodyAdf` (mentions, media, hard breaks). Use it for rich content or thread order.
@@ -45,7 +45,7 @@ are set.
 **Issues needing code review, with their PRs**
 
 ```text
-jira_get_issues { jql: "assignee = currentUser() AND status = 'Ready For Code Review'", limit: 50, includeGithubPrs: true }
+jira_get_issues { jql: "assignee = currentUser() AND status = 'Ready For Code Review'", limit: 50, fields: ["summary", "status", "assignee"], fieldsOnly: true, includeGithubPrs: true }
 ```
 
 **Other handy JQL**

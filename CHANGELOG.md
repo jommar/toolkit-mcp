@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Served agent guide** — `skills/toolkit-mcp/` (`SKILL.md` plus six `references/`) is served over the MCP Skills extension (`io.modelcontextprotocol/skills`): `skills/list` returns `skill://toolkit-mcp/SKILL.md` and its files read over `resources/read`. The guide is workspace-neutral, covers every registered tool and top-level parameter (including `jira_get_changelogs` and `slack_download_file`), and a test fails when it drifts from them. The server fingerprints the files at startup, so restart it after changing `skills/`.
 
+- **`jira_get_issues` `fieldsOnly`** — With `fieldsOnly: true`, the tool asks Jira for only the fields named in `fields` and returns each issue as `key` plus those fields (custom field ids under `custom`). Names follow the output shape (`type`, `comments`, `attachments`); the Jira ids `issuetype`, `comment` and `attachment` are accepted too. Without it, `fields` still adds to the slim default, which always carries description and comments: a 17-issue search with PRs came back at about 200K characters, 91% of it comments and descriptions.
+
 ### Changed
 
 - **`resources` and the Skills extension are always advertised** — The skill files are resources, so even with no integration active, legacy and 2026-07-28 clients alike see the `resources` capability, the `io.modelcontextprotocol/skills` extension, `skill://toolkit-mcp/SKILL.md` in `resources/list` and the `skill://{+path}` template in `resources/templates/list`.

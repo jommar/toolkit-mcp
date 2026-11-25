@@ -220,6 +220,80 @@ describe('jiraGetIssuesHandler', () => {
     expect(parsed.items[0].fields.customfield_10058).toBe(5);
   });
 
+  describe('fieldsOnly', () => {
+    const rawIssue = {
+      id: '1',
+      key: 'TAP-1',
+      fields: {
+        summary: 'A',
+        status: { name: 'Open' },
+        issuetype: { name: 'Story' },
+        assignee: { displayName: 'Dev' },
+        description: { type: 'doc', version: 1, content: [] },
+        comment: { comments: [{ id: '9', body: 'long proof' }] },
+        customfield_10058: 5,
+      },
+    };
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('../../services/slim.js')>('../../services/slim.js');
+      vi.mocked(toSlimIssue).mockImplementation(actual.toSlimIssue);
+    });
+
+    afterEach(() => {
+      vi.mocked(toSlimIssue).mockImplementation((issue: any) => issue);
+    });
+
+    it('requests only the named Jira fields in JQL mode and returns key plus those fields', async () => {
+      mockJira.search.mockResolvedValue({ issues: [rawIssue], isLast: true });
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler(
+        jiraGetIssuesSchema.parse({ jql: 'project = TAP', fields: ['key', 'summary', 'status', 'type'], fieldsOnly: true }),
+      );
+
+      expect(mockJira.search).toHaveBeenCalledWith('project = TAP', {
+        maxResults: 20,
+        nextPageToken: undefined,
+        fields: ['summary', 'status', 'issuetype'],
+      });
+      expect(JSON.parse(contentText(result)).items).toEqual([{ key: 'TAP-1', summary: 'A', status: 'Open', type: 'Story' }]);
+    });
+
+    it('accepts Jira ids as aliases and returns custom fields under custom (key mode)', async () => {
+      mockJira.getIssue.mockResolvedValue(rawIssue);
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler(
+        jiraGetIssuesSchema.parse({ key: 'TAP-1', fields: ['comment', 'customfield_10058'], fieldsOnly: true }),
+      );
+
+      expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', ['comment', 'customfield_10058']);
+      const [issue] = JSON.parse(contentText(result)).items;
+      expect(Object.keys(issue).sort()).toEqual(['comments', 'custom', 'key']);
+      expect(issue.custom).toEqual({ customfield_10058: 5 });
+    });
+
+    it('still fetches a minimal field when only key is asked for', async () => {
+      mockJira.getIssue.mockResolvedValue(rawIssue);
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', fields: ['key'], fieldsOnly: true }));
+
+      expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', ['summary']);
+      expect(JSON.parse(contentText(result)).items).toEqual([{ key: 'TAP-1' }]);
+    });
+
+    it('rejects fieldsOnly without fields', async () => {
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+
+      await expect(handler(jiraGetIssuesSchema.parse({ jql: 'project = TAP', fieldsOnly: true }))).rejects.toThrow(
+        'fieldsOnly needs fields',
+      );
+      expect(mockJira.search).not.toHaveBeenCalled();
+    });
+  });
+
   it('throws when neither key nor jql provided', async () => {
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
 

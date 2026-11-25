@@ -30,7 +30,11 @@ export const jiraGetIssuesSchema = z.object({
   fields: z
     .array(z.string())
     .optional()
-    .describe('Subset of fields to return (e.g., ["key","status"]). Custom fields (e.g. story points) pass through under their field ID — look IDs up with `jira_list_fields`.'),
+    .describe('Extra fields to return beside the slim default (description, comments and the rest stay in) — custom fields (e.g. story points) come back under `custom` by field ID, looked up with `jira_list_fields`; set `fieldsOnly` to return only these.'),
+  fieldsOnly: z
+    .boolean()
+    .optional()
+    .describe('Return only `key` and the fields named in `fields` (e.g. ["summary","status","assignee"]), leaving out description and comments.'),
   adf: z
     .boolean()
     .optional()
@@ -336,35 +340,69 @@ export const jiraWhoamiHandler: ToolHandler<z.infer<typeof jiraWhoamiSchema>> =
     return { content: [{ type: 'text', text: JSON.stringify(user) }] };
   };
 
+/** SlimIssue property → Jira field id, where the two differ. */
+const SLIM_TO_JIRA_FIELD: Record<string, string> = { type: 'issuetype', comments: 'comment', attachments: 'attachment' };
+const JIRA_TO_SLIM_FIELD: Record<string, string> = Object.fromEntries(
+  Object.entries(SLIM_TO_JIRA_FIELD).map(([slimName, jiraId]) => [jiraId, slimName]),
+);
+const SLIM_FIELD_NAMES: readonly string[] = DEV_FIELDS.map((f) => JIRA_TO_SLIM_FIELD[f] ?? f);
+
+/**
+ * Resolve `fieldsOnly` names (SlimIssue names, Jira ids accepted as aliases) into the SlimIssue
+ * properties to keep, the custom field ids, and the Jira fields to request. `key` is always returned.
+ */
+function resolveFieldsOnly(fields: string[]) {
+  const names = [...new Set(fields.filter((f) => f !== 'key').map((f) => JIRA_TO_SLIM_FIELD[f] ?? f))];
+  const standard = names.filter((n) => SLIM_FIELD_NAMES.includes(n));
+  const custom = names.filter((n) => !SLIM_FIELD_NAMES.includes(n));
+  const jiraFields = [...standard.map((n) => SLIM_TO_JIRA_FIELD[n] ?? n), ...custom];
+  // An empty list would make the single-issue endpoint return every field.
+  return { standard, custom, jiraFields: jiraFields.length > 0 ? jiraFields : ['summary'] };
+}
+
+/** Keep only `key`, the named SlimIssue properties, requested custom fields and `descriptionAdf` when asked for. */
+function pickIssueFields(issue: SlimIssue, names: string[]): Record<string, unknown> & { key: string } {
+  const picked: Record<string, unknown> & { key: string } = { key: issue.key };
+  for (const name of names) picked[name] = issue[name as keyof SlimIssue];
+  if (issue.custom) picked.custom = issue.custom;
+  if (issue.descriptionAdf !== undefined) picked.descriptionAdf = issue.descriptionAdf;
+  return picked;
+}
+
 export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchema>> =
   (_clients) => async (args) => {
-    const { key, jql, limit, cursor, fields, adf, includeGithubPrs, includeSlackThreads } = args;
-    const customFieldIds = fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
-    const slim = (issue: JiraIssue) =>
-      adf ? toSlimIssue(issue, customFieldIds, { adf }) : toSlimIssue(issue, customFieldIds);
-    const respond = async (issues: SlimIssue[], nextPageToken?: string) => {
+    const { key, jql, limit, cursor, fields, fieldsOnly, adf, includeGithubPrs, includeSlackThreads } = args;
+    if (fieldsOnly && !fields?.length) {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'fieldsOnly needs fields');
+    }
+    const only = fieldsOnly && fields ? resolveFieldsOnly(fields) : undefined;
+    const customFieldIds = only
+      ? only.custom
+      : fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
+    // fieldsOnly requests just the named fields; otherwise the slim default plus any extras.
+    const requestFields = only ? only.jiraFields : fields ? [...new Set([...DEV_FIELDS, ...fields])] : undefined;
+    const slim = (issue: JiraIssue) => {
+      const slimmed = adf ? toSlimIssue(issue, customFieldIds, { adf }) : toSlimIssue(issue, customFieldIds);
+      return only ? pickIssueFields(slimmed, only.standard) : slimmed;
+    };
+    const respond = async <T extends { key: string }>(issues: T[], nextPageToken?: string) => {
       const { items, warnings } = await attachIssueLinks(issues, { includeGithubPrs, includeSlackThreads }, _clients);
       const body = { ...paginated(items, nextPageToken), warnings: warnings.length > 0 ? warnings : undefined };
       return { content: [{ type: 'text' as const, text: JSON.stringify(body) }] };
     };
 
     if (key) {
-      // Always slim. If custom fields are requested, merge with DEV_FIELDS.
-      const issueFields = fields ? [...new Set([...DEV_FIELDS, ...fields])] : undefined;
-      const raw = issueFields
-        ? await _clients.jira.getIssue(key, issueFields)
-        : await _clients.jira.getIssue(key, [...DEV_FIELDS]);
+      const raw = await _clients.jira.getIssue(key, requestFields ?? [...DEV_FIELDS]);
       return respond([slim(raw)]);
     }
 
     if (jql) {
-      const searchFields = fields ? [...new Set([...DEV_FIELDS, ...fields])] : undefined;
       const searchOpts: { maxResults: number; nextPageToken?: string; fields?: string[] } = {
         maxResults: limit,
         nextPageToken: cursor,
       };
-      if (searchFields) {
-        searchOpts.fields = searchFields;
+      if (requestFields) {
+        searchOpts.fields = requestFields;
       }
       const result: SearchResult = await _clients.jira.search(jql, searchOpts);
       return respond(result.issues.map(slim), result.isLast ? undefined : result.nextPageToken);
