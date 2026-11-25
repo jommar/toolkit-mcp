@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { FigmaClient, type FigmaComment, type FigmaStyle, type FigmaVersion } from '../../services/index.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { zodToJsonSchema } from '../helpers.js';
+import type { ToolDescriptor } from '../index.js';
+import { ADDITIVE_HINTS, READ_ONLY_HINTS } from '../register.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -84,8 +85,8 @@ type ToolHandler<T = unknown> = (
 
 function wrapError<T>(fn: () => Promise<T>): Promise<T> {
   return fn().catch((err) => {
-    throw new McpError(
-      ErrorCode.InternalError,
+    throw new ProtocolError(
+      ProtocolErrorCode.InternalError,
       err instanceof Error ? err.message : String(err),
     );
   });
@@ -197,50 +198,69 @@ export const figmaPostCommentHandler: ToolHandler<z.infer<typeof figmaPostCommen
 // Tool Descriptors
 // ---------------------------------------------------------------------------
 
-export const figmaToolDescriptors = [
+export const figmaToolDescriptors: ToolDescriptor[] = [
   {
     name: 'figma_get_me',
+    title: 'Get Figma user',
     description: 'Get the authenticated Figma user profile.',
-    inputSchema: zodToJsonSchema(figmaGetMeSchema),
+    inputSchema: figmaGetMeSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_file',
+    title: 'Get Figma file',
     description: 'Get a Figma file by its key.',
-    inputSchema: zodToJsonSchema(figmaGetFileSchema),
+    inputSchema: figmaGetFileSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_nodes',
+    title: 'Get Figma nodes',
     description: 'Get specific nodes from a Figma file by their IDs.',
-    inputSchema: zodToJsonSchema(figmaGetNodesSchema),
+    inputSchema: figmaGetNodesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_images',
+    title: 'Export Figma images',
     description: 'Export images for specific nodes in a Figma file.',
-    inputSchema: zodToJsonSchema(figmaGetImagesSchema),
+    inputSchema: figmaGetImagesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_comments',
+    title: 'Get Figma comments',
     description: 'Get comments on a Figma file.',
-    inputSchema: zodToJsonSchema(figmaGetCommentsSchema),
+    inputSchema: figmaGetCommentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_styles',
+    title: 'Get Figma styles',
     description: 'Get styles published to a Figma file.',
-    inputSchema: zodToJsonSchema(figmaGetStylesSchema),
+    inputSchema: figmaGetStylesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_variables',
+    title: 'Get Figma variables',
     description: 'Get local variables in a Figma file.',
-    inputSchema: zodToJsonSchema(figmaGetVariablesSchema),
+    inputSchema: figmaGetVariablesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_get_versions',
+    title: 'Get Figma versions',
     description: 'Get version history of a Figma file.',
-    inputSchema: zodToJsonSchema(figmaGetVersionsSchema),
+    inputSchema: figmaGetVersionsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'figma_post_comment',
+    title: 'Post Figma comment',
     description: 'Post a comment on a Figma file.',
-    inputSchema: zodToJsonSchema(figmaPostCommentSchema),
+    inputSchema: figmaPostCommentSchema,
+    // Adds a new comment on every call: a write, neither destructive nor idempotent.
+    annotations: ADDITIVE_HINTS,
   },
 ];

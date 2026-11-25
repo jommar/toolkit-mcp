@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolErrorCode, ProtocolError } from '@modelcontextprotocol/server';
 import { describeFailure, type BatchError } from '../../services/slack/batch-runner.js';
 
 const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
@@ -79,8 +79,8 @@ export class WriteGate<T = unknown> {
   }
 }
 
-function confirmationError(code: string, sentence: string): McpError {
-  return new McpError(ErrorCode.InvalidParams, `slack.${code}: ${sentence}`);
+function confirmationError(code: string, sentence: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `slack.${code}: ${sentence}`);
 }
 
 async function runInOrder<T, R>(

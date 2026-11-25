@@ -1,3 +1,5 @@
+import type { BatchEntry, BatchError, BatchOutcome } from '../batch-runner.js';
+
 export interface BatchItem {
   id: string;
   ref?: string;
@@ -38,3 +40,19 @@ export function messageOf(owner: string, index: number, textLength = 100) {
 }
 
 export const tick = (milliseconds: number) => new Promise<void>((done) => setTimeout(done, milliseconds));
+
+/** A batch entry with every variant's fields optional, so a test can read any field or assert it is absent. */
+export interface AnyBatchEntry<T> {
+  ref: string;
+  index: number;
+  status: BatchEntry<T>['status'];
+  items?: T[];
+  hasMore?: boolean;
+  nextPageToken?: string;
+  error?: BatchError;
+}
+
+/** `result` with its entries widened to `AnyBatchEntry` (a plain widening: every entry already fits it). */
+export function anyEntries<T>(result: BatchOutcome<T>): { results: AnyBatchEntry<T>[]; truncated: boolean } {
+  return result;
+}

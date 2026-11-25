@@ -1,77 +1,75 @@
-import { vi, describe, it, expect } from "vitest";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { readFileSync } from 'node:fs';
+import { describe, it, expect } from 'vitest';
 
-import { createHealthHandler } from "./mcp-health.js";
+import * as health from './mcp-health.js';
+import { createHealthHandler } from './mcp-health.js';
+import type { ToolDescriptor } from './integrations/index.js';
 
-describe("createHealthHandler", () => {
-  it("returns health with all integrations active", async () => {
+const PKG_VERSION = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string })
+  .version;
+
+function healthDescriptor(): ToolDescriptor {
+  const found = Object.values(health).find(
+    (value): value is ToolDescriptor => !!value && typeof value === 'object' && (value as ToolDescriptor).name === 'mcp_get_health',
+  );
+  if (!found) throw new Error('mcp-health.ts exports no descriptor named mcp_get_health');
+  return found;
+}
+
+describe('createHealthHandler', () => {
+  it('returns health with all integrations active and the package.json version', async () => {
     const handler = createHealthHandler(true, true, true, true, true, true);
     const result = await handler({});
 
     expect(result.content).toHaveLength(1);
-    const body = JSON.parse(result.content[0].text);
-    expect(body.serverVersion).toBe("0.3.0");
-    expect(body.integrations.jira).toBe(true);
-    expect(body.integrations.github).toBe(true);
-    expect(body.integrations.figma).toBe(true);
-    expect(body.integrations.confluence).toBe(true);
-    expect(body.integrations.jenkins).toBe(true);
-    expect(body.integrations.slack).toBe(true);
+    const body = JSON.parse((result.content[0] as { text: string }).text);
+    expect(body.serverVersion).toBe(PKG_VERSION);
+    expect(body.integrations).toEqual({
+      jira: true,
+      github: true,
+      figma: true,
+      confluence: true,
+      jenkins: true,
+      slack: true,
+    });
   });
 
-  it("defaults slack to false when the flag is omitted", async () => {
+  it('reports the running Node version as node', async () => {
+    const body = JSON.parse(((await createHealthHandler(false, false, false)({})).content[0] as { text: string }).text);
+    expect(body.node).toBe(process.version);
+  });
+
+  it('defaults slack to false when the flag is omitted', async () => {
     const handler = createHealthHandler(true, true, true, true, true);
-    const body = JSON.parse((await handler({})).content[0].text);
+    const body = JSON.parse(((await handler({})).content[0] as { text: string }).text);
     expect(body.integrations.slack).toBe(false);
   });
 
-  it("defaults jenkins to false when the flag is omitted", async () => {
+  it('defaults jenkins to false when the flag is omitted', async () => {
     const handler = createHealthHandler(true, true, true, true);
-    const body = JSON.parse((await handler({})).content[0].text);
+    const body = JSON.parse(((await handler({})).content[0] as { text: string }).text);
     expect(body.integrations.jenkins).toBe(false);
   });
 
-  it("returns health with no integrations active", async () => {
-    const handler = createHealthHandler(false, false, false, false);
-    const result = await handler({});
-
-    const body = JSON.parse(result.content[0].text);
-    expect(body.integrations.jira).toBe(false);
-    expect(body.integrations.github).toBe(false);
-    expect(body.integrations.figma).toBe(false);
-    expect(body.integrations.confluence).toBe(false);
-  });
-
-  it("returns health with mixed integration states", async () => {
+  it('returns health with mixed integration states', async () => {
     const handler = createHealthHandler(true, false, true);
-    const result = await handler({});
-
-    const body = JSON.parse(result.content[0].text);
+    const body = JSON.parse(((await handler({})).content[0] as { text: string }).text);
     expect(body.integrations.jira).toBe(true);
     expect(body.integrations.github).toBe(false);
     expect(body.integrations.figma).toBe(true);
+    expect(body.integrations.confluence).toBe(false);
+  });
+});
+
+describe('health descriptor', () => {
+  // Its hint values are pinned by the per-tool table in src/integrations/index.test.ts.
+  it('is titled', () => {
+    expect(healthDescriptor().title.trim().length).toBeGreaterThan(0);
   });
 
-  it("accepts null args", async () => {
-    const handler = createHealthHandler(false, false);
-    const result = await handler(null);
-    const body = JSON.parse(result.content[0].text);
-    expect(body.serverVersion).toBe("0.3.0");
-  });
-
-  it("accepts undefined args", async () => {
-    const handler = createHealthHandler(false, false);
-    const result = await handler(undefined);
-    const body = JSON.parse(result.content[0].text);
-    expect(body.serverVersion).toBe("0.3.0");
-  });
-
-  it("rejects unexpected parameters", async () => {
-    const handler = createHealthHandler(false, false);
-
-    await expect(handler({ extra: "param" })).rejects.toThrow(McpError);
-    await expect(handler({ extra: "param" })).rejects.toThrow(
-      "mcp_get_health does not accept parameters",
-    );
+  it('has a strict empty input schema: {} passes, any parameter is refused', () => {
+    const schema = healthDescriptor().inputSchema;
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ a: 1 }).success).toBe(false);
   });
 });

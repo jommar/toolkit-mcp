@@ -1,7 +1,11 @@
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
+import type { ToolDescriptor, ToolHandlerFn } from './integrations/index.js';
+import { READ_ONLY_HINTS } from './integrations/register.js';
+import { SERVER_INFO } from './server-info.js';
 
 export interface HealthResult {
   serverVersion: string;
+  node: string;
   integrations: {
     jira: boolean;
     github: boolean;
@@ -12,6 +16,15 @@ export interface HealthResult {
   };
 }
 
+/** The built-in health tool. Its schema is strict and empty, so the SDK refuses any argument before the handler runs. */
+export const healthDescriptor: ToolDescriptor = {
+  name: 'mcp_get_health',
+  title: 'Integration health',
+  description: 'Report which integrations are active.',
+  inputSchema: z.strictObject({}),
+  annotations: { ...READ_ONLY_HINTS, openWorldHint: false },
+};
+
 export function createHealthHandler(
   jiraActive: boolean,
   githubActive: boolean,
@@ -19,13 +32,11 @@ export function createHealthHandler(
   confluenceActive = false,
   jenkinsActive = false,
   slackActive = false,
-) {
-  return async (args: unknown): Promise<{ content: { type: 'text'; text: string }[] }> => {
-    if (args != null && typeof args === 'object' && Object.keys(args as Record<string, unknown>).length > 0) {
-      throw new McpError(ErrorCode.InvalidParams, 'mcp_get_health does not accept parameters');
-    }
+): ToolHandlerFn {
+  return async () => {
     const result: HealthResult = {
-      serverVersion: '0.3.0',
+      serverVersion: SERVER_INFO.version,
+      node: process.version,
       integrations: {
         jira: jiraActive,
         github: githubActive,

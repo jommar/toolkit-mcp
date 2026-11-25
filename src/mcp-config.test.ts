@@ -1,86 +1,110 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { loadMcpConfig } from './mcp-config.js';
+import { createLogger, loadMcpConfig } from './mcp-config.js';
 
 describe('loadMcpConfig', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     vi.unstubAllEnvs();
-    delete process.env.MCP_TRANSPORT;
-    delete process.env.MCP_PORT;
-    delete process.env.MCP_LOG_LEVEL;
+    vi.stubEnv('MCP_LOG_LEVEL', undefined);
   });
 
-  it('returns defaults when env vars are not set', () => {
-    const config = loadMcpConfig();
-
-    expect(config.transport).toBe('stdio');
-    expect(config.port).toBe(3000);
-    expect(config.logLevel).toBe('info');
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
-  it('reads MCP_TRANSPORT from env', () => {
-    vi.stubEnv('MCP_TRANSPORT', 'http');
-
-    const config = loadMcpConfig();
-    expect(config.transport).toBe('http');
+  it('defaults to info when MCP_LOG_LEVEL is not set', () => {
+    expect(loadMcpConfig()).toEqual({ logLevel: 'info' });
   });
 
-  it('falls back to stdio when MCP_TRANSPORT is empty string', () => {
-    vi.stubEnv('MCP_TRANSPORT', '');
-
-    const config = loadMcpConfig();
-    expect(config.transport).toBe('stdio');
-  });
-
-  it('falls back to stdio when MCP_TRANSPORT is invalid', () => {
-    vi.stubEnv('MCP_TRANSPORT', 'websocket');
-
-    const config = loadMcpConfig();
-    expect(config.transport).toBe('stdio');
-  });
-
-  it('reads MCP_PORT from env', () => {
-    vi.stubEnv('MCP_PORT', '8080');
-
-    const config = loadMcpConfig();
-    expect(config.port).toBe(8080);
-  });
-
-  it('falls back to default port when MCP_PORT is not a valid number', () => {
-    vi.stubEnv('MCP_PORT', 'not-a-number');
-
-    const config = loadMcpConfig();
-    expect(config.port).toBe(3000);
-  });
-
-  it('reads MCP_LOG_LEVEL from env', () => {
-    vi.stubEnv('MCP_LOG_LEVEL', 'debug');
-
-    const config = loadMcpConfig();
-    expect(config.logLevel).toBe('debug');
+  it.each(['silent', 'info', 'debug'] as const)('reads MCP_LOG_LEVEL=%s', (level) => {
+    vi.stubEnv('MCP_LOG_LEVEL', level);
+    expect(loadMcpConfig().logLevel).toBe(level);
   });
 
   it('falls back to info when MCP_LOG_LEVEL is empty string', () => {
     vi.stubEnv('MCP_LOG_LEVEL', '');
+    expect(loadMcpConfig().logLevel).toBe('info');
+  });
 
-    const config = loadMcpConfig();
-    expect(config.logLevel).toBe('info');
+  it('trims whitespace from MCP_LOG_LEVEL', () => {
+    vi.stubEnv('MCP_LOG_LEVEL', '  silent  ');
+    expect(loadMcpConfig().logLevel).toBe('silent');
+  });
+});
+
+describe('log level', () => {
+  // createLogger writes to stderr; vitest may route console.error separately, so both sinks are counted.
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+  let consoleError: ReturnType<typeof vi.spyOn>;
+  let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let consoleLog: ReturnType<typeof vi.spyOn>;
+  const written = () => [...stderrWrite.mock.calls, ...consoleError.mock.calls].map((c) => String(c[0]));
+
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stdoutWrite = vi.spyOn(process.stdout, 'write');
+    consoleLog = vi.spyOn(console, 'log');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('falls back to info when MCP_LOG_LEVEL is invalid', () => {
     vi.stubEnv('MCP_LOG_LEVEL', 'verbose');
-
-    const config = loadMcpConfig();
-    expect(config.logLevel).toBe('info');
+    expect(loadMcpConfig().logLevel).toBe('info');
   });
 
-  it('trims whitespace from env var values', () => {
-    vi.stubEnv('MCP_TRANSPORT', '  http  ');
-    vi.stubEnv('MCP_LOG_LEVEL', '  silent  ');
+  it('holds logLevel only: MCP_TRANSPORT and MCP_PORT are no longer read', () => {
+    vi.stubEnv('MCP_TRANSPORT', 'http');
+    vi.stubEnv('MCP_PORT', '1');
+    vi.stubEnv('MCP_LOG_LEVEL', 'debug');
+    expect(loadMcpConfig()).toEqual({ logLevel: 'debug' });
+  });
 
-    const config = loadMcpConfig();
-    expect(config.transport).toBe('http');
-    expect(config.logLevel).toBe('silent');
+  it('debug writes debug, info and error lines to stderr', () => {
+    const log = createLogger('debug');
+    log.debug('tool x ok 3ms');
+    log.info('started');
+    log.error('broke');
+
+    const lines = written();
+    expect(lines).toHaveLength(3);
+    expect(lines.some((l) => l.includes('tool x ok 3ms'))).toBe(true);
+    expect(lines.some((l) => l.includes('started'))).toBe(true);
+    expect(lines.some((l) => l.includes('broke'))).toBe(true);
+  });
+
+  it('info writes info and error lines but no debug line', () => {
+    const log = createLogger('info');
+    log.debug('tool x ok 3ms');
+    log.info('started');
+    log.error('broke');
+
+    const lines = written();
+    expect(lines).toHaveLength(2);
+    expect(lines.some((l) => l.includes('tool x ok 3ms'))).toBe(false);
+  });
+
+  it('silent writes nothing at all', () => {
+    const log = createLogger('silent');
+    log.debug('tool x ok 3ms');
+    log.info('started');
+    log.error('broke');
+
+    expect(written()).toEqual([]);
+  });
+
+  it('never writes to stdout, which belongs to the protocol', () => {
+    const log = createLogger('debug');
+    log.debug('d');
+    log.info('i');
+    log.error('e');
+
+    expect(stdoutWrite).not.toHaveBeenCalled();
+    expect(consoleLog).not.toHaveBeenCalled();
   });
 });

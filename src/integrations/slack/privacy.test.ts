@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { vi, describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
-import { ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 vi.mock('axios', async () => {
   const actual = await vi.importActual<typeof import('axios')>('axios');
@@ -44,6 +44,7 @@ import {
 import { READ_CALLS, postItem, uploadItem } from './__fixtures__/wiring/calls.js';
 import { rawMessage } from './__fixtures__/tools/fake-slack.js';
 import { SlackModule } from './index.js';
+import { rawToolHandlers } from '../../__fixtures__/mcp.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 
 const PERSONAL_KEYS = ['text', 'email', 'title', 'phone', 'real_name'];
@@ -85,7 +86,7 @@ beforeEach(() => {
   writeAppConfig();
   writeToken();
   fakeSlackApi.reset();
-  handlers = new SlackModule().createToolHandlers({ slack: new SlackClient() }) as ToolHandlers;
+  handlers = rawToolHandlers(new SlackModule(), { slack: new SlackClient() }) as ToolHandlers;
   logs = captureConsole();
   observations = [];
 });
@@ -251,7 +252,7 @@ describe('email as an optional user field', () => {
       fields: ['real_name', 'title', 'tz', 'email'],
     });
 
-    expect(refused.thrown?.code).toBe(ErrorCode.InvalidParams);
+    expect(refused.thrown?.code).toBe(ProtocolErrorCode.InvalidParams);
     const items = itemsOf(allowed);
     expect(items.length).toBe(1);
     expect(items[0].real_name).toBe(REAL_NAME_SENTINEL);

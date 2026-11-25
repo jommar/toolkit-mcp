@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runBatch } from './batch-runner.js';
 import {
+  anyEntries,
   deferred,
   failure,
   keyOf,
@@ -30,7 +31,7 @@ describe('runBatch input order, dedupe and per-item failure', () => {
       { id: 'C' },
     ];
 
-    const { results, truncated } = await runBatch(items, { key: keyOf, exec, resume: resumeCursorOf, limits: LIMITS });
+    const { results, truncated } = anyEntries(await runBatch(items, { key: keyOf, exec, resume: resumeCursorOf, limits: LIMITS }));
 
     expect(results.map((entry) => entry.index)).toEqual([0, 1, 2, 3]);
     expect(results.map((entry) => entry.ref)).toEqual(['first-b', 'only-a', 'second-b', 'C']);
@@ -60,7 +61,7 @@ describe('runBatch input order, dedupe and per-item failure', () => {
 
     await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(3));
     slowFirst.resolve();
-    const { results } = await running;
+    const { results } = anyEntries(await running);
 
     expect(results.map((entry) => entry.ref)).toEqual(['A', 'B', 'C']);
     expect(results.map((entry) => entry.items?.[0].owner)).toEqual(['A', 'B', 'C']);
@@ -69,7 +70,7 @@ describe('runBatch input order, dedupe and per-item failure', () => {
   it('passes an item\'s own next-page token and hasMore through untouched', async () => {
     const exec = vi.fn(async () => page([messageOf('A', 0)], { hasMore: true, nextPageToken: 'slack-next-page' }));
 
-    const { results } = await runBatch([{ id: 'A' }], { key: keyOf, exec, resume: resumeCursorOf, limits: LIMITS });
+    const { results } = anyEntries(await runBatch([{ id: 'A' }], { key: keyOf, exec, resume: resumeCursorOf, limits: LIMITS }));
 
     expect(results[0]).toMatchObject({ status: 'ok', hasMore: true, nextPageToken: 'slack-next-page' });
   });
@@ -90,12 +91,12 @@ describe('runBatch input order, dedupe and per-item failure', () => {
   it('accepts exactly the cap', async () => {
     const exec = vi.fn(async (item: BatchItem) => page([messageOf(item.id, 0)]));
 
-    const { results } = await runBatch([{ id: 'A' }, { id: 'B' }, { id: 'C' }], {
+    const { results } = anyEntries(await runBatch([{ id: 'A' }, { id: 'B' }, { id: 'C' }], {
       key: keyOf,
       exec,
       resume: resumeCursorOf,
       limits: { maxItems: 3 },
-    });
+    }));
 
     expect(results.map((entry) => entry.status)).toEqual(['ok', 'ok', 'ok']);
   });

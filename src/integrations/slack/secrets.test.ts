@@ -68,6 +68,7 @@ import {
   TOKEN_SENTINEL,
 } from './__fixtures__/wiring/sentinels.js';
 import { SlackModule } from './index.js';
+import { rawToolHandlers } from '../../__fixtures__/mcp.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 
 const SECRETS: Array<[string, string]> = [
@@ -197,7 +198,7 @@ beforeEach(() => {
   resetSandbox();
   writeAppConfig();
   fakeSlackApi.reset();
-  handlers = new SlackModule().createToolHandlers({ slack: new SlackClient() }) as ToolHandlers;
+  handlers = rawToolHandlers(new SlackModule(), { slack: new SlackClient() }) as ToolHandlers;
   logs = captureConsole();
   observations = [];
 });

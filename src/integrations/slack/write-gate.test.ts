@@ -14,7 +14,7 @@ const THREE_ITEMS = [
 
 function newGate() {
   const clock = createClock();
-  return { clock, gate: new WriteGate({ now: clock.now }) };
+  return { clock, gate: new WriteGate<(typeof THREE_ITEMS)[number]>({ now: clock.now }) };
 }
 
 describe('WriteGate', () => {

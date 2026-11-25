@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { GitHubClient, JiraClient, ISSUE_KEY_PATTERN } from '../../services/index.js';
-import type { PrInfo, PullRequestDetail, PullRequestReview, PullRequestChecks, PrReviewComment, PrReviewSubmitted } from '../../services/index.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { paginated, zodToJsonSchema } from '../helpers.js';
+import type { PrInfo } from '../../services/index.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import type { ResourceDescriptor, ToolDescriptor } from '../index.js';
+import { ADDITIVE_HINTS, DESTRUCTIVE_HINTS, DESTRUCTIVE_NON_IDEMPOTENT_HINTS, IDEMPOTENT_HINTS, READ_ONLY_HINTS } from '../register.js';
+import { paginated } from '../helpers.js';
 import type { PageResult } from '../../services/github/github-client.js';
 import { toPrCommentAck, toPrReviewAck, toPrReviewCommentAck, toPrUpdateAck } from '../../services/github/github-acks.js';
 
@@ -396,7 +398,7 @@ function parsePageCursor(cursor: string | undefined): number {
   const trimmed = cursor.trim();
   const n = parseInt(trimmed, 10);
   if (String(n) !== trimmed || n < 1) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a positive integer.`);
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a positive integer.`);
   }
   return n;
 }
@@ -407,7 +409,7 @@ function parseOffsetCursor(cursor: string | undefined): number {
   const trimmed = cursor.trim();
   const n = parseInt(trimmed, 10);
   if (String(n) !== trimmed || n < 0) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a non-negative integer.`);
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a non-negative integer.`);
   }
   return n;
 }
@@ -500,7 +502,7 @@ export const githubGetPrsHandler: ToolHandler<z.infer<typeof githubGetPrsSchema>
       };
     }
 
-    throw new McpError(ErrorCode.InvalidParams, 'Provide either issueKey or keys');
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Provide either issueKey or keys');
   };
 
 export const githubGetCopilotUnresolvedPrsHandler: ToolHandler<z.infer<typeof githubGetCopilotUnresolvedPrsSchema>> =
@@ -518,8 +520,8 @@ export const githubGetCodeReviewReadyHandler: ToolHandler<z.infer<typeof githubG
       prState = 'open',
     } = args;
     if (!clients.jira) {
-      throw new McpError(
-        ErrorCode.InternalError,
+      throw new ProtocolError(
+        ProtocolErrorCode.InternalError,
         'Jira integration not configured — JIRA_BASE_URL, JIRA_EMAIL, and JIRA_TOKEN are required.',
       );
     }
@@ -847,165 +849,228 @@ export const githubDismissPrReviewHandler: ToolHandler<z.infer<typeof githubDism
     return { content: [{ type: 'text', text: JSON.stringify(result) }] };
   };
 
-const copilotUnresolvedPrsInputSchema = zodToJsonSchema(githubGetCopilotUnresolvedPrsSchema);
-const copilotUnresolvedPrsProperties = copilotUnresolvedPrsInputSchema.properties as Record<string, Record<string, unknown>>;
-Object.assign(copilotUnresolvedPrsProperties.prNumbers, {
-  items: { type: 'integer', exclusiveMinimum: 0, maximum: 2147483647 },
-});
-Object.assign(copilotUnresolvedPrsProperties.limit, { type: 'integer', minimum: 1, maximum: 100 });
-Object.assign(copilotUnresolvedPrsProperties.cursor, { pattern: '^[A-Za-z0-9_-]+$' });
-
-/** All tool descriptors for the ListToolsRequestSchema response. */
-export const githubToolDescriptors = [
+/** All tool descriptors; register.ts registers them with the server. */
+export const githubToolDescriptors: ToolDescriptor[] = [
   {
     name: 'github_get_copilot_unresolved_prs',
+    title: 'Get GitHub PRs with unresolved Copilot comments',
     description: 'List PRs with full originating comment bodies from every unresolved Copilot-started review thread.',
-    inputSchema: copilotUnresolvedPrsInputSchema,
+    inputSchema: githubGetCopilotUnresolvedPrsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_code_review_ready',
+    title: 'Get Jira tickets ready for code review',
     description:
       'Fetch Jira tickets in a given status (default "Ready For Code Review") and report which have every PR approved by a human.',
-    inputSchema: zodToJsonSchema(githubGetCodeReviewReadySchema),
+    inputSchema: githubGetCodeReviewReadySchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_prs',
+    title: 'Get GitHub PRs for issue keys',
     description: 'Find pull requests for one or more issue keys.',
-    inputSchema: zodToJsonSchema(githubGetPrsSchema),
+    inputSchema: githubGetPrsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_create_pr',
+    title: 'Create GitHub PR',
     description: 'Create a pull request on GitHub.',
-    inputSchema: zodToJsonSchema(githubCreatePrSchema),
+    inputSchema: githubCreatePrSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'github_add_pr_comment',
+    title: 'Add GitHub PR comment',
     description: 'Add an issue-level comment to a pull request.',
-    inputSchema: zodToJsonSchema(githubAddPrCommentSchema),
+    inputSchema: githubAddPrCommentSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'github_get_pr_comments',
+    title: 'List GitHub PR comments',
     description: 'List issue-level (conversation) comments on a pull request.',
-    inputSchema: zodToJsonSchema(githubGetPrCommentsSchema),
+    inputSchema: githubGetPrCommentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_update_pr_comment',
+    title: 'Update GitHub PR comment',
     description: 'Update an existing issue-level comment on a pull request by comment ID.',
-    inputSchema: zodToJsonSchema(githubUpdatePrCommentSchema),
+    inputSchema: githubUpdatePrCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_list_branches',
+    title: 'List GitHub branches',
     description: 'List branches for a repository.',
-    inputSchema: zodToJsonSchema(githubListBranchesSchema),
+    inputSchema: githubListBranchesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_pr_details',
+    title: 'Get GitHub PR details',
     description: 'Get full PR details (body, files changed, additions/deletions, mergeable state — may be null if still computing, base/head branches) by repo + PR number.',
-    inputSchema: zodToJsonSchema(githubGetPrDetailsSchema),
+    inputSchema: githubGetPrDetailsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_pr_reviews',
+    title: 'Get GitHub PR reviews',
     description: 'Get PR review comments and review thread summaries.',
-    inputSchema: zodToJsonSchema(githubGetPrReviewsSchema),
+    inputSchema: githubGetPrReviewsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_pr_checks',
+    title: 'Get GitHub PR checks',
     description: 'Get PR status check / CI results (check-runs for the latest commit on the PR).',
-    inputSchema: zodToJsonSchema(githubGetPrChecksSchema),
+    inputSchema: githubGetPrChecksSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_search_prs',
+    title: 'Search GitHub PRs',
     description: 'Flexible PR search by author, repo, state, or free-text query.',
-    inputSchema: zodToJsonSchema(githubSearchPrsSchema),
+    inputSchema: githubSearchPrsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_update_pr',
+    title: 'Update GitHub PR',
     description: 'Update an existing pull request (title, body, state, base branch, draft status, or maintainer settings). Returns a short ack (number, state, title, htmlUrl, updatedAt, branches), not the body.',
-    inputSchema: zodToJsonSchema(githubUpdatePrSchema),
+    inputSchema: githubUpdatePrSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_create_pr_review_comment',
+    title: 'Create GitHub PR review comment',
     description: 'Create an inline review comment on a pull request diff, reply to an existing one via `inReplyTo`, optionally with a suggested change.',
-    inputSchema: zodToJsonSchema(githubCreatePrReviewCommentSchema),
+    inputSchema: githubCreatePrReviewCommentSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'github_get_pr_review_comments',
+    title: 'List GitHub PR review comments',
     description: 'List inline review comments on a pull request diff.',
-    inputSchema: zodToJsonSchema(githubGetPrReviewCommentsSchema),
+    inputSchema: githubGetPrReviewCommentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_update_pr_review_comment',
+    title: 'Update GitHub PR review comment',
     description: 'Update an existing inline review comment.',
-    inputSchema: zodToJsonSchema(githubUpdatePrReviewCommentSchema),
+    inputSchema: githubUpdatePrReviewCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_delete_pr_review_comment',
+    title: 'Delete GitHub PR review comment',
     description: 'Delete an inline review comment from a pull request.',
-    inputSchema: zodToJsonSchema(githubDeletePrReviewCommentSchema),
+    inputSchema: githubDeletePrReviewCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_submit_pr_review',
+    title: 'Submit GitHub PR review',
     description: 'Submit a formal pull request review (APPROVE, REQUEST_CHANGES, or COMMENT), optionally with inline comments.',
-    inputSchema: zodToJsonSchema(githubSubmitPrReviewSchema),
+    inputSchema: githubSubmitPrReviewSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'github_get_pr_files',
+    title: 'List GitHub PR files',
     description: 'Get the list of files changed in a pull request (filename, status, additions, deletions). Set includePatch to also get each diff, truncated at 2000 characters.',
-    inputSchema: zodToJsonSchema(githubGetPrFilesSchema),
+    inputSchema: githubGetPrFilesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_pr_commits',
+    title: 'List GitHub PR commits',
     description: 'Get the list of commits in a pull request, with author and SHA details.',
-    inputSchema: zodToJsonSchema(githubGetPrCommitsSchema),
+    inputSchema: githubGetPrCommitsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_file_contents',
+    title: 'Get GitHub file contents',
     description: 'Get the contents of a file in a repository, base64-decoded up to 100KB. Optional startLine/endLine return only that line range.',
-    inputSchema: zodToJsonSchema(githubGetFileContentsSchema),
+    inputSchema: githubGetFileContentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_get_pr_review_threads',
+    title: 'List GitHub PR review threads',
     description: 'List all review threads on a pull request, with resolution and staleness info.',
-    inputSchema: zodToJsonSchema(githubGetPrReviewThreadsSchema),
+    inputSchema: githubGetPrReviewThreadsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'github_resolve_review_thread',
+    title: 'Resolve GitHub review thread',
     description: 'Resolve a review thread by its GraphQL node ID.',
-    inputSchema: zodToJsonSchema(githubResolveReviewThreadSchema),
+    inputSchema: githubResolveReviewThreadSchema,
+    annotations: IDEMPOTENT_HINTS,
   },
   {
     name: 'github_unresolve_review_thread',
+    title: 'Unresolve GitHub review thread',
     description: 'Unresolve a review thread by its GraphQL node ID.',
-    inputSchema: zodToJsonSchema(githubUnresolveReviewThreadSchema),
+    inputSchema: githubUnresolveReviewThreadSchema,
+    annotations: IDEMPOTENT_HINTS,
   },
   {
     name: 'github_delete_pr_issue_comment',
+    title: 'Delete GitHub PR comment',
     description: 'Delete an issue-level comment on a pull request by comment ID.',
-    inputSchema: zodToJsonSchema(githubDeletePrIssueCommentSchema),
+    inputSchema: githubDeletePrIssueCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_merge_pr',
+    title: 'Merge GitHub PR',
     description: 'Merge a pull request with optional merge method and SHA guard.',
-    inputSchema: zodToJsonSchema(githubMergePrSchema),
+    inputSchema: githubMergePrSchema,
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT_HINTS,
   },
   {
     name: 'github_request_pr_reviewers',
+    title: 'Request GitHub PR reviewers',
     description: 'Request reviewers on a pull request by username or team slug.',
-    inputSchema: zodToJsonSchema(githubRequestPrReviewersSchema),
+    inputSchema: githubRequestPrReviewersSchema,
+    annotations: IDEMPOTENT_HINTS,
   },
   {
     name: 'github_update_pr_labels',
+    title: 'Replace GitHub PR labels',
     description: 'Replace all labels on a pull request.',
-    inputSchema: zodToJsonSchema(githubUpdatePrLabelsSchema),
+    inputSchema: githubUpdatePrLabelsSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'github_update_pr_assignees',
+    title: 'Add GitHub PR assignees',
     description: 'Add assignees to a pull request.',
-    inputSchema: zodToJsonSchema(githubUpdatePrAssigneesSchema),
+    inputSchema: githubUpdatePrAssigneesSchema,
+    annotations: IDEMPOTENT_HINTS,
   },
   {
     name: 'github_dismiss_pr_review',
+    title: 'Dismiss GitHub PR review',
     description: 'Dismiss a pull request review by ID with a reason.',
-    inputSchema: zodToJsonSchema(githubDismissPrReviewSchema),
+    inputSchema: githubDismissPrReviewSchema,
+    annotations: DESTRUCTIVE_HINTS,
+  },
+];
+
+/** Resources and resource templates the GitHub module serves; reads go through GitHubModule.getResourceHandler. */
+export const githubResourceDescriptors: ResourceDescriptor[] = [
+  {
+    name: 'github_prs',
+    title: 'GitHub PRs for a Jira issue',
+    description: 'Pull requests linked to a Jira issue key, as JSON.',
+    mimeType: 'application/json',
+    uriTemplate: 'github://prs/{issueKey}',
   },
 ];

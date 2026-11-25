@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { ErrorCode, McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolErrorCode, ProtocolError, type CallToolResult } from '@modelcontextprotocol/server';
 import {
   runBatch,
   type BatchEntry,
@@ -29,11 +29,11 @@ const TOOL = {
 
 const DEFAULT_LIMIT = 20;
 const DEFAULT_MAX_TEXT_CHARS = 300;
-const SEARCH_QUERY_CAP = 5;
-const MESSAGE_CAP = 20;
-const THREAD_CAP = 20;
-const CHANNEL_CAP = 20;
-const USER_ID_CAP = 100;
+export const SEARCH_QUERY_CAP = 5;
+export const MESSAGE_CAP = 20;
+export const THREAD_CAP = 20;
+export const CHANNEL_CAP = 20;
+export const USER_ID_CAP = 100;
 const USER_OTHER_CAP = 20;
 const DIRECT_USER_LOOKUP_LIMIT = 10;
 // conversations.replies returns the root first and counts it toward the limit, so one entry would hide a reply.
@@ -289,7 +289,6 @@ class ItemFailure extends Error {
 
 export function slackSearchMessagesHandler(ctx: ReadToolContext) {
   return async (args: SearchArgs): Promise<CallToolResult> => {
-    assertBatchSize(args.queries.length, SEARCH_QUERY_CAP);
     const run = readRun(ctx, await connectedTeam(ctx), args, allowedFields(args.fields, MESSAGE_FIELDS));
     const upper = frozenUpper(ctx.now());
     return jsonResult(await runPlanned(args.queries.map((input) => planSearch(input, run, upper)), run));
@@ -298,7 +297,6 @@ export function slackSearchMessagesHandler(ctx: ReadToolContext) {
 
 export function slackGetMessagesHandler(ctx: ReadToolContext) {
   return async (args: MessagesArgs): Promise<CallToolResult> => {
-    assertBatchSize(args.messages.length, MESSAGE_CAP);
     const run = readRun(ctx, await connectedTeam(ctx), args, allowedFields(args.fields, MESSAGE_FIELDS));
     return jsonResult(await runPlanned(args.messages.map((input) => planMessageItem(input, run)), run));
   };
@@ -306,7 +304,6 @@ export function slackGetMessagesHandler(ctx: ReadToolContext) {
 
 export function slackGetThreadsHandler(ctx: ReadToolContext) {
   return async (args: ThreadsArgs): Promise<CallToolResult> => {
-    assertBatchSize(args.threads.length, THREAD_CAP);
     const run = readRun(ctx, await connectedTeam(ctx), args, allowedFields(args.fields, MESSAGE_FIELDS));
     return jsonResult(await runPlanned(args.threads.map((input) => planThreadItem(input, run)), run));
   };
@@ -314,7 +311,6 @@ export function slackGetThreadsHandler(ctx: ReadToolContext) {
 
 export function slackGetChannelsHandler(ctx: ReadToolContext) {
   return async (args: ChannelsArgs): Promise<CallToolResult> => {
-    assertBatchSize(args.channels.length, CHANNEL_CAP);
     const run = readRun(ctx, await connectedTeam(ctx), args, []);
     return jsonResult(await runPlanned(args.channels.map((input) => planChannelItem(input, run)), run));
   };
@@ -324,6 +320,7 @@ export function slackGetUsersHandler(ctx: ReadToolContext) {
   return async (args: UsersArgs): Promise<CallToolResult> => {
     const userIdItems = args.users.filter((input) => input.me || isUserIdItem(input)).length;
     const allUserIds = args.users.every(isUserIdItem);
+    // Kept: the published schema caps the list at 100 ids; the 20-item cap for other kinds is enforced here alone.
     assertBatchSize(args.users.length, allUserIds ? USER_ID_CAP : USER_OTHER_CAP);
     const fields = allowedFields(args.fields, USER_FIELDS);
     const run = readRun(ctx, await connectedTeam(ctx), args, fields, userIdItems > DIRECT_USER_LOOKUP_LIMIT);
@@ -1046,8 +1043,8 @@ function parseTarget<T>(target: string): T {
 
 function assertBatchSize(count: number, cap: number): void {
   if (count > cap) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       `slack.batch_too_large: ${count} items were sent, at most ${cap} fit in one call; split the list.`,
     );
   }
@@ -1061,12 +1058,12 @@ function allowedFields(requested: string[] = [], allowed: ReadonlySet<string>): 
   return requested;
 }
 
-function invalidParams(message: string): McpError {
-  return new McpError(ErrorCode.InvalidParams, message);
+function invalidParams(message: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, message);
 }
 
-export function callError(code: string, sentence: string, nextStep: string): McpError {
-  return new McpError(ErrorCode.InvalidRequest, `slack.${code}: ${sentence} ${nextStep}`);
+export function callError(code: string, sentence: string, nextStep: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidRequest, `slack.${code}: ${sentence} ${nextStep}`);
 }
 
 export function jsonResult(body: unknown): CallToolResult {

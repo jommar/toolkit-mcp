@@ -47,6 +47,7 @@ import {
   messageLink,
 } from './__fixtures__/wiring/sentinels.js';
 import { SlackModule } from './index.js';
+import { rawToolHandlers } from '../../__fixtures__/mcp.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 import { oneShotSha256 } from '../../services/slack/__fixtures__/bytes.js';
 import { rawMessage } from './__fixtures__/tools/fake-slack.js';
@@ -65,7 +66,7 @@ beforeEach(() => {
   writeAppConfig();
   writeToken();
   fakeSlackApi.reset();
-  handlers = new SlackModule().createToolHandlers({ slack: new SlackClient() }) as ToolHandlers;
+  handlers = rawToolHandlers(new SlackModule(), { slack: new SlackClient() }) as ToolHandlers;
 });
 
 afterEach(() => {

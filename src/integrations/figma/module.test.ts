@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolError } from "@modelcontextprotocol/server";
 
 vi.mock("../../services/index.js", () => ({
   FigmaClient: class MockFigmaClient {},
@@ -62,11 +62,11 @@ describe("figmaGetMeHandler", () => {
     expect(parsed).toEqual(user);
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getMe.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetMeHandler({ figma: mockFigma as any });
-    await expect(handler({})).rejects.toThrow(McpError);
+    await expect(handler({})).rejects.toThrow(ProtocolError);
     await expect(handler({})).rejects.toThrow("API error");
   });
 });
@@ -140,11 +140,11 @@ describe("figmaGetFileHandler", () => {
     expect(() => figmaGetFileSchema.parse({ fileKey: "" })).toThrow();
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getFile.mockRejectedValue(new Error("Not found"));
 
     const handler = figmaGetFileHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("Not found");
   });
 });
@@ -184,12 +184,12 @@ describe("figmaGetNodesHandler", () => {
     ).toThrow();
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getNodes.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetNodesHandler({ figma: mockFigma as any });
     await expect(handler({ fileKey: "ABC123", ids: "1:2" })).rejects.toThrow(
-      McpError,
+      ProtocolError,
     );
     await expect(handler({ fileKey: "ABC123", ids: "1:2" })).rejects.toThrow(
       "API error",
@@ -210,14 +210,13 @@ describe("figmaGetImagesHandler", () => {
     mockFigma.getImages.mockResolvedValue(images);
 
     const handler = figmaGetImagesHandler({ figma: mockFigma as any });
-    const result = await handler({ fileKey: "ABC123", ids: "1:2" });
+    const result = await handler(figmaGetImagesSchema.parse({ fileKey: "ABC123", ids: "1:2" }));
 
-    // Zod defaults are applied at the module level, not at the raw handler
     expect(mockFigma.getImages).toHaveBeenCalledWith(
       "ABC123",
       "1:2",
-      undefined,
-      undefined,
+      "png",
+      1,
     );
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(images);
@@ -227,13 +226,13 @@ describe("figmaGetImagesHandler", () => {
     mockFigma.getImages.mockResolvedValue({ images: {} });
 
     const handler = figmaGetImagesHandler({ figma: mockFigma as any });
-    await handler({ fileKey: "ABC123", ids: "1:2", format: "svg" });
+    await handler(figmaGetImagesSchema.parse({ fileKey: "ABC123", ids: "1:2", format: "svg" }));
 
     expect(mockFigma.getImages).toHaveBeenCalledWith(
       "ABC123",
       "1:2",
       "svg",
-      undefined,
+      1,
     );
   });
 
@@ -256,14 +255,14 @@ describe("figmaGetImagesHandler", () => {
     ).toThrow();
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getImages.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetImagesHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123", ids: "1:2" })).rejects.toThrow(
-      McpError,
+    await expect(handler(figmaGetImagesSchema.parse({ fileKey: "ABC123", ids: "1:2" }))).rejects.toThrow(
+      ProtocolError,
     );
-    await expect(handler({ fileKey: "ABC123", ids: "1:2" })).rejects.toThrow(
+    await expect(handler(figmaGetImagesSchema.parse({ fileKey: "ABC123", ids: "1:2" }))).rejects.toThrow(
       "API error",
     );
   });
@@ -307,11 +306,11 @@ describe("figmaGetCommentsHandler", () => {
     ]);
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getComments.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetCommentsHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("API error");
   });
 });
@@ -349,11 +348,11 @@ describe("figmaGetStylesHandler", () => {
     ]);
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getStyles.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetStylesHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("API error");
   });
 });
@@ -384,11 +383,11 @@ describe("figmaGetVariablesHandler", () => {
     expect(parsed).toEqual(variablesResponse);
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getVariables.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetVariablesHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("API error");
   });
 });
@@ -439,11 +438,11 @@ describe("figmaPostCommentHandler", () => {
     ).toThrow();
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.postComment.mockRejectedValue(new Error("API error"));
 
     const handler = figmaPostCommentHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123", message: "Hi" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123", message: "Hi" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123", message: "Hi" })).rejects.toThrow("API error");
   });
 });
@@ -478,11 +477,11 @@ describe("figmaGetVersionsHandler", () => {
     ]);
   });
 
-  it("wraps client errors as McpError", async () => {
+  it("wraps client errors as ProtocolError", async () => {
     mockFigma.getVersions.mockRejectedValue(new Error("API error"));
 
     const handler = figmaGetVersionsHandler({ figma: mockFigma as any });
-    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(McpError);
+    await expect(handler({ fileKey: "ABC123" })).rejects.toThrow(ProtocolError);
     await expect(handler({ fileKey: "ABC123" })).rejects.toThrow("API error");
   });
 });

@@ -168,7 +168,7 @@ A read returns `{results, truncated}`. `results` has one entry per input item, i
 | `hasMore`, `nextPageToken` | paging, below |
 | `error` | `{code, message, retry_after_s?}` when `error` |
 
-One failed item never fails the batch. Identical items are fetched once. An item list over the tool's cap fails the whole call with `slack.batch_too_large` before anything is fetched.
+One failed item never fails the batch. Identical items are fetched once. Each tool's item cap is published as the array's `maxItems` in its input schema (5 searches, 20 messages, threads or channels, 100 user ids, 10 write items), so a list over the cap is refused by input validation before anything is fetched, as an `isError` result naming the field. The one cap the schema cannot express is `slack_get_users` mixing kinds: a list of 21 to 100 items that are not all user ids fails the whole call with `slack.batch_too_large`.
 
 Limits per call: 4 requests to Slack in flight, about 50 Slack calls in total (checked before each item starts, so a few in-flight items can carry the total past it, and a user-directory fetch counts once), and 100,000 characters of response. Items that were not reached because the call budget ran out, or because Slack rate-limited the call, come back `not_attempted` with a cursor to resume from. A rate limit that survives retries fails that item `rate_limited` with `retry_after_s`, and no further items are started. If the response is too large, whole messages are dropped from the end of the results, `truncated` is `true`, and the affected entries carry a cursor that starts at the first omitted message.
 
@@ -306,7 +306,7 @@ These are user-token scopes, and they apply to the app login only: an adopted we
 
 ## 9. Errors
 
-Call-level errors are thrown, with the message `slack.<code>: <what happened> <next step>`. Bad input (an unknown field name, a search with no criteria) is rejected as invalid input.
+Call-level errors come back over MCP as a tool result with `isError: true` and the text `slack.<code>: <what happened> <next step>`. Bad input (an unknown field name, a search with no criteria, a list over the published item cap) is refused by input validation before the tool runs, also as an `isError` result whose text names the field.
 
 | Code | When | Next step |
 | --- | --- | --- |
@@ -327,7 +327,7 @@ Call-level errors are thrown, with the message `slack.<code>: <what happened> <n
 | `file_not_downloadable` | Slack does not store the file itself (remote, deleted, unsupported canvas, Google Doc, Slack Connect), its size or address is missing or invalid, or its address is not https on an exact Slack file host | none from this tool |
 | `download_not_authorized` | Slack answered with a sign-in page in place of a non-HTML file, or redirected off the https file hosts | app login: `slack_logout`, `slack_login`, approve every scope; if it persists the file may not be visible to this account. Browser session: reconnect Slack in dev-dashboard, and if it fails again log in with the Slack app (section 12) |
 | `download_failed` | the transfer or write failed, the byte count differs from Slack's size, or a redirect is missing its target or exceeds three hops | try again; the failed transfer's staging file is removed and any existing target is unchanged |
-| `batch_too_large` | more items than the tool's cap | split the list |
+| `batch_too_large` | `slack_get_users` with more than 20 items that are not all user ids (every other over-cap list is refused by input validation first) | split the list |
 | `confirmation_unknown` | the token is unknown, the server restarted, or the token expired and a later `slack_prepare_write` has since cleared it | preview again with `slack_prepare_write`, unless the token was already confirmed (section 6) |
 | `confirmation_expired` | the token is older than 10 minutes; if it was never confirmed, nothing was sent | preview again, unless the token was already confirmed (section 6) |
 

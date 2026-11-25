@@ -26,7 +26,7 @@ import { constantRoute, createFakeSlack, slackFailure } from './__fixtures__/too
 import { expectSlackError, parseResult } from './__fixtures__/tools/assertions.js';
 import { CHANNEL_ONE, EXAMPLE_TEAM, OTHER_TEAM, USER_ME } from './__fixtures__/tools/ids.js';
 import type { AuthTestResponse } from '../../services/slack/slack-client.js';
-import { slackGetStatusHandler, slackLoginHandler, slackLogoutHandler } from './session-tools.js';
+import { slackGetStatusHandler, slackLoginHandler, slackLogoutHandler, type SessionToolContext } from './session-tools.js';
 import { slackGetMessagesHandler } from './read-tools.js';
 
 const AUTH_TEST_BODY: Pick<AuthTestResponse, 'url' | 'team' | 'team_id' | 'user' | 'user_id'> = {
@@ -56,7 +56,7 @@ function createHarness() {
   return { clock, slack, fakeOAuth, ctx };
 }
 
-async function statusOf(ctx: unknown, args: Record<string, unknown> = {}) {
+async function statusOf(ctx: SessionToolContext, args: Record<string, unknown> = {}) {
   return parseResult(await slackGetStatusHandler(ctx)(args));
 }
 

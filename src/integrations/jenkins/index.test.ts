@@ -5,6 +5,8 @@ vi.mock('../../services/index.js', () => ({
 }));
 
 import { JenkinsModule } from './index.js';
+import { jenkinsGetConsoleSchema, jenkinsGetJobsSchema } from './module.js';
+import { contentText, inputJsonSchema, rawToolHandlers } from '../../__fixtures__/mcp.js';
 
 function makeMockJenkins() {
   return {
@@ -61,7 +63,7 @@ describe('JenkinsModule', () => {
     });
 
     it('returns 5 handlers', () => {
-      const handlers = mod.createToolHandlers({ jenkins: mockJenkins as any });
+      const handlers = rawToolHandlers(mod, { jenkins: mockJenkins as any });
       expect(Object.keys(handlers)).toHaveLength(5);
       expect(handlers).toHaveProperty('jenkins_get_jobs');
       expect(handlers).toHaveProperty('jenkins_get_builds');
@@ -76,16 +78,16 @@ describe('JenkinsModule', () => {
         total: 1,
         hasMore: false,
       });
-      const handlers = mod.createToolHandlers({ jenkins: mockJenkins as any });
+      const handlers = rawToolHandlers(mod, { jenkins: mockJenkins as any });
       const result = await handlers.jenkins_get_jobs({});
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.items).toHaveLength(1);
       expect(parsed.hasMore).toBe(false);
       expect(parsed.total).toBe(1);
     });
 
     it('rejects an invalid job name through Zod validation', async () => {
-      const handlers = mod.createToolHandlers({ jenkins: mockJenkins as any });
+      const handlers = rawToolHandlers(mod, { jenkins: mockJenkins as any });
       await expect(handlers.jenkins_get_builds({ job: 'bad;job' })).rejects.toThrow();
     });
   });
@@ -105,7 +107,25 @@ describe('JenkinsModule', () => {
       for (const d of descriptors) {
         expect(d.description).toBeTruthy();
         expect(d.inputSchema).toBeDefined();
+        expect(d.title).toBeTruthy();
+        expect(inputJsonSchema(d).type).toBe('object');
+        for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const) {
+          expect(typeof d.annotations[hint]).toBe('boolean');
+        }
       }
+    });
+
+    it('each descriptor carries its zod schema, not a converted JSON Schema', () => {
+      const byName = Object.fromEntries(mod.getToolDescriptors().map((d) => [d.name, d]));
+      expect(byName.jenkins_get_jobs.inputSchema).toBe(jenkinsGetJobsSchema);
+      expect(byName.jenkins_get_console.inputSchema).toBe(jenkinsGetConsoleSchema);
+    });
+
+    it('publishes the jenkins_get_jobs limit bounds and default in its input schema', () => {
+      const d = mod.getToolDescriptors().find((x) => x.name === 'jenkins_get_jobs')!;
+      const schema = inputJsonSchema(d) as any;
+      expect(schema.properties.limit).toMatchObject({ minimum: 1, maximum: 100, default: 20 });
+      expect(schema.required ?? []).not.toContain('limit');
     });
   });
 });

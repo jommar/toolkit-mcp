@@ -1,7 +1,7 @@
 # CLAUDE.md — toolkit-mcp
 
 > Dev Workflow MCP Hub — bridges AI coding agents with Jira, GitHub, and more.
-> Node, TypeScript, MCP SDK, Zod.
+> Node 24+ (target 26), TypeScript, MCP SDK v2 (`@modelcontextprotocol/server` 2.4.0), Zod 4.
 
 ## Project Identity
 
@@ -22,9 +22,10 @@ The `JiraClient`, `GitHubClient`, and utility modules (`slim.ts`, `config.ts`) l
 
 ```
 src/
-├── mcp-server.ts              # Entry: bootstrap, transport, module registry, DI wiring
-├── mcp-config.ts              # MCP-specific config (transport, port, log level)
-├── mcp-health.ts              # mcp_get_health tool handler (always registered)
+├── mcp-server.ts              # Entry: buildRuntime/assembleRuntime (clients, handlers, once per process), createServer (McpServer factory for serveStdio), process hooks
+├── mcp-config.ts              # MCP_LOG_LEVEL and the stderr logger
+├── mcp-health.ts              # mcp_get_health descriptor and handler (always registered)
+├── server-info.ts             # Server name and version, read once from package.json
 ├── services/
 │   ├── index.ts               # Barrel — re-exports all service classes/types
 │   ├── config.ts              # loadConfig() + dotenv (shared by Jira/GitHub)
@@ -35,8 +36,9 @@ src/
 │       ├── github-client.ts   # GitHubClient class
 │       └── github-client.test.ts
 ├── integrations/
-│   ├── index.ts               # Module registry — static import of all modules
-│   ├── helpers.ts             # PaginatedResponse helper, zodToJsonSchema
+│   ├── index.ts               # Module registry, IntegrationModule interface, descriptor and handler types
+│   ├── register.ts            # The only code calling the SDK's register*: adapter, error mapping, annotation presets
+│   ├── helpers.ts             # PaginatedResponse helper, messageOf
 │   ├── jira/
 │   │   ├── index.ts           # IntegrationModule impl + needsEnv()
 │   │   ├── module.ts          # registerTools, registerResources, registerPrompts
@@ -57,11 +59,15 @@ interface IntegrationModule<C extends Record<string, unknown> = Record<string, u
   id: string;
   needsEnv(): boolean;                         // true if all required env vars are set
   createToolHandlers(clients: C): Record<string, ToolHandlerFn>;
-  getToolDescriptors(): ToolDescriptor[];
-  getResourceHandler?(clients: C): (uri: string) => Promise<ReadResourceResult>;
-  getPromptHandler?(clients: C): (name: string, args: Record<string, unknown> | undefined) => Promise<GetPromptResult>;
+  getToolDescriptors(): ToolDescriptor[];       // { name, title, description, inputSchema: z.ZodObject, annotations }
+  getResourceHandler?(clients: C): ResourceHandlerFn;   // (uri: string) => Promise<ReadResourceResult>
+  getResourceDescriptors?(): ResourceDescriptor[];      // { name, title, description, mimeType } + uri or uriTemplate
+  getPromptHandler?(clients: C): PromptHandlerFn;       // (name, args) => Promise<GetPromptResult>
+  getPromptDescriptors?(): PromptDescriptor[];          // { name, title, description, argsSchema: z.ZodObject }
 }
 ```
+
+Modules never touch the SDK server. `src/integrations/register.ts` (`registerModuleTools`, `registerModuleResources`, `registerModulePrompts`) registers what they return on an `McpServer`, in registry order, and publishes each zod 4 schema's JSON Schema (without `$schema`) in `tools/list`. A new tool needs a `title` and all four annotation hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), taken from the presets in `register.ts` (`READ_ONLY_HINTS`, `ADDITIVE_HINTS`, `IDEMPOTENT_HINTS`, `DESTRUCTIVE_HINTS`, `DESTRUCTIVE_NON_IDEMPOTENT_HINTS`); the reviewed per-tool table in `src/integrations/index.test.ts` must list it.
 
 Modules type their expected clients via the generic parameter:
 
@@ -76,7 +82,7 @@ class GitHubModule implements IntegrationModule<{ github: GitHubClient }> { ... 
 - **GitHub module** — registered only if `GH_TOKEN` is set.
 - **Jenkins module** — registered only if `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` are all set (read-only tools).
 - **Slack module** — registered only if `SLACK_ENABLED` is exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json` (`SLACK_SESSION_FILE` overrides) and keeps its own copy in `~/.config/slack/toolkit-mcp/token.json`; without one it falls back to the app login, whose client id is not an env var but `~/.config/slack/toolkit-mcp/app.json`. Writes (post, react, upload) go only through `slack_prepare_write` then `slack_confirm_write`. Setup, limits and error codes: `docs/slack.md`.
-- **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations.
+- **No env vars?** The server starts with an empty tools list (graceful degradation). A built-in `mcp_get_health` tool is always registered to report active integrations and the running Node version (`node`).
 - The server logs which integration sets are active at startup.
 
 ### Dependency Injection (DI)
@@ -101,6 +107,8 @@ const jiraGetIssuesHandler: ToolHandler<{ key?: string; jql?: string; ... }> =
 
 This makes every handler testable with mock clients — no real credentials needed.
 
+Handlers receive input the SDK has already validated against the zod schema (defaults applied, unknown keys dropped), so modules do not parse arguments themselves; the two Slack write handlers keep their own parse as the write boundary. A module whose descriptors name a tool it has no handler for is skipped at startup and logged; the rest still serve.
+
 ### Module Registry
 
 **Static, not auto-discovered.** The registry at `src/integrations/index.ts` explicitly imports and exports all module implementations. Adding a new integration requires:
@@ -109,10 +117,17 @@ This makes every handler testable with mock clients — no real credentials need
 
 ### Safe Bootstrap
 
-`mcp-config.ts` wraps `loadConfig()` (from `src/services/config.js`) in try/catch. If `loadConfig()` throws due to missing Jira env vars, `mcp-config.ts` returns a partial config rather than crashing. The bootstrap flow:
+`buildRuntime` in `mcp-server.ts` constructs each enabled client inside a try/catch (`createClient`), so a client that throws (for example `loadConfig()` with missing Jira env vars) is logged and its module skipped rather than crashing. The bootstrap flow:
 1. Read `process.env` directly for conditional module checks
-2. Register only modules whose env vars are present
-3. Create client instances only for qualified modules
+2. Create client instances only for qualified modules, once per process
+3. `assembleRuntime` collects descriptors and handlers once (the Slack write gate is created here)
+4. `serveStdio(() => createServer(runtime))` builds an `McpServer` per connection; the factory only registers, it creates no client and makes no network call
+
+`serveStdio` serves both protocol eras: a 2025-era `initialize` (2025-11-25 or older) as before, and 2026-07-28 requests statelessly, with one-hour private cache hints on the four list methods. The server stops cleanly on SIGINT, SIGTERM or stdin end (exit 0); an uncaught exception is logged and exits 1; an unhandled rejection is logged and the server keeps serving. Only protocol messages go to stdout; logs go to stderr.
+
+### Error Model
+
+Handlers and services throw; the adapter converts. A tool failure is a result with `isError: true` and one text item (`API error (<status>): <detail>`, the handler's own message, or the SDK's `Input validation error: …`). Protocol errors are only for requests the server cannot route or parse: unknown tool, prompt or resource, a missing required prompt argument and an invalid issue key in a resource URI are `-32602`; a resource or prompt that fails upstream is `-32603`.
 
 ## Key Design Rules
 
@@ -133,7 +148,7 @@ Parameters accepted by every list tool:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cursor` | `string` | — | Opaque pagination token |
-| `limit` | `number` | `20` | Items per page (max 100) |
+| `limit` | integer | `20` | Items per page (1 to 100, published in the schema) |
 
 - `total` is **not** part of the generic envelope — added per-tool only when the backing API provides it.
 - `offset` is dropped entirely; cursors are more stable.
@@ -193,11 +208,15 @@ Exactly one sentence. Concise. No filler.
 
 ## Setup
 
+Node 24 or later; `.nvmrc` pins the target, 26.13.1.
+
 ```bash
 cd toolkit-mcp
-npm install
+npm ci
 cp .env.example .env    # or cp ../jira-cli/.env .env if you already have one
 ```
+
+After pulling a change to dependencies, run `npm ci` before restarting the MCP client, or the server fails at import.
 
 ## Running
 
@@ -208,6 +227,7 @@ cp .env.example .env    # or cp ../jira-cli/.env .env if you already have one
 | `npm run mcp:inspect` | Launch MCP inspector for debugging |
 | `npm run build` | TypeScript compilation (`tsc`) |
 | `npm run typecheck` | TypeScript type-check only (`tsc --noEmit`) |
+| `npm run typecheck:tests` | Type-check tests and fixtures as well (`tsc -p tsconfig.test.json`) |
 | `npm run test` | Run all tests (vitest) |
 | `npm run test:watch` | Vitest watch mode |
 
@@ -221,20 +241,19 @@ All optional — tools only register if their env vars are present:
 | `GH_TOKEN` | GitHub | All GitHub tools / PR search |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (read-only) |
 | `SLACK_ENABLED` | Slack | All 11 Slack tools (exact value `true`); client id in `~/.config/slack/toolkit-mcp/app.json`, see `docs/slack.md` |
-| `MCP_TRANSPORT` | Server | Transport mode (`stdio` default, `http`) |
-| `MCP_PORT` | Server | HTTP port (default `3000`) |
-| `MCP_LOG_LEVEL` | Server | `silent` | `info` | `debug` |
+| `MCP_LOG_LEVEL` | Server | `silent` \| `info` (default) \| `debug` (one stderr line per tool call: name, `ok`/`error`, duration) |
 
 Full `.env.example` in project root.
 
 ### MCP Client Config (for AI IDEs)
 
+Use `bin/toolkit-mcp` as the launcher. It runs the server from the repo root with the Node version in `.nvmrc` when `$HOME/.nvm/versions/node/v<version>/bin/node` exists, and otherwise with `node` from `PATH`. It writes nothing to stdout. The server refuses to start on a Node below 24 (`engines.node`), printing the running version and the minimum to stderr and exiting 1. `.npmrc` sets `engine-strict=true`, so `npm ci` refuses the same Node versions.
+
 ```json
 {
   "mcpServers": {
     "toolkit-mcp": {
-      "command": "node",
-      "args": ["--import", "tsx", "/path/to/toolkit-mcp/src/mcp-server.ts"],
+      "command": "/path/to/toolkit-mcp/bin/toolkit-mcp",
       "env": {
         "JIRA_BASE_URL": "https://pathwise.atlassian.net",
         "JIRA_EMAIL": "you@pathwisek12.com",
@@ -281,23 +300,31 @@ This avoids needing real credentials or network calls.
 | `src/integrations/github/module.test.ts` | GitHub module — tool handlers with mock GitHubClient |
 | `src/integrations/jira/index.test.ts` | JiraModule — needsEnv, resources, prompts |
 | `src/integrations/github/index.test.ts` | GitHubModule — needsEnv, resources |
-| `src/integrations/index.test.ts` | Module registry |
-| `src/mcp-server.test.ts` | Module discovery, conditional registration, health tool |
-| `src/mcp-config.test.ts` | Config loading logic |
+| `src/integrations/index.test.ts` | Module registry; the reviewed title and annotation table for all 80 tools |
+| `src/integrations/register.test.ts` | Adapter: `describeToolError` branches, debug log line per call |
+| `src/integrations/annotation-presets.test.ts` | Every module takes its hints from the shared presets |
+| `src/mcp-server.test.ts` | In-memory client on `createServer`: tools/list contents, schemas and size, tool errors, input validation, resources, prompts, conditional registration, factory, process hooks |
+| `src/stdio.e2e.test.ts` | Spawned server over stdio: legacy (2025-11-25, 2025-06-18) and 2026-07-28 clients, health, shutdown |
+| `src/project-contract.test.ts` | Dependency pins, SDK imports, removed names in docs, CHANGELOG heading |
+| `src/mcp-config.test.ts` | Log level and logger |
 | `src/mcp-health.test.ts` | Health handler |
+| `src/node-version.test.ts` | Node guard: `assertSupportedNode`, and `MINIMUM_NODE_MAJOR` read from `engines.node` |
+| `src/launcher.e2e.test.ts` | `bin/toolkit-mcp` with fake nvm and PATH `node` shims: picks the `.nvmrc` node, falls back to PATH, runs from the repo root, nothing on stdout (POSIX only) |
 | `src/services/slack/*.test.ts` | Slack service layer — credential store, app config, login and loopback listener, client, model, links, cursors, batch runner, upload source, scope table |
 | `src/integrations/slack/*.test.ts` | Slack module — session, read and write tools, write gate, registration; plus the cross-cutting `secrets`, `privacy`, `write-gating` and `workspace-neutral` suites |
 
 Slack tests keep their synthetic builders and fakes in `__fixtures__/` folders beside them (`src/services/slack/__fixtures__/`, `src/integrations/slack/__fixtures__/`). Fixtures use only synthetic ids that carry the `EXAMPLE` marker and the placeholder workspaces `example-team` and `other-team`, never a real workspace, and the tests use a temp home with HTTP and the loopback client mocked. The `workspace-neutral` suite fails the test run if a shipped doc or the module names a real workspace. Fixtures are compiled into `dist` and counted in coverage, since `tsconfig.json` excludes only `*.test.ts`.
 
-Coverage includes: `src/mcp-server.ts`, `src/mcp-config.ts`, `src/mcp-health.ts`, `src/integrations/**/*.ts`, `src/services/**/*.ts`.
+Shared MCP test helpers live in `src/__fixtures__/` (`mcp.ts`: in-memory client connection, raw handlers, listed input schemas, `axiosError`; `source-files.ts`). `@modelcontextprotocol/client` is a devDependency imported only by tests and fixtures.
+
+Coverage includes: `src/mcp-server.ts`, `src/mcp-config.ts`, `src/mcp-health.ts`, `src/server-info.ts`, `src/integrations/**/*.ts`, `src/services/**/*.ts`.
 
 ## Important Constraints
 
 1. **Services are pure API clients with no MCP awareness.** They remain testable without MCP SDK dependencies. Integrations import services, wrap them with Zod schemas and MCP response formatting.
 2. **Graceful degradation.** If no env vars are set, the server starts with only the `mcp_get_health` tool. No crashes.
 3. **Module registry is static.** Adding a new integration requires creating the directory AND adding its import to `src/integrations/index.ts`.
-4. **`loadConfig()` must not crash the bootstrap.** `mcp-config.ts` wraps it in try/catch so missing Jira env vars don't prevent GitHub-only operation.
+4. **`loadConfig()` must not crash the bootstrap.** `buildRuntime` constructs each client in a try/catch so missing Jira env vars don't prevent GitHub-only operation.
 5. **Composite tools must handle partial failures.** If one API leg fails, the response should include the successful results plus an error annotation for the failed leg. Never cascade failures.
 6. **The `jira-cli` standalone CLI is deprecated.** All library development now happens in `src/services/`.
 

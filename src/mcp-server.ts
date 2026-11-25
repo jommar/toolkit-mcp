@@ -1,276 +1,273 @@
-import { Server } from '@modelcontextprotocol/sdk/server';
-import {
-  ErrorCode,
-  McpError,
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-  GetPromptRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { isAxiosError } from 'axios';
+import type { EventEmitter } from 'node:events';
 import os from 'node:os';
+import { McpServer } from '@modelcontextprotocol/server';
+import { serveStdio, type StdioServerHandle } from '@modelcontextprotocol/server/stdio';
 import { JiraClient, GitHubClient, FigmaClient, ConfluenceClient, JenkinsClient, SlackClient } from './services/index.js';
 import { slackPaths } from './services/slack/credential-store.js';
-import { z } from 'zod';
-import { loadMcpConfig } from './mcp-config.js';
-import { createHealthHandler } from './mcp-health.js';
+import { createLogger, loadMcpConfig } from './mcp-config.js';
+import { createHealthHandler, healthDescriptor } from './mcp-health.js';
 import { modules } from './integrations/index.js';
-import type { ToolHandlerFn, ToolDescriptor, IntegrationModule } from './integrations/index.js';
+import { messageOf } from './integrations/helpers.js';
+import {
+  registerModulePrompts,
+  registerModuleResources,
+  registerModuleTools,
+  type Logger,
+} from './integrations/register.js';
+import type {
+  PromptDescriptor,
+  PromptHandlerFn,
+  ResourceDescriptor,
+  ResourceHandlerFn,
+  ToolDescriptor,
+  ToolHandlerFn,
+} from './integrations/index.js';
+import { NODE_ENGINES, SERVER_INFO } from './server-info.js';
 
-export async function main(): Promise<void> {
-  const config = loadMcpConfig();
-  const log = (msg: string) => {
-    if (config.logLevel !== 'silent') {
-      console.error(`[mcp] ${msg}`);
-    }
-  };
+/** What every connection's server registers. Built once per process, so each module's handlers exist once. */
+export interface Runtime {
+  log: Logger;
+  tools: ToolDescriptor[];
+  toolHandlers: Record<string, ToolHandlerFn>;
+  resources: Array<{ descriptors: ResourceDescriptor[]; handler: ResourceHandlerFn }>;
+  prompts: Array<{ descriptors: PromptDescriptor[]; handler: PromptHandlerFn }>;
+}
 
-  log('toolkit-mcp starting...');
+type Clients = Record<string, unknown>;
 
-  // Determine which integrations are active based on env vars
-  const jiraActive = !!(process.env.JIRA_BASE_URL && process.env.JIRA_EMAIL && process.env.JIRA_TOKEN);
-  const githubActive = !!process.env.GH_TOKEN;
-  const figmaActive = !!process.env.FIGMA_TOKEN;
+/** The tool, prompt and resource lists are fixed for the life of the process, so clients may cache them for an hour. */
+const HOUR_PRIVATE_CACHE = { ttlMs: 3_600_000, cacheScope: 'private' as const };
+const LIST_CACHE_HINTS = {
+  'tools/list': HOUR_PRIVATE_CACHE,
+  'prompts/list': HOUR_PRIVATE_CACHE,
+  'resources/list': HOUR_PRIVATE_CACHE,
+  'resources/templates/list': HOUR_PRIVATE_CACHE,
+};
+/** Longest shutdown waits for queued stdout to reach the reader, so a stuck or gone pipe cannot hang the exit. */
+const STDOUT_FLUSH_TIMEOUT_MS = 3_000;
+
+/** The major of an `engines.node` range such as `>=24`, the lowest Node the package declares it runs on. */
+function majorOfEnginesRange(range: string): number {
+  const match = /^>=\s*(\d+)$/.exec(range.trim());
+  if (!match) throw new Error(`package.json engines.node must be ">=<major>", got "${range}"`);
+  return Number(match[1]);
+}
+
+export const MINIMUM_NODE_MAJOR: number = majorOfEnginesRange(NODE_ENGINES);
+
+/**
+ * Throws when `version` (as in `process.version`, e.g. `v23.9.0`) has a major below `minimumMajor`.
+ * An unparsable version fails the check.
+ */
+export function assertSupportedNode(version: string, minimumMajor: number): void {
+  const major = Number(/^v(\d+)\./.exec(version)?.[1]);
+  if (!(major >= minimumMajor)) {
+    throw new Error(
+      `toolkit-mcp needs Node ${minimumMajor} or later; this process runs Node ${version}. Start it with the Node in .nvmrc (bin/toolkit-mcp selects it).`,
+    );
+  }
+}
+
+function createClient<T>(name: string, log: Logger, create: () => T): T | undefined {
+  try {
+    const client = create();
+    log.info(`${name} created successfully`);
+    return client;
+  } catch (err) {
+    log.error(`Failed to create ${name}: ${messageOf(err)}`);
+    return undefined;
+  }
+}
+
+/** Constructs the service clients whose integrations are enabled by the environment, then assembles the runtime. */
+export async function buildRuntime(log: Logger): Promise<Runtime> {
+  const env = process.env;
+  const jiraActive = !!(env.JIRA_BASE_URL && env.JIRA_EMAIL && env.JIRA_TOKEN);
+  const githubActive = !!env.GH_TOKEN;
+  const figmaActive = !!env.FIGMA_TOKEN;
   const confluenceActive = !!(
-    (process.env.CONFLUENCE_BASE_URL || process.env.JIRA_BASE_URL) &&
-    (process.env.CONFLUENCE_EMAIL || process.env.JIRA_EMAIL) &&
-    (process.env.CONFLUENCE_TOKEN || process.env.JIRA_TOKEN)
+    (env.CONFLUENCE_BASE_URL || env.JIRA_BASE_URL) &&
+    (env.CONFLUENCE_EMAIL || env.JIRA_EMAIL) &&
+    (env.CONFLUENCE_TOKEN || env.JIRA_TOKEN)
   );
-  const jenkinsActive = !!(process.env.JENKINS_URL && process.env.JENKINS_USER && process.env.JENKINS_TOKEN);
-  const slackActive = process.env.SLACK_ENABLED === 'true';
+  const jenkinsActive = !!(env.JENKINS_URL && env.JENKINS_USER && env.JENKINS_TOKEN);
+  const slackActive = env.SLACK_ENABLED === 'true';
 
-  log(`Jira integration: ${jiraActive ? 'active' : 'inactive'}`);
-  log(`GitHub integration: ${githubActive ? 'active' : 'inactive'}`);
-  log(`Figma integration: ${figmaActive ? 'active' : 'inactive'}`);
-  log(`Confluence integration: ${confluenceActive ? 'active' : 'inactive'}`);
-  log(`Jenkins integration: ${jenkinsActive ? 'active' : 'inactive'}`);
-  log(`Slack integration: ${slackActive ? 'active' : 'inactive'}`);
+  log.info(`Jira integration: ${jiraActive ? 'active' : 'inactive'}`);
+  log.info(`GitHub integration: ${githubActive ? 'active' : 'inactive'}`);
+  log.info(`Figma integration: ${figmaActive ? 'active' : 'inactive'}`);
+  log.info(`Confluence integration: ${confluenceActive ? 'active' : 'inactive'}`);
+  log.info(`Jenkins integration: ${jenkinsActive ? 'active' : 'inactive'}`);
+  log.info(`Slack integration: ${slackActive ? 'active' : 'inactive'}`);
 
-  // Create client instances for active integrations only
-  const clients: Record<string, unknown> = {};
-  if (jiraActive) {
-    try {
-      clients.jira = new JiraClient();
-      log('JiraClient created successfully');
-    } catch (err) {
-      log(`Failed to create JiraClient: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (githubActive) {
-    try {
-      clients.github = new GitHubClient();
-      log('GitHubClient created successfully');
-    } catch (err) {
-      log(`Failed to create GitHubClient: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (figmaActive) {
-    try {
-      clients.figma = new FigmaClient();
-      log('FigmaClient created successfully');
-    } catch (err) {
-      log(`Failed to create FigmaClient: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (confluenceActive) {
-    try {
-      clients.confluence = new ConfluenceClient();
-      log('ConfluenceClient created successfully');
-    } catch (err) {
-      log(`Failed to create ConfluenceClient: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const clients: Clients = {};
+  if (jiraActive) clients.jira = createClient('JiraClient', log, () => new JiraClient());
+  if (githubActive) clients.github = createClient('GitHubClient', log, () => new GitHubClient());
+  if (figmaActive) clients.figma = createClient('FigmaClient', log, () => new FigmaClient());
+  if (confluenceActive) clients.confluence = createClient('ConfluenceClient', log, () => new ConfluenceClient());
+  if (slackActive) clients.slack = createClient('SlackClient', log, () => new SlackClient(slackPaths(os.homedir())));
   if (jenkinsActive) {
     try {
       const jenkins = new JenkinsClient();
       if (await jenkins.ping()) {
         clients.jenkins = jenkins;
-        log('JenkinsClient created successfully');
+        log.info('JenkinsClient created successfully');
       } else {
-        log('Jenkins unreachable — skipping Jenkins tools (server down or blocked)');
+        log.info('Jenkins unreachable — skipping Jenkins tools (server down or blocked)');
       }
     } catch (err) {
-      log(`Failed to create JenkinsClient: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  if (slackActive) {
-    try {
-      clients.slack = new SlackClient(slackPaths(os.homedir()));
-      log('SlackClient created successfully');
-    } catch (err) {
-      log(`Failed to create SlackClient: ${err instanceof Error ? err.message : String(err)}`);
+      log.error(`Failed to create JenkinsClient: ${messageOf(err)}`);
     }
   }
 
-  // Create server
-  const server = new Server(
-    { name: 'toolkit-mcp', version: '0.3.0' },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } },
-  );
+  return assembleRuntime(clients, log);
+}
 
-  // Collect handlers and descriptors from all eligible modules
-  const allHandlers: Record<string, ToolHandlerFn> = {};
-  const allDescriptors: ToolDescriptor[] = [];
-  const resourceHandlers: Array<{ prefix: string; handler: (uri: string) => Promise<any> }> = [];
-  const promptHandlers: Array<(name: string, args: Record<string, unknown> | undefined) => Promise<any>> = [];
-
-  // Always register built-in health tool
-  const healthHandler = createHealthHandler(
-    !!clients.jira,
-    !!clients.github,
-    !!clients.figma,
-    !!clients.confluence,
-    !!clients.jenkins,
-    !!clients.slack,
-  );
-  allHandlers['mcp_get_health'] = healthHandler;
-  allDescriptors.push({
-    name: 'mcp_get_health',
-    description: 'Report which integrations are active.',
-    inputSchema: { type: 'object', properties: {} },
-  });
+/** Collects every eligible module's descriptors and handlers. Each module's handler factory runs here, once. */
+export function assembleRuntime(clients: Clients, log: Logger): Runtime {
+  const runtime: Runtime = {
+    log,
+    tools: [healthDescriptor],
+    toolHandlers: {
+      [healthDescriptor.name]: createHealthHandler(
+        !!clients.jira,
+        !!clients.github,
+        !!clients.figma,
+        !!clients.confluence,
+        !!clients.jenkins,
+        !!clients.slack,
+      ),
+    },
+    resources: [],
+    prompts: [],
+  };
 
   for (const mod of modules) {
     if (!mod.needsEnv()) continue;
-
-    // Skip module if its required client failed to construct
-    const clientKey = mod.id;
-    if (!clients[clientKey]) {
-      log(`Module ${mod.id} skipped: client not available (credentials may be invalid)`);
+    if (!clients[mod.id]) {
+      log.info(`Module ${mod.id} skipped: client not available (credentials may be invalid)`);
       continue;
     }
 
     try {
+      const tools = mod.getToolDescriptors();
       const handlers = mod.createToolHandlers(clients);
-      for (const [name, handler] of Object.entries(handlers)) {
-        allHandlers[name] = handler;
-      }
-      allDescriptors.push(...mod.getToolDescriptors());
+      const unhandled = tools.find((tool) => !handlers[tool.name]);
+      if (unhandled) throw new Error(`No handler for tool ${unhandled.name}`);
+      const resources =
+        mod.getResourceHandler && mod.getResourceDescriptors
+          ? { descriptors: mod.getResourceDescriptors(), handler: mod.getResourceHandler(clients) }
+          : undefined;
+      const prompts =
+        mod.getPromptHandler && mod.getPromptDescriptors
+          ? { descriptors: mod.getPromptDescriptors(), handler: mod.getPromptHandler(clients) }
+          : undefined;
 
-      if (mod.getResourceHandler) {
-        const rh = mod.getResourceHandler(clients);
-        const prefix = mod.getResourcePrefix?.() ?? '';
-        resourceHandlers.push({ prefix, handler: rh });
-      }
-
-      if (mod.getPromptHandler) {
-        const ph = mod.getPromptHandler(clients);
-        promptHandlers.push(ph);
-      }
-
-      log(`Module registered: ${mod.id}`);
+      runtime.tools.push(...tools);
+      Object.assign(runtime.toolHandlers, handlers);
+      if (resources) runtime.resources.push(resources);
+      if (prompts) runtime.prompts.push(prompts);
+      log.info(`Module registered: ${mod.id}`);
     } catch (err) {
-      log(`Failed to register module ${mod.id}: ${err instanceof Error ? err.message : String(err)}`);
+      log.error(`Failed to register module ${mod.id}: ${messageOf(err)}`);
     }
   }
 
-  log(`Registered ${Object.keys(allHandlers).length} tools, ${resourceHandlers.length} resource groups, ${promptHandlers.length} prompt groups`);
+  log.info(
+    `Registered ${runtime.tools.length} tools, ${runtime.resources.length} resource groups, ${runtime.prompts.length} prompt groups`,
+  );
+  return runtime;
+}
 
-  /** Convert an error to a descriptive McpError with status detail for axios errors. */
-  function toMcpError(err: unknown): McpError {
-    if (err instanceof McpError) return err;
-    if (err instanceof z.ZodError) {
-      return new McpError(ErrorCode.InvalidParams, `Validation error: ${err.message}`);
-    }
-    if (isAxiosError(err)) {
-      const status = err.response?.status;
-      const data = err.response?.data as Record<string, unknown> | undefined;
-      // Extract a human-readable detail from the response body
-      let detail = err.message;
-      if (data && typeof data === 'object') {
-        detail = (data as any).message || (data as any).errorMessages?.join('; ') || (data as any).error || detail;
-      }
-      return new McpError(ErrorCode.InternalError, `API error${status ? ` (${status})` : ''}: ${detail}`);
-    }
-    return new McpError(ErrorCode.InternalError, err instanceof Error ? err.message : String(err));
+/** A new, unconnected server with the runtime's tools, resources and prompts. Creates no client and makes no network call. */
+export function createServer(runtime: Runtime): McpServer {
+  const server = new McpServer(SERVER_INFO, { cacheHints: LIST_CACHE_HINTS });
+  registerModuleTools(server, runtime.tools, runtime.toolHandlers, runtime.log);
+  for (const { descriptors, handler } of runtime.resources) registerModuleResources(server, descriptors, handler);
+  for (const { descriptors, handler } of runtime.prompts) registerModulePrompts(server, descriptors, handler);
+  return server;
+}
+
+/**
+ * Routes process-level events to one shutdown. Stop signals and stdin end call `shutdown(0)` once in total;
+ * an uncaught exception is logged and calls `shutdown(1)`; an unhandled rejection is logged and the server keeps serving.
+ */
+export function installProcessHooks(
+  target: EventEmitter,
+  stdin: EventEmitter,
+  log: Logger,
+  shutdown: (code: number) => unknown,
+): void {
+  let stopping = false;
+  const stop = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    void shutdown(code);
+  };
+  target.on('SIGTERM', () => stop(0));
+  target.on('SIGINT', () => stop(0));
+  stdin.on('end', () => stop(0));
+
+  target.on('unhandledRejection', (reason) => {
+    log.error(`Unhandled rejection: ${messageOf(reason)}`);
+  });
+  target.on('uncaughtException', (err) => {
+    log.error(`Uncaught exception: ${messageOf(err)}`);
+    stop(1);
+  });
+}
+
+/**
+ * Resolves once everything written to stdout so far has been handed to the OS, on a stdout error (EPIPE: the reader
+ * is gone), or after STDOUT_FLUSH_TIMEOUT_MS. Writes are ordered, so the empty write's callback runs after them.
+ */
+function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      clearTimeout(timer);
+      process.stdout.off('error', settle);
+      resolve();
+    };
+    timer = setTimeout(settle, STDOUT_FLUSH_TIMEOUT_MS);
+    process.stdout.once('error', settle);
+    process.stdout.write('', settle);
+  });
+}
+
+export async function main(): Promise<void> {
+  try {
+    assertSupportedNode(process.version, MINIMUM_NODE_MAJOR);
+  } catch (err) {
+    console.error(messageOf(err));
+    process.exit(1);
   }
 
-  // -----------------------------------------------------------------------
-  // Central dispatch for tools
-  // -----------------------------------------------------------------------
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    const handler = allHandlers[name];
-    if (!handler) {
-      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-    }
+  const log = createLogger(loadMcpConfig().logLevel);
+  log.info(`toolkit-mcp ${SERVER_INFO.version} starting`);
+
+  let handle: StdioServerHandle | undefined;
+  const shutdown = async (code: number) => {
     try {
-      return await handler((args as Record<string, unknown>) ?? {});
+      await handle?.close();
     } catch (err) {
-      throw toMcpError(err);
+      log.error(`Shutdown error: ${messageOf(err)}`);
     }
+    await flushStdout();
+    process.exit(code);
+  };
+  installProcessHooks(process, process.stdin, log, shutdown);
+
+  const runtime = await buildRuntime(log);
+  handle = serveStdio(() => createServer(runtime), {
+    onerror: (err) => log.error(`Transport error: ${err.message}`),
   });
-
-  // -----------------------------------------------------------------------
-  // Central dispatch for tool listing
-  // -----------------------------------------------------------------------
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: allDescriptors,
-  }));
-
-  // -----------------------------------------------------------------------
-  // Central dispatch for resources — dispatch by URI scheme
-  // -----------------------------------------------------------------------
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    const uri = request.params.uri;
-    for (const rh of resourceHandlers) {
-      if (uri.startsWith(rh.prefix)) {
-        try {
-          return await rh.handler(uri);
-        } catch (err) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            err instanceof Error ? err.message : String(err),
-          );
-        }
-      }
-    }
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Unknown resource: ${uri}`,
-    );
-  });
-
-  // -----------------------------------------------------------------------
-  // Central dispatch for prompts
-  // -----------------------------------------------------------------------
-  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
-    let lastError: Error | undefined;
-    for (const ph of promptHandlers) {
-      try {
-        return await ph(name, args as Record<string, unknown> | undefined);
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        // Continue to next handler
-      }
-    }
-    throw new McpError(
-      ErrorCode.MethodNotFound,
-      `Unknown prompt: ${name}`,
-    );
-  });
-
-  // -----------------------------------------------------------------------
-  // Start transport
-  // -----------------------------------------------------------------------
-  log(`Transport: ${config.transport}`);
-
-  if (config.transport === 'stdio') {
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-  } else {
-    log('HTTP transport not yet implemented; falling back to stdio');
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-  }
 }
 
 const runningDirectly = !process.env.VITEST;
 if (runningDirectly) {
   main().catch((err) => {
-    console.error(`[mcp] Fatal error: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[mcp] Fatal error: ${messageOf(err)}`);
     process.exit(1);
   });
 }

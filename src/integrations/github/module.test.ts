@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError } from '@modelcontextprotocol/server';
 
 vi.mock('../../services/index.js', () => ({
   GitHubClient: class MockGitHubClient {},
@@ -14,8 +14,10 @@ import {
   githubCreatePrHandler,
   githubAddPrCommentHandler,
   githubGetPrCommentsHandler,
+  githubGetPrCommentsSchema,
   githubUpdatePrCommentHandler,
   githubListBranchesHandler,
+  githubListBranchesSchema,
   githubGetPrDetailsHandler,
   githubGetPrReviewsHandler,
   githubGetPrChecksHandler,
@@ -28,6 +30,7 @@ import {
   githubUpdatePrSchema,
   githubCreatePrReviewCommentHandler,
   githubGetPrReviewCommentsHandler,
+  githubGetPrReviewCommentsSchema,
   githubUpdatePrReviewCommentHandler,
   githubDeletePrReviewCommentHandler,
   githubSubmitPrReviewHandler,
@@ -135,7 +138,7 @@ describe('githubGetCopilotUnresolvedPrsHandler', () => {
       errors: [{ repo: 'Org/Repo', prNumber: 7, error: 'Unable to inspect review threads.' }],
     });
 
-    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })({ repo: 'Org/Repo' });
+    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })(githubGetCopilotUnresolvedPrsSchema.parse({ repo: 'Org/Repo' }));
 
     expect(result).toEqual({ content: [{
       type: 'text',
@@ -147,7 +150,7 @@ describe('githubGetCopilotUnresolvedPrsHandler', () => {
     const mockGitHub = makeMockGitHub();
     const handler = githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any });
     mockGitHub.getCopilotUnresolvedPrs.mockRejectedValueOnce(new Error('Unable to identify authenticated viewer.'));
-    await expect(handler({ repo: 'Org/Repo' })).rejects.toThrow('Unable to identify authenticated viewer.');
+    await expect(handler(githubGetCopilotUnresolvedPrsSchema.parse({ repo: 'Org/Repo' }))).rejects.toThrow('Unable to identify authenticated viewer.');
     mockGitHub.getCopilotUnresolvedPrs.mockRejectedValueOnce(new Error('Invalid cursor.'));
     await expect(handler(githubGetCopilotUnresolvedPrsSchema.parse({
       repo: 'Org/Repo', cursor: 'invalid_scope',
@@ -163,9 +166,9 @@ describe('githubGetCopilotUnresolvedPrsHandler', () => {
       ] }], hasMore: false,
     });
 
-    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })({ repo: 'Org/Repo' });
+    const result = await githubGetCopilotUnresolvedPrsHandler({ github: mockGitHub as any })(githubGetCopilotUnresolvedPrsSchema.parse({ repo: 'Org/Repo' }));
 
-    expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledExactlyOnceWith({ repo: 'Org/Repo' });
+    expect(mockGitHub.getCopilotUnresolvedPrs).toHaveBeenCalledExactlyOnceWith({ repo: 'Org/Repo', state: 'open', limit: 20 });
     expect(result).toEqual({ content: [{
       type: 'text', text: '{"items":[{"repo":"Org/Repo","prNumber":42,"comments":["Handle the empty response before reading its first item.","Use a bounded retry:\\n```suggestion\\nretry({ attempts: 3 });\\n```"]}],"hasMore":false}',
     }] });
@@ -227,7 +230,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(prs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1267' });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1267' }));
 
     expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1267', 21, 'open');
     const parsed = JSON.parse(result.content[0].text);
@@ -246,7 +249,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ keys: ['TAP-1', 'TAP-2'] });
+    const result = await handler(githubGetPrsSchema.parse({ keys: ['TAP-1', 'TAP-2'] }));
 
     expect(mockGitHub.findPrsForIssueKeys).toHaveBeenCalledWith(
       ['TAP-1', 'TAP-2'],
@@ -268,7 +271,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(prs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1', limit: 3 });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', limit: 3 }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(3);
@@ -277,8 +280,8 @@ describe('githubGetPrsHandler', () => {
   it('throws when neither issueKey nor keys provided', async () => {
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
 
-    await expect(handler({})).rejects.toThrow(McpError);
-    await expect(handler({})).rejects.toThrow(
+    await expect(handler(githubGetPrsSchema.parse({}))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrsSchema.parse({}))).rejects.toThrow(
       'Provide either issueKey or keys',
     );
   });
@@ -286,8 +289,8 @@ describe('githubGetPrsHandler', () => {
   it('throws when keys is an empty array', async () => {
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ keys: [] })).rejects.toThrow(McpError);
-    await expect(handler({ keys: [] })).rejects.toThrow(
+    await expect(handler(githubGetPrsSchema.parse({ keys: [] }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrsSchema.parse({ keys: [] }))).rejects.toThrow(
       'Provide either issueKey or keys',
     );
   });
@@ -311,7 +314,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrsByBranchName.mockResolvedValue(branchMap);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1', searchBranches: true });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', searchBranches: true }));
 
     expect(mockGitHub.searchPrsByBranchName).toHaveBeenCalledWith('TAP-1', 'open');
     const parsed = JSON.parse(result.content[0].text);
@@ -329,7 +332,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrsByBranchName.mockResolvedValue(branchMap);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1', searchBranches: true });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', searchBranches: true }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(1);
@@ -339,7 +342,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue([]);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    await handler({ issueKey: 'TAP-1', limit: 10 });
+    await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', limit: 10 }));
 
     expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 11, 'open');
   });
@@ -351,7 +354,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(found);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const parsed = JSON.parse((await handler({ issueKey: 'TAP-1', limit: 10 })).content[0].text);
+    const parsed = JSON.parse((await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', limit: 10 }))).content[0].text);
 
     expect(parsed.items).toHaveLength(10);
     expect(parsed.hasMore).toBe(true);
@@ -366,7 +369,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue(allPrs);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1', limit: 10, cursor: '20' });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', limit: 10, cursor: '20' }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
@@ -379,7 +382,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.searchPrs.mockResolvedValue([]);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ issueKey: 'TAP-1', limit: 10, cursor: '0' });
+    const result = await handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', limit: 10, cursor: '0' }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(0);
@@ -389,9 +392,9 @@ describe('githubGetPrsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ issueKey: 'TAP-1', cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ issueKey: 'TAP-1', cursor: '-1' })).rejects.toThrow(McpError);
-    await expect(handler({ issueKey: 'TAP-1', cursor: '1.5' })).rejects.toThrow(McpError);
+    await expect(handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', cursor: '-1' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrsSchema.parse({ issueKey: 'TAP-1', cursor: '1.5' }))).rejects.toThrow(ProtocolError);
   });
 
   it('uses cursor as offset for keys path (C3)', async () => {
@@ -404,7 +407,7 @@ describe('githubGetPrsHandler', () => {
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(grouped);
 
     const handler = githubGetPrsHandler({ github: mockGitHub as any });
-    const result = await handler({ keys: ['TAP-1'], limit: 5, cursor: '10' });
+    const result = await handler(githubGetPrsSchema.parse({ keys: ['TAP-1'], limit: 5, cursor: '10' }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(5);
@@ -464,7 +467,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
     mockGitHub.isPrApprovedByHuman.mockResolvedValue(true);
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
-    const result = await handler({});
+    const result = await handler(githubGetCodeReviewReadySchema.parse({}));
 
     expect(mockJira.searchAllSlim).toHaveBeenCalledWith(
       "project = TAP AND assignee = currentUser() AND status = 'Ready For Code Review'",
@@ -489,7 +492,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
       .mockResolvedValueOnce(false);
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
-    const parsed = JSON.parse((await handler({})).content[0].text);
+    const parsed = JSON.parse((await handler(githubGetCodeReviewReadySchema.parse({}))).content[0].text);
 
     expect(parsed.tickets[0].allApproved).toBe(false);
     expect(parsed.tickets[0].prs[0].approved).toBe(true);
@@ -502,7 +505,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
     mockGitHub.findPrsForIssueKeys.mockResolvedValue(new Map([['TAP-300', []]]));
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
-    const parsed = JSON.parse((await handler({})).content[0].text);
+    const parsed = JSON.parse((await handler(githubGetCodeReviewReadySchema.parse({}))).content[0].text);
 
     expect(parsed.tickets[0].prs).toEqual([]);
     expect(parsed.tickets[0].allApproved).toBe(false);
@@ -516,7 +519,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
     mockGitHub.isPrApprovedByHuman.mockRejectedValue(new Error('rate limited'));
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
-    const parsed = JSON.parse((await handler({})).content[0].text);
+    const parsed = JSON.parse((await handler(githubGetCodeReviewReadySchema.parse({}))).content[0].text);
 
     expect(parsed.tickets[0].prs[0].approved).toBe(false);
     expect(parsed.tickets[0].prs[0].approvalCheckFailed).toBe(true);
@@ -527,7 +530,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
     mockJira.searchAllSlim.mockResolvedValue([]);
 
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any, jira: mockJira as any });
-    const parsed = JSON.parse((await handler({})).content[0].text);
+    const parsed = JSON.parse((await handler(githubGetCodeReviewReadySchema.parse({}))).content[0].text);
 
     expect(parsed.tickets).toEqual([]);
     expect(mockGitHub.findPrsForIssueKeys).not.toHaveBeenCalled();
@@ -546,7 +549,7 @@ describe('githubGetCodeReviewReadyHandler', () => {
 
   it('throws when the Jira client is not configured', async () => {
     const handler = githubGetCodeReviewReadyHandler({ github: mockGitHub as any });
-    await expect(handler({})).rejects.toThrow(/Jira integration not configured/);
+    await expect(handler(githubGetCodeReviewReadySchema.parse({}))).rejects.toThrow(/Jira integration not configured/);
   });
 
   it('validates the prState param and applies defaults via the schema', async () => {
@@ -705,9 +708,9 @@ describe('githubGetPrCommentsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrCommentsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubGetPrCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 });
 
@@ -822,9 +825,9 @@ describe('githubListBranchesHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubListBranchesHandler({ github: mockGitHub as any });
 
-    await expect(handler({ repo: 'Org/Repo', cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubListBranchesSchema.parse({ repo: 'Org/Repo', cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubListBranchesSchema.parse({ repo: 'Org/Repo', cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubListBranchesSchema.parse({ repo: 'Org/Repo', cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 });
 
@@ -891,7 +894,7 @@ describe('githubGetPrReviewsHandler', () => {
     mockGitHub.getPullRequestReviews.mockResolvedValue(page(reviews));
 
     const handler = githubGetPrReviewsHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42 });
+    const result = await handler(githubGetPrReviewsSchema.parse({ repo: 'Org/Repo', prNumber: 42 }));
 
     expect(mockGitHub.getPullRequestReviews).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
     const parsed = JSON.parse(result.content[0].text);
@@ -914,7 +917,7 @@ describe('githubGetPrReviewsHandler', () => {
     mockGitHub.getPullRequestReviews.mockResolvedValue(page([]));
 
     const handler = githubGetPrReviewsHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42 });
+    const result = await handler(githubGetPrReviewsSchema.parse({ repo: 'Org/Repo', prNumber: 42 }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual({ items: [], hasMore: false });
@@ -1156,9 +1159,9 @@ describe('githubSearchPrsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubSearchPrsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ author: 'alice', cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ author: 'alice', cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ author: 'alice', cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubSearchPrsSchema.parse({ author: 'alice', cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubSearchPrsSchema.parse({ author: 'alice', cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubSearchPrsSchema.parse({ author: 'alice', cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 });
 
@@ -1403,7 +1406,7 @@ describe('githubCreatePrReviewCommentHandler', () => {
     mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
 
     const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
-    await handler({
+    await handler(githubCreatePrReviewCommentSchema.parse({
       repo: 'Org/Repo',
       prNumber: 42,
       path: 'src/file.ts',
@@ -1411,7 +1414,7 @@ describe('githubCreatePrReviewCommentHandler', () => {
       commitId: 'abc',
       line: 10,
       suggestedReplacement: 'let count = 0;',
-    });
+    }));
 
     const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
     expect(calledArg.body).toContain('```suggestion');
@@ -1419,29 +1422,11 @@ describe('githubCreatePrReviewCommentHandler', () => {
     expect(calledArg.body).toContain('Use let instead of const');
   });
 
-  it('uses only suggestion block when body is empty and suggestedReplacement is provided', async () => {
-    mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
-
-    const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
-    await handler({
-      repo: 'Org/Repo',
-      prNumber: 42,
-      path: 'src/file.ts',
-      body: '',
-      commitId: 'abc',
-      line: 10,
-      suggestedReplacement: 'let count = 0;',
-    });
-
-    const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
-    expect(calledArg.body).toBe('```suggestion\nlet count = 0;\n```');
-  });
-
   it('passes startLine to the client', async () => {
     mockGitHub.createPrReviewComment.mockResolvedValue({} as any);
 
     const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
-    await handler({
+    await handler(githubCreatePrReviewCommentSchema.parse({
       repo: 'Org/Repo',
       prNumber: 42,
       path: 'src/file.ts',
@@ -1449,7 +1434,7 @@ describe('githubCreatePrReviewCommentHandler', () => {
       commitId: 'abc',
       line: 50,
       startLine: 45,
-    });
+    }));
 
     const calledArg = mockGitHub.createPrReviewComment.mock.calls[0][2];
     expect(calledArg.startLine).toBe(45);
@@ -1488,12 +1473,12 @@ describe('githubCreatePrReviewCommentHandler', () => {
     mockGitHub.replyToPrReviewComment.mockResolvedValue(reply as any);
 
     const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
-    const result = await handler({
+    const result = await handler(githubCreatePrReviewCommentSchema.parse({
       repo: 'Org/Repo',
       prNumber: 42,
       body: 'Agreed',
       inReplyTo: 5,
-    });
+    }));
 
     expect(mockGitHub.replyToPrReviewComment).toHaveBeenCalledWith('Org/Repo', 42, 5, 'Agreed');
     expect(mockGitHub.createPrReviewComment).not.toHaveBeenCalled();
@@ -1504,13 +1489,13 @@ describe('githubCreatePrReviewCommentHandler', () => {
     mockGitHub.replyToPrReviewComment.mockResolvedValue({} as any);
 
     const handler = githubCreatePrReviewCommentHandler({ github: mockGitHub as any });
-    await handler({
+    await handler(githubCreatePrReviewCommentSchema.parse({
       repo: 'Org/Repo',
       prNumber: 42,
       body: 'Try this',
       inReplyTo: 5,
       suggestedReplacement: 'const x = 1;',
-    });
+    }));
 
     const body = mockGitHub.replyToPrReviewComment.mock.calls[0][3];
     expect(body).toBe('Try this\n\n```suggestion\nconst x = 1;\n```');
@@ -1605,9 +1590,9 @@ describe('githubGetPrReviewCommentsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrReviewCommentsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubGetPrReviewCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrReviewCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrReviewCommentsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 });
 
@@ -1819,7 +1804,7 @@ describe('githubMergePrHandler', () => {
     mockGitHub.mergePr.mockResolvedValue({ merged: true, message: 'Pull Request successfully merged', sha: 'abc123' });
 
     const handler = githubMergePrHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42 });
+    const result = await handler(githubMergePrSchema.parse({ repo: 'Org/Repo', prNumber: 42 }));
 
     expect(mockGitHub.mergePr).toHaveBeenCalledWith('Org/Repo', 42, {
       mergeMethod: 'merge',
@@ -1964,9 +1949,9 @@ describe('githubGetPrFilesHandler', () => {
     mockGitHub.getPrFiles.mockResolvedValue(page(files));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+    const result = await handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, limit: 20 }));
 
-    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1 });
+    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 20, page: 1, includePatch: false });
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toEqual(files);
     expect(parsed.hasMore).toBe(false);
@@ -1986,9 +1971,9 @@ describe('githubGetPrFilesHandler', () => {
     mockGitHub.getPrFiles.mockResolvedValue(page([]));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
-    await handler({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' });
+    await handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, limit: 10, cursor: '2' }));
 
-    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 2 });
+    expect(mockGitHub.getPrFiles).toHaveBeenCalledWith('Org/Repo', 42, { perPage: 10, page: 2, includePatch: false });
   });
 
   it('sets hasMore and nextPageToken from the client hasMore flag', async () => {
@@ -1999,7 +1984,7 @@ describe('githubGetPrFilesHandler', () => {
     mockGitHub.getPrFiles.mockResolvedValue(page(files, true));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+    const result = await handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, limit: 20 }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(20);
@@ -2014,7 +1999,7 @@ describe('githubGetPrFilesHandler', () => {
     mockGitHub.getPrFiles.mockResolvedValue(page(files));
 
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
-    const result = await handler({ repo: 'Org/Repo', prNumber: 42, limit: 20 });
+    const result = await handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, limit: 20 }));
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.items).toHaveLength(10);
@@ -2025,9 +2010,9 @@ describe('githubGetPrFilesHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrFilesHandler({ github: mockGitHub as any });
 
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrFilesSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 
   it('rejects invalid repo format (schema validation)', () => {
@@ -2100,9 +2085,9 @@ describe('githubGetPrCommitsHandler', () => {
   it('rejects invalid cursor (M9)', async () => {
     const handler = githubGetPrCommitsHandler({ github: mockGitHub as any });
 
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '0' })).rejects.toThrow(McpError);
-    await expect(handler({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' })).rejects.toThrow(McpError);
+    await expect(handler(githubGetPrCommitsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: 'abc' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrCommitsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '0' }))).rejects.toThrow(ProtocolError);
+    await expect(handler(githubGetPrCommitsSchema.parse({ repo: 'Org/Repo', prNumber: 42, cursor: '-5' }))).rejects.toThrow(ProtocolError);
   });
 
   it('rejects invalid repo format (schema validation)', () => {

@@ -1,10 +1,11 @@
 import './__fixtures__/tools/home-sandbox.js';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 import { slackConfirmWriteHandler, slackPrepareWriteHandler } from './write-tools.js';
 import { WriteGate } from './write-gate.js';
 import { createClock } from './__fixtures__/tools/clock.js';
 import { createToolContext } from './__fixtures__/tools/context.js';
-import { expectInvalidParams, expectSlackError, parseResult } from './__fixtures__/tools/assertions.js';
+import { expectInvalidParams, parseResult } from './__fixtures__/tools/assertions.js';
 import { removeSandbox, resetSandbox, seedToken } from './__fixtures__/tools/home-sandbox.js';
 import { WRITE_METHOD_NAMES, slackFailure } from './__fixtures__/tools/fake-slack.js';
 import {
@@ -115,11 +116,29 @@ describe('slack_prepare_write and slack_confirm_write: posting by id or link', (
     expect(slack.client.postMessage).not.toHaveBeenCalled();
   });
 
-  it('rejects eleven items with batch_too_large before any upstream call', async () => {
+  it('rejects eleven items in its own parse, against the cap of ten its schema publishes, before any upstream call', async () => {
     const { slack, prepare } = setUp();
     const items = Array.from({ length: 11 }, (_, index) => postItem({ text: `reply number ${index}` }));
 
-    await expectSlackError(() => prepare({ items }), 'batch_too_large');
+    await expect(prepare({ items })).rejects.toBeInstanceOf(ZodError);
+
+    expect(slack.calls).toHaveLength(0);
+  });
+
+  it('parses its own input: an item with an unknown action is a ZodError before any upstream call', async () => {
+    const { slack, prepare } = setUp();
+
+    const items = [{ action: 'delete', destination: channelLink(EXAMPLE_TEAM, CHANNEL_ONE) }];
+
+    await expect(prepare({ items })).rejects.toBeInstanceOf(ZodError);
+
+    expect(slack.calls).toHaveLength(0);
+  });
+
+  it('parses its own input on confirm: a missing confirmation_token is a ZodError and nothing is sent', async () => {
+    const { slack, confirm } = setUp();
+
+    await expect(confirm({})).rejects.toBeInstanceOf(ZodError);
 
     expect(slack.calls).toHaveLength(0);
   });

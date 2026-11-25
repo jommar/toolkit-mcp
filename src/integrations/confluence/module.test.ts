@@ -14,6 +14,8 @@ import {
   confluenceWhoamiHandler,
   confluenceToolDescriptors,
 } from './module.js';
+import { ConfluenceModule } from './index.js';
+import { inputJsonSchema, rawToolHandlers } from '../../__fixtures__/mcp.js';
 
 describe('cqlQuote', () => {
   it('wraps in double quotes and escapes " and \\', () => {
@@ -176,7 +178,7 @@ describe('confluenceWhoamiHandler', () => {
     expect(JSON.parse(result.content[0].text)).toEqual(user);
   });
 
-  it('wraps client errors as McpError', async () => {
+  it('rejects with the client error message', async () => {
     mockConfluence.whoami.mockRejectedValue(new Error('API error'));
 
     const handler = confluenceWhoamiHandler({ confluence: mockConfluence as any });
@@ -196,8 +198,51 @@ describe('confluenceToolDescriptors', () => {
       'confluence_whoami',
     ]);
     for (const d of confluenceToolDescriptors) {
-      expect(d.inputSchema).toMatchObject({ type: 'object' });
+      expect(inputJsonSchema(d)).toMatchObject({ type: 'object' });
       expect(typeof d.description).toBe('string');
+    }
+  });
+});
+
+describe('ConfluenceModule handlers behind their descriptor schemas', () => {
+  it('confluence_search enforces its refine before calling the client', async () => {
+    const search = vi.fn();
+    const handlers = rawToolHandlers(new ConfluenceModule(), { confluence: { search } as any });
+
+    await expect(handlers.confluence_search({})).rejects.toThrow('Provide either query or cql');
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it('confluence_get_page enforces its refine before calling the client', async () => {
+    const getPageById = vi.fn();
+    const getPageByTitle = vi.fn();
+    const handlers = rawToolHandlers(new ConfluenceModule(), { confluence: { getPageById, getPageByTitle } as any });
+
+    await expect(handlers.confluence_get_page({ space: 'STD' })).rejects.toThrow(
+      'Provide either id, or both space and title',
+    );
+    expect(getPageById).not.toHaveBeenCalled();
+    expect(getPageByTitle).not.toHaveBeenCalled();
+  });
+
+  it('confluence_search pages with the schema default limit of 25', async () => {
+    const search = vi.fn().mockResolvedValue({ results: [], start: 0, limit: 25, size: 0, hasMore: false });
+    const handlers = rawToolHandlers(new ConfluenceModule(), { confluence: { search } as any });
+
+    await handlers.confluence_search({ query: 'x' });
+
+    expect(search).toHaveBeenCalledWith('text ~ "x"', expect.objectContaining({ limit: 25 }));
+  });
+});
+
+describe('confluenceToolDescriptors titles and annotations', () => {
+  // Hint values are owned by the 80-tool table in src/integrations/index.test.ts.
+  it.each(confluenceToolDescriptors.map((d) => [d.name, d] as const))('%s has a title and four boolean hints', (_name, d) => {
+    expect(typeof d.title).toBe('string');
+    expect(d.title.trim()).not.toBe('');
+    expect(d.title).not.toBe(d.description);
+    for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const) {
+      expect(typeof d.annotations?.[hint]).toBe('boolean');
     }
   });
 });

@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { JenkinsClient, describeJenkinsError } from '../../services/index.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { paginated, zodToJsonSchema } from '../helpers.js';
+import type { ToolDescriptor } from '../index.js';
+import { READ_ONLY_HINTS } from '../register.js';
+import { paginated } from '../helpers.js';
 
 // ---------------------------------------------------------------------------
 // Shared field schemas
@@ -24,7 +26,7 @@ function offsetFromCursor(cursor?: string): number {
   if (!cursor) return 0;
   const n = parseInt(cursor, 10);
   if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a positive integer.`);
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Invalid cursor: "${cursor}". Must be a positive integer.`);
   }
   return n;
 }
@@ -85,8 +87,8 @@ type ToolHandler<T = unknown> = (
 ) => (args: T) => Promise<{ content: { type: 'text'; text: string }[] }>;
 
 function toMcp(err: unknown): never {
-  if (err instanceof McpError) throw err;
-  throw new McpError(ErrorCode.InternalError, describeJenkinsError(err));
+  if (err instanceof ProtocolError) throw err;
+  throw new ProtocolError(ProtocolErrorCode.InternalError, describeJenkinsError(err));
 }
 
 export const jenkinsGetJobsHandler: ToolHandler<z.infer<typeof jenkinsGetJobsSchema>> =
@@ -127,7 +129,7 @@ export const jenkinsGetConsoleHandler: ToolHandler<z.infer<typeof jenkinsGetCons
   (clients) => async (args) => {
     try {
       if (args.tail && args.cursor) {
-        throw new McpError(ErrorCode.InvalidParams, 'tail cannot be combined with cursor.');
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'tail cannot be combined with cursor.');
       }
       const offset = offsetFromCursor(args.cursor);
       const page = await clients.jenkins.getConsole(args.job, args.buildNumber, {
@@ -193,31 +195,41 @@ export const jenkinsHealthcheckHandler: ToolHandler<z.infer<typeof jenkinsHealth
     }
   };
 
-/** All tool descriptors for the ListToolsRequestSchema response. */
-export const jenkinsToolDescriptors = [
+/** All tool descriptors; register.ts registers them with the server. */
+export const jenkinsToolDescriptors: ToolDescriptor[] = [
   {
     name: 'jenkins_get_jobs',
+    title: 'List Jenkins jobs',
     description: 'List Jenkins jobs with their current build status.',
-    inputSchema: zodToJsonSchema(jenkinsGetJobsSchema),
+    inputSchema: jenkinsGetJobsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jenkins_get_builds',
+    title: 'List Jenkins builds',
     description: 'List recent builds for a job (newest first), paginated.',
-    inputSchema: zodToJsonSchema(jenkinsGetBuildsSchema),
+    inputSchema: jenkinsGetBuildsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jenkins_get_build',
+    title: 'Get Jenkins build',
     description: 'Get details for a single build; omit buildNumber for the most recent build.',
-    inputSchema: zodToJsonSchema(jenkinsGetBuildSchema),
+    inputSchema: jenkinsGetBuildSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jenkins_get_console',
+    title: 'Get Jenkins console log',
     description: 'Get a build console log, paginated by line from the start; set tail=true for the last lines. Omit buildNumber for the most recent build.',
-    inputSchema: zodToJsonSchema(jenkinsGetConsoleSchema),
+    inputSchema: jenkinsGetConsoleSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jenkins_healthcheck',
+    title: 'Check Jenkins health',
     description: 'Report whether the last build of each requested job succeeded; omit `jobs` to check all visible jobs.',
-    inputSchema: zodToJsonSchema(jenkinsHealthcheckSchema),
+    inputSchema: jenkinsHealthcheckSchema,
+    annotations: READ_ONLY_HINTS,
   },
 ];

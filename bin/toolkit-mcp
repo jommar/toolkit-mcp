@@ -1,0 +1,9 @@
+#!/bin/sh
+# Starts the toolkit-mcp server with the Node version pinned in .nvmrc, falling back to node on PATH.
+# Stdout is the MCP protocol channel, so nothing here writes to it.
+cd "$(dirname "$0")/.." >/dev/null || exit 1
+NODE="$HOME/.nvm/versions/node/v$(cat .nvmrc)/bin/node"
+if [ ! -x "$NODE" ]; then
+  NODE=node
+fi
+exec "$NODE" --import tsx src/mcp-server.ts
