@@ -1,31 +1,39 @@
 {
   "name": "toolkit-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Dev Workflow MCP Hub — bridges AI coding agents with Jira, GitHub, and more",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "mcp": "node --import tsx src/mcp-server.ts",
     "mcp:prod": "node dist/mcp-server.js",
     "mcp:inspect": "npx @modelcontextprotocol/inspector node --import tsx src/mcp-server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "axios": "^1.7.7",
+    "@modelcontextprotocol/server": "2.4.0",
+    "axios": "1.21.1",
     "dotenv": "^16.4.5",
     "he": "^1.2.0",
     "marked": "18.1.1",
-    "zod": "^3.23.x"
+    "zod": "4.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/he": "^1.2.3",
-    "@types/node": "^22.7.4",
+    "@types/node": "^26",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "vite": "^8.3.8"
   }
 }

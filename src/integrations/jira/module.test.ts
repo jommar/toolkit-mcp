@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { AxiosError } from 'axios';
-import { zodToJsonSchema } from '../helpers.js';
+import { contentText, inputJsonSchema } from '../../__fixtures__/mcp.js';
 
 // Mock jira-cli so toSlimIssue is available (JiraClient constructor unused by these tests)
 vi.mock('../../services/index.js', async () => {
@@ -33,6 +33,7 @@ import {
   jiraLinkIssuesHandler,
   jiraGetAttachmentHandler,
   jiraGetCommentsHandler,
+  jiraGetCommentsSchema,
   jiraGetChangelogsHandler,
   jiraGetChangelogsSchema,
   jiraListTransitionsHandler,
@@ -103,7 +104,7 @@ describe('jiraWhoamiHandler', () => {
     const result = await handler({});
 
     expect(mockJira.whoami).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(result.content[0].text)).toEqual(user);
+    expect(JSON.parse(contentText(result))).toEqual(user);
   });
 });
 
@@ -120,12 +121,12 @@ describe('jiraGetIssuesHandler', () => {
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1' });
+    const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1' }));
 
     // Now calls getIssue + toSlimIssue rather than getIssueSlim
     expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', expect.any(Array));
     expect(mockJira.getIssueSlim).not.toHaveBeenCalled();
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toEqual([rawIssue]);
     expect(parsed.hasMore).toBe(false);
   });
@@ -149,7 +150,7 @@ describe('jiraGetIssuesHandler', () => {
       maxResults: 20,
       nextPageToken: undefined,
     });
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(2);
     expect(parsed.hasMore).toBe(false);
   });
@@ -168,7 +169,7 @@ describe('jiraGetIssuesHandler', () => {
       maxResults: 5,
       nextPageToken: 'abc123',
     });
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.hasMore).toBe(true);
     expect(parsed.nextPageToken).toBe('page2');
   });
@@ -178,11 +179,11 @@ describe('jiraGetIssuesHandler', () => {
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1', jql: 'project = OTHER' });
+    const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', jql: 'project = OTHER' }));
 
     expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', expect.any(Array));
     expect(mockJira.search).not.toHaveBeenCalled();
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(1);
   });
 
@@ -191,14 +192,14 @@ describe('jiraGetIssuesHandler', () => {
     mockJira.getIssue.mockResolvedValue(rawIssue);
 
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1', fields: ['summary', 'customfield_10058'] });
+    const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', fields: ['summary', 'customfield_10058'] }));
 
     expect(mockJira.getIssue).toHaveBeenCalledWith(
       'TAP-1',
       expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
     );
     expect(toSlimIssue).toHaveBeenCalledWith(rawIssue, ['customfield_10058']);
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items[0].fields.customfield_10058).toBe(5);
   });
 
@@ -215,15 +216,15 @@ describe('jiraGetIssuesHandler', () => {
       fields: expect.arrayContaining([...DEV_FIELDS, 'customfield_10058']),
     });
     expect(toSlimIssue).toHaveBeenCalledWith(rawIssues[0], ['customfield_10058']);
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items[0].fields.customfield_10058).toBe(5);
   });
 
   it('throws when neither key nor jql provided', async () => {
     const handler = jiraGetIssuesHandler({ jira: mockJira as any });
 
-    await expect(handler({})).rejects.toThrow(McpError);
-    await expect(handler({})).rejects.toThrow('Provide either key or jql');
+    await expect(handler(jiraGetIssuesSchema.parse({}))).rejects.toThrow(ProtocolError);
+    await expect(handler(jiraGetIssuesSchema.parse({}))).rejects.toThrow('Provide either key or jql');
   });
 
   describe('raw ADF description', () => {
@@ -259,9 +260,9 @@ describe('jiraGetIssuesHandler', () => {
       mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TAP-1', adf: true });
+      const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', adf: true }));
 
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
       expect(parsed.items[0].description).toBe('Problem\nDetails');
     });
@@ -278,7 +279,7 @@ describe('jiraGetIssuesHandler', () => {
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
       const result = await handler({ jql: 'project = TAP', limit: 20, adf: true });
 
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.items[0].descriptionAdf).toEqual(expectedAdf);
       expect('descriptionAdf' in parsed.items[1]).toBe(false);
     });
@@ -287,9 +288,9 @@ describe('jiraGetIssuesHandler', () => {
       mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TAP-1' });
+      const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1' }));
 
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect('descriptionAdf' in parsed.items[0]).toBe(false);
       expect(parsed.items[0].description).toBe('Problem\nDetails');
     });
@@ -298,9 +299,9 @@ describe('jiraGetIssuesHandler', () => {
       mockJira.getIssue.mockResolvedValue({ id: '1', key: 'TAP-1', fields: { summary: 'Test', description: adfDescription } });
 
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
-      const result = await handler({ key: 'TAP-1', adf: false });
+      const result = await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', adf: false }));
 
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect('descriptionAdf' in parsed.items[0]).toBe(false);
     });
   });
@@ -325,7 +326,7 @@ describe('jiraGetIssuesSchema adf', () => {
 
   it('documents adf in the published tool input schema', () => {
     const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_get_issues')!;
-    expect((descriptor.inputSchema as any).properties.adf.type).toBe('boolean');
+    expect((inputJsonSchema(descriptor) as any).properties.adf.type).toBe('boolean');
   });
 });
 
@@ -373,7 +374,7 @@ describe('jiraGetIssuesHandler linked GitHub pull requests and Slack threads', (
   const lookUp = async (args: Record<string, unknown>, clients: Record<string, unknown> = {}) => {
     const handler = jiraGetIssuesHandler({ jira: mockJira as any, ...clients } as any);
     const result = await handler({ limit: 20, ...args } as any);
-    return { text: result.content[0].text, body: JSON.parse(result.content[0].text) };
+    return { text: contentText(result), body: JSON.parse(contentText(result)) };
   };
   const withBoth = () => ({ github: mockGitHub, slack: mockSlack });
 
@@ -702,7 +703,7 @@ describe('jiraGetIssuesSchema includeGithubPrs and includeSlackThreads', () => {
 
   it.each(['includeGithubPrs', 'includeSlackThreads'])('publishes %s as a described boolean', (flag) => {
     const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_get_issues')!;
-    const property = (descriptor.inputSchema as any).properties[flag];
+    const property = (inputJsonSchema(descriptor) as any).properties[flag];
 
     expect(property.type).toBe('boolean');
     expect(property.description).toMatch(/^[^.]+\.$/);
@@ -735,7 +736,7 @@ describe('jiraCreateIssueHandler', () => {
       description: undefined,
       fields: undefined,
     });
-    expect(JSON.parse(result.content[0].text)).toEqual(created);
+    expect(JSON.parse(contentText(result))).toEqual(created);
   });
 
   it('creates an issue with description', async () => {
@@ -809,11 +810,11 @@ describe('jiraCreateIssueHandler', () => {
       );
     });
 
-    it('throws an McpError listing the valid names when a name is unknown, without creating', async () => {
+    it('throws a ProtocolError listing the valid names when a name is unknown, without creating', async () => {
       const handler = jiraCreateIssueHandler({ jira: mockJira as any });
       const call = handler({ ...base, components: ['Billing', 'Nope'] });
 
-      await expect(call).rejects.toThrow(McpError);
+      await expect(call).rejects.toThrow(ProtocolError);
       await expect(call).rejects.toThrow('"Nope"');
       await expect(call).rejects.toThrow('Available: EZAT Automation, Billing');
       expect(mockJira.createIssue).not.toHaveBeenCalled();
@@ -859,7 +860,7 @@ describe('jiraUpdateIssueHandler', () => {
     expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', {
       summary: 'Updated title',
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
     });
@@ -889,7 +890,7 @@ describe('jiraUpdateIssueHandler', () => {
         summary: 'Updated title',
         components: [{ id: '10041' }],
       });
-      expect(JSON.parse(result.content[0].text)).toEqual({ success: true, key: 'TAP-1' });
+      expect(JSON.parse(contentText(result))).toEqual({ success: true, key: 'TAP-1' });
     });
 
     it('lets components win over fields.components', async () => {
@@ -903,11 +904,11 @@ describe('jiraUpdateIssueHandler', () => {
       expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10040' }] });
     });
 
-    it('throws an McpError listing the valid names when a name is unknown, without updating', async () => {
+    it('throws a ProtocolError listing the valid names when a name is unknown, without updating', async () => {
       const handler = jiraUpdateIssueHandler({ jira: mockJira as any });
       const call = handler({ key: 'TAP-1', fields: {}, components: ['Nope'] });
 
-      await expect(call).rejects.toThrow(McpError);
+      await expect(call).rejects.toThrow(ProtocolError);
       await expect(call).rejects.toThrow('"Nope"');
       await expect(call).rejects.toThrow('Available: EZAT Automation, Billing');
       expect(mockJira.updateIssue).not.toHaveBeenCalled();
@@ -927,7 +928,7 @@ describe('jiraUpdateIssueHandler', () => {
       const result = await handler({ key: 'TAP-1', components: ['billing'] });
 
       expect(mockJira.updateIssue).toHaveBeenCalledWith('TAP-1', { components: [{ id: '10041' }] });
-      expect(JSON.parse(result.content[0].text)).toEqual({ success: true, key: 'TAP-1' });
+      expect(JSON.parse(contentText(result))).toEqual({ success: true, key: 'TAP-1' });
     });
   });
 });
@@ -945,14 +946,14 @@ describe('jiraListComponentsHandler', () => {
     const result = await handler({ projectKey: 'TAP' });
 
     expect(mockJira.listProjectComponents).toHaveBeenCalledWith('TAP');
-    expect(JSON.parse(result.content[0].text)).toEqual({ items: components, hasMore: false });
+    expect(JSON.parse(contentText(result))).toEqual({ items: components, hasMore: false });
   });
 });
 
 describe('components schemas and descriptors', () => {
   const descriptor = (name: string) => jiraToolDescriptors.find((d) => d.name === name)!;
   const props = (name: string) =>
-    (descriptor(name).inputSchema as { properties: Record<string, any>; required?: string[] });
+    (inputJsonSchema(descriptor(name)) as { properties: Record<string, any>; required?: string[] });
 
   it.each([
     ['jiraCreateIssueSchema', jiraCreateIssueSchema, { projectKey: 'TAP', issueType: 'Task', summary: 's' }],
@@ -966,14 +967,27 @@ describe('components schemas and descriptors', () => {
   });
 
   it.each(['jira_create_issue', 'jira_update_issue'])(
-    '%s advertises components as an optional array of strings',
+    '%s advertises components as an optional array of strings of at most 255 characters',
     (name) => {
       const schema = props(name);
       expect(schema.properties.components.type).toBe('array');
-      expect(schema.properties.components.items).toEqual({ type: 'string' });
+      // The item bound is published in the schema, not hidden in a refine.
+      expect(schema.properties.components.items).toEqual({ type: 'string', maxLength: 255 });
       expect(schema.required).not.toContain('components');
     },
   );
+
+  // String bounds count code points (zod's max), so an astral character counts once.
+  it.each([
+    ['jiraCreateIssueSchema', jiraCreateIssueSchema, { projectKey: 'TAP', issueType: 'Task', summary: 's' }],
+    ['jiraUpdateIssueSchema', jiraUpdateIssueSchema, { key: 'TAP-1', fields: {} }],
+  ])('%s bounds a component name at 255 characters with one message, counting code points', (_name, schema, base) => {
+    expect(schema.safeParse({ ...base, components: ['\u{1F600}'.repeat(255)] }).success).toBe(true);
+
+    const tooLong = schema.safeParse({ ...base, components: ['x'.repeat(256)] });
+    expect(tooLong.success).toBe(false);
+    expect(tooLong.error!.issues.map((issue) => issue.message)).toEqual(['Component name must be 255 characters or fewer.']);
+  });
 
   it('documents that jira_update_issue components replace the existing ones', () => {
     expect(props('jira_update_issue').properties.components.description).toContain('REPLACES');
@@ -1068,7 +1082,7 @@ describe('jiraTransitionIssueHandler', () => {
     expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '41', {
       comment: undefined,
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       transitionId: '41',
@@ -1092,7 +1106,7 @@ describe('jiraTransitionIssueHandler', () => {
     expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '41', {
       comment: undefined,
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       transitionId: '41',
@@ -1114,7 +1128,7 @@ describe('jiraTransitionIssueHandler', () => {
     expect(mockJira.transitionIssue).toHaveBeenCalledWith('TAP-1', '31', {
       comment: undefined,
     });
-    expect(JSON.parse(result.content[0].text).transitionId).toBe('31');
+    expect(JSON.parse(contentText(result)).transitionId).toBe('31');
   });
 
   it('passes comment during transition', async () => {
@@ -1141,7 +1155,7 @@ describe('jiraTransitionIssueHandler', () => {
 
     await expect(
       handler({ key: 'TAP-1', transitionName: 'Unknown' }),
-    ).rejects.toThrow(McpError);
+    ).rejects.toThrow(ProtocolError);
     await expect(
       handler({ key: 'TAP-1', transitionName: 'Unknown' }),
     ).rejects.toThrow(
@@ -1152,7 +1166,7 @@ describe('jiraTransitionIssueHandler', () => {
   it('throws when neither transitionId nor transitionName provided', async () => {
     const handler = jiraTransitionIssueHandler({ jira: mockJira as any });
 
-    await expect(handler({ key: 'TAP-1' })).rejects.toThrow(McpError);
+    await expect(handler({ key: 'TAP-1' })).rejects.toThrow(ProtocolError);
     await expect(handler({ key: 'TAP-1' })).rejects.toThrow(
       'Provide either transitionId or transitionName',
     );
@@ -1174,7 +1188,7 @@ describe('jiraAssignIssueHandler', () => {
     const result = await handler({ key: 'TAP-1', assignee: 'me' });
 
     expect(mockJira.assignToMe).toHaveBeenCalledWith('TAP-1');
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       assignee: 'Current User',
@@ -1189,7 +1203,7 @@ describe('jiraAssignIssueHandler', () => {
     const result = await handler({ key: 'TAP-1', assignee: 'me' });
 
     expect(mockJira.assignToMe).toHaveBeenCalledWith('TAP-1');
-    expect(JSON.parse(result.content[0].text).assignee).toBe('Default User');
+    expect(JSON.parse(contentText(result)).assignee).toBe('Default User');
   });
 
   it('unassigns (none)', async () => {
@@ -1199,7 +1213,7 @@ describe('jiraAssignIssueHandler', () => {
     const result = await handler({ key: 'TAP-1', assignee: 'none' });
 
     expect(mockJira.assignIssue).toHaveBeenCalledWith('TAP-1', null);
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       assignee: null,
@@ -1220,7 +1234,7 @@ describe('jiraAssignIssueHandler', () => {
 
     expect(mockJira.searchUsers).toHaveBeenCalledWith('John Doe');
     expect(mockJira.assignIssue).toHaveBeenCalledWith('TAP-1', 'abc-123');
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       assignee: 'John Doe',
@@ -1262,10 +1276,10 @@ describe('jiraAddCommentHandler', () => {
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1', body: 'Thanks!' });
+    const result = await handler(jiraAddCommentSchema.parse({ key: 'TAP-1', body: 'Thanks!' }));
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', undefined, undefined);
-    expect(JSON.parse(result.content[0].text)).toEqual(comment);
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', undefined, 'text');
+    expect(JSON.parse(contentText(result))).toEqual(comment);
   });
 
   it('replies in a thread when parentId is given and returns the posted comment', async () => {
@@ -1273,10 +1287,10 @@ describe('jiraAddCommentHandler', () => {
     mockJira.addComment.mockResolvedValue(comment);
 
     const handler = jiraAddCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1', body: 'Thanks!', parentId: '48106' });
+    const result = await handler(jiraAddCommentSchema.parse({ key: 'TAP-1', body: 'Thanks!', parentId: '48106' }));
 
-    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', '48106', undefined);
-    expect(JSON.parse(result.content[0].text)).toEqual(comment);
+    expect(mockJira.addComment).toHaveBeenCalledWith('TAP-1', 'Thanks!', '48106', 'text');
+    expect(JSON.parse(contentText(result))).toEqual(comment);
   });
 });
 
@@ -1293,10 +1307,10 @@ describe('jiraUpdateCommentHandler', () => {
     mockJira.updateComment.mockResolvedValue(comment);
 
     const handler = jiraUpdateCommentHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-799', commentId: '38560', body: 'Revised.' });
+    const result = await handler(jiraUpdateCommentSchema.parse({ key: 'TAP-799', commentId: '38560', body: 'Revised.' }));
 
-    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-799', '38560', 'Revised.', undefined);
-    expect(JSON.parse(result.content[0].text)).toEqual(comment);
+    expect(mockJira.updateComment).toHaveBeenCalledWith('TAP-799', '38560', 'Revised.', 'text');
+    expect(JSON.parse(contentText(result))).toEqual(comment);
   });
 });
 
@@ -1317,7 +1331,7 @@ describe('jiraAddCommentSchema parentId', () => {
 
   it('is advertised as an optional property on the jira_add_comment descriptor', () => {
     const descriptor = jiraToolDescriptors.find((d) => d.name === 'jira_add_comment')!;
-    const schema = descriptor.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+    const schema = inputJsonSchema(descriptor) as { properties: Record<string, unknown>; required?: string[] };
 
     expect(schema.properties).toHaveProperty('parentId');
     expect(schema.required).not.toContain('parentId');
@@ -1363,7 +1377,7 @@ describe('comment format', () => {
 
   it.each(commentTools)('%s advertises format as an optional enum defaulting to text', (name) => {
     const descriptor = jiraToolDescriptors.find((d) => d.name === name)!;
-    const schema = descriptor.inputSchema as {
+    const schema = inputJsonSchema(descriptor) as {
       properties: Record<string, { enum?: string[]; default?: string; description: string }>;
       required?: string[];
     };
@@ -1383,8 +1397,9 @@ describe('comment format', () => {
   });
 
   it.each(commentTools)('%s steers structured content to markdown and warns that text is one paragraph', (name) => {
-    const { description, inputSchema } = jiraToolDescriptors.find((d) => d.name === name)!;
-    const properties = (inputSchema as { properties: Record<string, { description: string }> }).properties;
+    const descriptor = jiraToolDescriptors.find((d) => d.name === name)!;
+    const { description } = descriptor;
+    const properties = (inputJsonSchema(descriptor) as { properties: Record<string, { description: string }> }).properties;
 
     expect(description).toContain('ONE paragraph');
     expect(description).toContain('one option per bullet');
@@ -1395,7 +1410,7 @@ describe('comment format', () => {
 
   it('leaves the other Jira tools without a format parameter', () => {
     for (const descriptor of jiraToolDescriptors.filter((d) => !commentTools.includes(d.name))) {
-      expect(descriptor.inputSchema).not.toHaveProperty('properties.format');
+      expect(inputJsonSchema(descriptor)).not.toHaveProperty('properties.format');
     }
   });
 
@@ -1472,7 +1487,7 @@ describe('jiraLinkIssuesHandler', () => {
       outwardKey: 'TAP-2',
       comment: undefined,
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       type: 'Blocks',
       inwardKey: 'TAP-1',
@@ -1496,7 +1511,7 @@ describe('jiraLinkIssuesHandler', () => {
     expect(mockJira.linkIssues).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'Blocks' }),
     );
-    expect(JSON.parse(result.content[0].text).type).toBe('Blocks');
+    expect(JSON.parse(contentText(result)).type).toBe('Blocks');
   });
 
   it('passes optional comment when linking', async () => {
@@ -1531,7 +1546,7 @@ describe('jiraLinkIssuesHandler', () => {
         outwardKey: 'TAP-2',
         type: 'InvalidType',
       }),
-    ).rejects.toThrow(McpError);
+    ).rejects.toThrow(ProtocolError);
     await expect(
       handler({
         inwardKey: 'TAP-1',
@@ -1561,10 +1576,10 @@ describe('jiraGetCommentsHandler', () => {
     mockJira.getComments.mockResolvedValue(comments);
 
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
-    const result = await handler({ key: 'TAP-1' });
+    const result = await handler(jiraGetCommentsSchema.parse({ key: 'TAP-1' }));
 
     expect(mockJira.getComments).toHaveBeenCalledWith('TAP-1');
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(10);
     expect(parsed.hasMore).toBe(false);
   });
@@ -1600,9 +1615,9 @@ describe('jiraGetCommentsHandler', () => {
     it('returns id, author name, created, updated and plain-text body only', async () => {
       mockJira.getComments.mockResolvedValue([rawComment]);
 
-      const result = await jiraGetCommentsHandler({ jira: mockJira as any })({ key: 'TAP-1' });
+      const result = await jiraGetCommentsHandler({ jira: mockJira as any })(jiraGetCommentsSchema.parse({ key: 'TAP-1' }));
 
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.items).toEqual([
         {
           id: '10',
@@ -1613,24 +1628,24 @@ describe('jiraGetCommentsHandler', () => {
         },
       ]);
       expect(parsed.hasMore).toBe(false);
-      const text = result.content[0].text;
+      const text = contentText(result);
       expect(text).not.toMatch(/example\.com|avatar|"self"|accountId|updateAuthor|jsdPublic/);
     });
 
     it('keeps parentId on thread replies', async () => {
       mockJira.getComments.mockResolvedValue([{ ...rawComment, id: '11', parentId: '10' }]);
 
-      const result = await jiraGetCommentsHandler({ jira: mockJira as any })({ key: 'TAP-1' });
+      const result = await jiraGetCommentsHandler({ jira: mockJira as any })(jiraGetCommentsSchema.parse({ key: 'TAP-1' }));
 
-      expect(JSON.parse(result.content[0].text).items[0]).toMatchObject({ id: '11', parentId: '10' });
+      expect(JSON.parse(contentText(result)).items[0]).toMatchObject({ id: '11', parentId: '10' });
     });
 
     it('adds the raw ADF as bodyAdf only when adf is true', async () => {
       mockJira.getComments.mockResolvedValue([rawComment]);
       const handler = jiraGetCommentsHandler({ jira: mockJira as any });
 
-      const off = JSON.parse((await handler({ key: 'TAP-1' })).content[0].text);
-      const on = JSON.parse((await handler({ key: 'TAP-1', adf: true })).content[0].text);
+      const off = JSON.parse(contentText(await handler(jiraGetCommentsSchema.parse({ key: 'TAP-1' }))));
+      const on = JSON.parse(contentText(await handler(jiraGetCommentsSchema.parse({ key: 'TAP-1', adf: true }))));
 
       expect(off.items[0]).not.toHaveProperty('bodyAdf');
       expect(on.items[0].bodyAdf).toEqual(rawComment.body);
@@ -1648,7 +1663,7 @@ describe('jiraGetCommentsHandler', () => {
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-1', limit: 10 });
 
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(10);
     expect(parsed.hasMore).toBe(true);
     expect(parsed.nextPageToken).toBe('10');
@@ -1663,7 +1678,7 @@ describe('jiraGetCommentsHandler', () => {
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-1', limit: 10, cursor: '20' });
 
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(10);
     expect(parsed.items[0].id).toBe('21');
     expect(parsed.hasMore).toBe(true);
@@ -1677,7 +1692,7 @@ describe('jiraGetCommentsHandler', () => {
     const handler = jiraGetCommentsHandler({ jira: mockJira as any });
     const result = await handler({ key: 'TAP-1', limit: 10 });
 
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items).toHaveLength(5);
     expect(parsed.hasMore).toBe(false);
     expect(parsed.nextPageToken).toBeUndefined();
@@ -1703,7 +1718,7 @@ describe('jiraListTransitionsHandler', () => {
     const result = await handler({ key: 'TAP-1' });
 
     expect(mockJira.listTransitions).toHaveBeenCalledWith('TAP-1');
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed).toEqual(transitions);
   });
 });
@@ -1727,7 +1742,7 @@ describe('jiraListIssueLinkTypesHandler', () => {
     const result = await handler({});
 
     expect(mockJira.listIssueLinkTypes).toHaveBeenCalled();
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed).toEqual(linkTypes);
   });
 });
@@ -1750,7 +1765,7 @@ describe('jiraSearchUsersHandler', () => {
     const result = await handler({ query: 'John' });
 
     expect(mockJira.searchUsers).toHaveBeenCalledWith('John');
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed).toEqual(users);
   });
 });
@@ -1774,7 +1789,7 @@ describe('jiraListFieldsHandler', () => {
     const result = await handler({});
 
     expect(mockJira.getFields).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(result.content[0].text)).toEqual(fields);
+    expect(JSON.parse(contentText(result))).toEqual(fields);
   });
 
   it('filters fields by case-insensitive name substring', async () => {
@@ -1789,7 +1804,7 @@ describe('jiraListFieldsHandler', () => {
     const handler = jiraListFieldsHandler({ jira: mockJira as any });
     const result = await handler({ search: 'STORY' });
 
-    const items = JSON.parse(result.content[0].text);
+    const items = JSON.parse(contentText(result));
     expect(items).toHaveLength(2);
     expect(items.map((f: any) => f.id).sort()).toEqual(['customfield_10016', 'customfield_10058']);
   });
@@ -1810,7 +1825,7 @@ describe('jiraDeleteCommentHandler', () => {
     const result = await handler({ key: 'TAP-1', commentId: '12345' });
 
     expect(mockJira.deleteComment).toHaveBeenCalledWith('TAP-1', '12345');
-    expect(JSON.parse(result.content[0].text)).toEqual({
+    expect(JSON.parse(contentText(result))).toEqual({
       success: true,
       key: 'TAP-1',
       commentId: '12345',
@@ -1957,7 +1972,7 @@ describe('jiraGetChangelogsHandler', () => {
       'TAP-1',
       expect.objectContaining({ limit: 20, startOffset: 0 }),
     );
-    const text = result.content[0].text;
+    const text = contentText(result);
     expect(text).not.toContain('\n');
     const parsed = JSON.parse(text);
     expect(parsed).toEqual({
@@ -2038,7 +2053,7 @@ describe('jiraGetChangelogsHandler', () => {
 
     expect(mockJira.getChangelogs).toHaveBeenCalledTimes(3);
     expect(mockJira.getChangelogs.mock.calls.map((call) => call[0])).toEqual(['TAP-1', 'TAP-2', 'TAP-404']);
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items.map((item: any) => item.key)).toEqual(['TAP-1', 'TAP-2']);
     expect(parsed.items[0].hasMore).toBe(false);
     expect(parsed.items[1].hasMore).toBe(true);
@@ -2076,7 +2091,7 @@ describe('jiraGetChangelogsHandler', () => {
       'TAP-1',
       expect.objectContaining({ limit: 20, startOffset: 0, fields: ['status'] }),
     );
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items[0].hasMore).toBe(true);
     expect(parsed.items[0].nextPageToken).toBe('1000');
     expect(parsed.warnings).toHaveLength(1);
@@ -2111,11 +2126,11 @@ describe('jiraGetChangelogsHandler', () => {
     ['multi-key cursor', { keys: ['TAP-1', 'TAP-2'], cursor: '20', limit: 20, maxValueChars: 200 }],
     ['non-numeric cursor', { keys: ['TAP-1'], cursor: 'abc', limit: 20, maxValueChars: 200 }],
     ['negative cursor', { keys: ['TAP-1'], cursor: '-1', limit: 20, maxValueChars: 200 }],
-  ])('rejects invalid cursor (%s) with McpError(InvalidParams) without calling getChangelogs', async (_label, args) => {
+  ])('rejects invalid cursor (%s) with ProtocolError(InvalidParams) without calling getChangelogs', async (_label, args) => {
     const handler = jiraGetChangelogsHandler({ jira: mockJira as any });
 
-    await expect(handler(args)).rejects.toThrow(McpError);
-    await expect(handler(args)).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
+    await expect(handler(args)).rejects.toThrow(ProtocolError);
+    await expect(handler(args)).rejects.toMatchObject({ code: ProtocolErrorCode.InvalidParams });
     expect(mockJira.getChangelogs).not.toHaveBeenCalled();
   });
 
@@ -2138,7 +2153,7 @@ describe('jiraGetChangelogsHandler', () => {
     expect(mockJira.getChangelogs).toHaveBeenCalledTimes(12);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(5);
-    const parsed = JSON.parse(result.content[0].text);
+    const parsed = JSON.parse(contentText(result));
     expect(parsed.items.map((item: any) => item.key)).toEqual(keys);
   });
 });
@@ -2172,16 +2187,65 @@ describe('jiraGetChangelogsSchema', () => {
     }
   });
 
-  it('rejects dot-segment keys while accepting issue keys and numeric IDs, and keeps JSON schema items as string', () => {
+  it('rejects dot-segment keys while accepting issue keys and numeric IDs, and publishes the 1 to 20 character item bound', () => {
     expect(jiraGetChangelogsSchema.safeParse({ keys: ['.'] }).success).toBe(false);
     expect(jiraGetChangelogsSchema.safeParse({ keys: ['..'] }).success).toBe(false);
     expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1', '..'] }).success).toBe(false);
     expect(jiraGetChangelogsSchema.safeParse({ keys: ['TAP-1', '10001'] }).success).toBe(true);
 
-    const jsonSchema = zodToJsonSchema(jiraGetChangelogsSchema) as {
-      properties: { keys: { type: string; items: { type: string } } };
+    const jsonSchema = inputJsonSchema(jiraToolDescriptors.find((d) => d.name === 'jira_get_changelogs')!) as {
+      properties: { keys: { type: string; items: Record<string, unknown> } };
     };
     expect(jsonSchema.properties.keys.type).toBe('array');
-    expect(jsonSchema.properties.keys.items).toEqual({ type: 'string' });
+    // The item bound is published in the schema, not hidden in a refine.
+    expect(jsonSchema.properties.keys.items).toEqual({ type: 'string', minLength: 1, maxLength: 20 });
+  });
+
+  it('bounds an issue key at 20 characters with one message, counting code points', () => {
+    expect(jiraGetChangelogsSchema.safeParse({ keys: ['\u{1F600}'.repeat(20)] }).success).toBe(true);
+
+    const tooLong = jiraGetChangelogsSchema.safeParse({ keys: ['K'.repeat(21)] });
+    expect(tooLong.success).toBe(false);
+    expect(tooLong.error!.issues.map((issue) => issue.message)).toEqual(['Issue key must be 1 to 20 characters']);
+  });
+});
+
+describe('limit bounds', () => {
+  it.each([
+    ['jira_get_issues', jiraGetIssuesSchema, { jql: 'project = TAP' }, 20],
+    ['jira_get_comments', jiraGetCommentsSchema, { key: 'TAP-1' }, 50],
+  ] as const)('%s accepts limit 1..100, rejects 101, and publishes maximum 100', (name, schema, base, defaultLimit) => {
+    expect(schema.safeParse({ ...base, limit: 100 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, limit: 101 }).success).toBe(false);
+    expect(schema.parse(base).limit).toBe(defaultLimit);
+
+    const descriptor = jiraToolDescriptors.find((d) => d.name === name)!;
+    const limit = (inputJsonSchema(descriptor) as { properties: Record<string, any>; required?: string[] }).properties.limit;
+    expect(limit.maximum).toBe(100);
+    expect(limit.default).toBe(defaultLimit);
+    expect((inputJsonSchema(descriptor) as { required?: string[] }).required ?? []).not.toContain('limit');
+  });
+
+  it.each([
+    ['jira_get_issues', jiraGetIssuesSchema, { jql: 'project = TAP' }],
+    ['jira_get_comments', jiraGetCommentsSchema, { key: 'TAP-1' }],
+  ] as const)('%s takes only a whole-number limit of at least 1, and publishes it as an integer with minimum 1', (name, schema, base) => {
+    expect(schema.safeParse({ ...base, limit: 1 }).success).toBe(true);
+    for (const limit of [0, -1, 1.5]) expect(schema.safeParse({ ...base, limit }).success, `limit ${limit}`).toBe(false);
+
+    const descriptor = jiraToolDescriptors.find((d) => d.name === name)!;
+    expect(inputJsonSchema(descriptor).properties.limit).toMatchObject({ type: 'integer', minimum: 1, maximum: 100 });
+  });
+});
+
+describe('jiraToolDescriptors titles and annotations', () => {
+  // Hint values are owned by the 80-tool table in src/integrations/index.test.ts.
+  it.each(jiraToolDescriptors.map((d) => [d.name, d] as const))('%s has a title and four boolean hints', (_name, d) => {
+    expect(typeof d.title).toBe('string');
+    expect(d.title.trim()).not.toBe('');
+    expect(d.title).not.toBe(d.description);
+    for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const) {
+      expect(typeof d.annotations?.[hint]).toBe('boolean');
+    }
   });
 });

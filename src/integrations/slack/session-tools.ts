@@ -1,6 +1,6 @@
 import { access } from 'node:fs/promises';
 import os from 'node:os';
-import { ErrorCode, McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolErrorCode, ProtocolError, type CallToolResult } from '@modelcontextprotocol/server';
 import { readAppConfig } from '../../services/slack/app-config.js';
 import {
   readCapturedSession,
@@ -352,14 +352,14 @@ async function settle<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
-    if (error instanceof McpError) throw error;
+    if (error instanceof ProtocolError) throw error;
     throw sessionFailure(error);
   }
 }
 
 // The login module carries Slack's slack_code on an exchange failure and revoked and next_step on a
 // wrong-workspace failure; all of them reach the agent here.
-function sessionFailure(error: unknown): McpError {
+function sessionFailure(error: unknown): ProtocolError {
   const message = error instanceof Error ? error.message : 'The Slack session call failed.';
   const details = (error ?? {}) as { slack_code?: unknown; revoked?: unknown; next_step?: unknown };
   const parts = [message];
@@ -371,8 +371,8 @@ function sessionFailure(error: unknown): McpError {
   return slackError(codeOf(error), parts.join(' '));
 }
 
-function slackError(code: string, message: string): McpError {
-  return new McpError(ErrorCode.InvalidParams, `slack.${code}: ${message}`);
+function slackError(code: string, message: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `slack.${code}: ${message}`);
 }
 
 function codeOf(error: unknown): string {

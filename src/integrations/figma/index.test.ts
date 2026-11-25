@@ -5,6 +5,8 @@ vi.mock("../../services/index.js", () => ({
 }));
 
 import { FigmaModule } from "./index.js";
+import { figmaGetFileSchema, figmaGetImagesSchema, figmaPostCommentSchema } from "./module.js";
+import { contentText, inputJsonSchema, rawToolHandlers } from "../../__fixtures__/mcp.js";
 
 function makeMockFigma() {
   return {
@@ -65,7 +67,7 @@ describe("FigmaModule", () => {
     });
 
     it("returns 9 handlers with expected names", () => {
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       expect(Object.keys(handlers)).toHaveLength(9);
       expect(handlers).toHaveProperty("figma_get_me");
       expect(handlers).toHaveProperty("figma_get_file");
@@ -86,11 +88,11 @@ describe("FigmaModule", () => {
         img_url: "",
       });
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_me({});
 
       expect(mockFigma.getMe).toHaveBeenCalledOnce();
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.id).toBe("abc");
     });
 
@@ -103,11 +105,11 @@ describe("FigmaModule", () => {
         schemaVersion: 0,
       });
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_file({ fileKey: "ABC123" });
 
       expect(mockFigma.getFile).toHaveBeenCalledWith("ABC123", { depth: 2 });
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.name).toBe("Test");
       expect(parsed.document).toEqual({ children: [] });
     });
@@ -117,14 +119,14 @@ describe("FigmaModule", () => {
         nodes: { "1:2": { document: {}, schemaVersion: 0 } },
       });
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_nodes({
         fileKey: "ABC123",
         ids: "1:2",
       });
 
       expect(mockFigma.getNodes).toHaveBeenCalledWith("ABC123", "1:2", 2);
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.nodes["1:2"].schemaVersion).toBe(0);
     });
 
@@ -133,7 +135,7 @@ describe("FigmaModule", () => {
         images: { "1:2": "https://example.com/img.svg" },
       });
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_images({
         fileKey: "ABC123",
         ids: "1:2",
@@ -147,7 +149,7 @@ describe("FigmaModule", () => {
         "svg",
         2,
       );
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.images["1:2"]).toBe("https://example.com/img.svg");
     });
 
@@ -162,11 +164,11 @@ describe("FigmaModule", () => {
         },
       ]);
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_comments({ fileKey: "ABC123" });
 
       expect(mockFigma.getComments).toHaveBeenCalledWith("ABC123");
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed[0].id).toBe("1");
     });
 
@@ -175,11 +177,11 @@ describe("FigmaModule", () => {
         { key: "sk1", name: "Primary", style_type: "FILL", description: "" },
       ]);
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_styles({ fileKey: "ABC123" });
 
       expect(mockFigma.getStyles).toHaveBeenCalledWith("ABC123");
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed[0].key).toBe("sk1");
     });
 
@@ -189,11 +191,11 @@ describe("FigmaModule", () => {
         meta: { variableCollections: {}, variables: {} },
       });
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_variables({ fileKey: "ABC123" });
 
       expect(mockFigma.getVariables).toHaveBeenCalledWith("ABC123");
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.status).toBe(200);
     });
 
@@ -202,16 +204,16 @@ describe("FigmaModule", () => {
         { id: "v1", created_at: "", user: { id: "u1", handle: "alice" } },
       ]);
 
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       const result = await handlers.figma_get_versions({ fileKey: "ABC123" });
 
       expect(mockFigma.getVersions).toHaveBeenCalledWith("ABC123");
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed[0].id).toBe("v1");
     });
 
     it("rejects invalid args through Zod validation", async () => {
-      const handlers = mod.createToolHandlers({ figma: mockFigma as any });
+      const handlers = rawToolHandlers(mod, { figma: mockFigma as any });
       await expect(handlers.figma_get_file({ fileKey: "" })).rejects.toThrow();
     });
   });
@@ -237,7 +239,27 @@ describe("FigmaModule", () => {
       for (const d of descriptors) {
         expect(d.description).toBeTruthy();
         expect(d.inputSchema).toBeDefined();
+        expect(d.title).toBeTruthy();
+        expect(inputJsonSchema(d).type).toBe("object");
+        for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"] as const) {
+          expect(typeof d.annotations[hint]).toBe("boolean");
+        }
       }
+    });
+
+    it("each descriptor carries its zod schema, not a converted JSON Schema", () => {
+      const byName = Object.fromEntries(mod.getToolDescriptors().map((d) => [d.name, d]));
+      expect(byName.figma_get_file.inputSchema).toBe(figmaGetFileSchema);
+      expect(byName.figma_get_images.inputSchema).toBe(figmaGetImagesSchema);
+      expect(byName.figma_post_comment.inputSchema).toBe(figmaPostCommentSchema);
+    });
+
+    it("publishes figma_get_images bounds and defaults in its input schema", () => {
+      const d = mod.getToolDescriptors().find((x) => x.name === "figma_get_images")!;
+      const schema = inputJsonSchema(d) as any;
+      expect(schema.required).toEqual(["fileKey", "ids"]);
+      expect(schema.properties.format).toMatchObject({ enum: ["png", "svg", "pdf"], default: "png" });
+      expect(schema.properties.scale).toMatchObject({ minimum: 1, maximum: 4, default: 1 });
     });
   });
 });

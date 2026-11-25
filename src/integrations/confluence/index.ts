@@ -2,17 +2,11 @@ import { ConfluenceClient } from '../../services/index.js';
 import { IntegrationModule, ToolHandlerFn, ToolDescriptor } from '../index.js';
 import {
   confluenceSearchHandler,
-  confluenceSearchSchema,
   confluenceGetPageHandler,
-  confluenceGetPageSchema,
   confluenceListSpacesHandler,
-  confluenceListSpacesSchema,
   confluenceCreatePageHandler,
-  confluenceCreatePageSchema,
   confluenceUpdatePageHandler,
-  confluenceUpdatePageSchema,
   confluenceWhoamiHandler,
-  confluenceWhoamiSchema,
   confluenceToolDescriptors,
 } from './module.js';
 
@@ -29,30 +23,12 @@ export class ConfluenceModule implements IntegrationModule<{ confluence: Conflue
 
   createToolHandlers(clients: { confluence: ConfluenceClient }): Record<string, ToolHandlerFn> {
     return {
-      confluence_search: async (args) => {
-        const parsed = confluenceSearchSchema.parse(args);
-        return await confluenceSearchHandler(clients)(parsed);
-      },
-      confluence_get_page: async (args) => {
-        const parsed = confluenceGetPageSchema.parse(args);
-        return await confluenceGetPageHandler(clients)(parsed);
-      },
-      confluence_list_spaces: async (args) => {
-        const parsed = confluenceListSpacesSchema.parse(args);
-        return await confluenceListSpacesHandler(clients)(parsed);
-      },
-      confluence_create_page: async (args) => {
-        const parsed = confluenceCreatePageSchema.parse(args);
-        return await confluenceCreatePageHandler(clients)(parsed);
-      },
-      confluence_update_page: async (args) => {
-        const parsed = confluenceUpdatePageSchema.parse(args);
-        return await confluenceUpdatePageHandler(clients)(parsed);
-      },
-      confluence_whoami: async (args) => {
-        const parsed = confluenceWhoamiSchema.parse(args);
-        return await confluenceWhoamiHandler(clients)(parsed);
-      },
+      confluence_search: confluenceSearchHandler(clients),
+      confluence_get_page: confluenceGetPageHandler(clients),
+      confluence_list_spaces: confluenceListSpacesHandler(clients),
+      confluence_create_page: confluenceCreatePageHandler(clients),
+      confluence_update_page: confluenceUpdatePageHandler(clients),
+      confluence_whoami: confluenceWhoamiHandler(clients),
     };
   }
 

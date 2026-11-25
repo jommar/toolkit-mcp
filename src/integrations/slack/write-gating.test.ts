@@ -12,7 +12,11 @@ import { fakeSlackApi } from './__fixtures__/wiring/fake-slack-api.js';
 import { callTool, resultJson, type ToolHandlers, type ToolOutcome } from './__fixtures__/wiring/harness.js';
 import { EXAMPLE, FILE_BYTES_SENTINEL, messageLink } from './__fixtures__/wiring/sentinels.js';
 import { postItem, reactItem, uploadItem } from './__fixtures__/wiring/calls.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { Client } from '@modelcontextprotocol/client';
 import { SlackModule } from './index.js';
+import { registerModuleTools } from '../register.js';
+import { connectInMemory, contentText, rawToolHandlers } from '../../__fixtures__/mcp.js';
 import { SlackClient } from '../../services/slack/slack-client.js';
 
 const WRITE_METHODS = ['postMessage', 'addReaction', 'getUploadUrl', 'sendUploadBytes', 'completeUpload'] as const;
@@ -22,6 +26,7 @@ type WriteCounts = Record<WriteMethod, number>;
 const TOKEN_LIFETIME_MS = 10 * 60 * 1000;
 
 let handlers: ToolHandlers;
+let client: SlackClient;
 let methodSpies: Record<WriteMethod, MockInstance>;
 
 function zeroCounts(): WriteCounts {
@@ -68,11 +73,11 @@ beforeEach(() => {
   writeAppConfig();
   writeToken();
   fakeSlackApi.reset();
-  const client = new SlackClient();
+  client = new SlackClient();
   methodSpies = Object.fromEntries(
     WRITE_METHODS.map((method) => [method, vi.spyOn(client as never, method as never)]),
   ) as unknown as Record<WriteMethod, MockInstance>;
-  handlers = new SlackModule().createToolHandlers({ slack: client }) as ToolHandlers;
+  handlers = rawToolHandlers(new SlackModule(), { slack: client }) as ToolHandlers;
 });
 
 afterEach(async () => {
@@ -186,5 +191,113 @@ describe('tokens that cannot be redeemed', () => {
 
     expect(outcome.thrown?.message).toContain('confirmation_expired');
     expectWrites({}, 'after an expired token');
+  });
+});
+
+describe('write gate across connections', () => {
+  let connections: Client[] = [];
+
+  // One set of module handlers (so one WriteGate) registered on two servers, as the stdio factory does per connection.
+  async function connectTwice(): Promise<[Client, Client]> {
+    const slackModule = new SlackModule();
+    const shared = slackModule.createToolHandlers({ slack: client });
+    const descriptors = slackModule.getToolDescriptors();
+    const connect = async () => {
+      const server = new McpServer({ name: 'toolkit-mcp-test', version: '0.0.0' });
+      registerModuleTools(server, descriptors, shared, { debug: () => {} });
+      return connectInMemory(server);
+    };
+    connections = [await connect(), await connect()];
+    return connections as [Client, Client];
+  }
+
+  async function prepareOn(connection: Client, items: Record<string, unknown>[]): Promise<string> {
+    const prepared = await connection.callTool({ name: 'slack_prepare_write', arguments: { items } });
+    expect(prepared.isError, contentText(prepared)).toBeFalsy();
+    const token = JSON.parse(contentText(prepared)).confirmation_token;
+    expect(typeof token, 'a preview with no item error issues a token').toBe('string');
+    return token;
+  }
+
+  function confirmOn(connection: Client, token: string) {
+    return connection.callTool({ name: 'slack_confirm_write', arguments: { confirmation_token: token } });
+  }
+
+  afterEach(async () => {
+    await Promise.all(connections.map((connection) => connection.close()));
+    connections = [];
+  });
+
+  it('sends a post prepared on one connection and confirmed on another exactly once', async () => {
+    const [first, second] = await connectTwice();
+    const token = await prepareOn(first, [postItem('hello')]);
+    expectWrites({}, 'after prepare on the first connection');
+
+    const confirmed = await confirmOn(second, token);
+
+    expect(confirmed.isError, contentText(confirmed)).toBeFalsy();
+    expect(JSON.parse(contentText(confirmed)).already_sent).toBe(false);
+    expectWrites({ postMessage: 1 }, 'after confirm on the second connection');
+  });
+
+  it('reports already_sent and sends nothing more when the second connection confirms again', async () => {
+    const [first, second] = await connectTwice();
+    const token = await prepareOn(first, [postItem('hello')]);
+    await confirmOn(second, token);
+
+    const replay = await confirmOn(second, token);
+
+    expect(replay.isError, contentText(replay)).toBeFalsy();
+    expect(JSON.parse(contentText(replay)).already_sent).toBe(true);
+    expectWrites({ postMessage: 1 }, 'after the replay');
+  });
+
+  it('returns an isError result and sends nothing for a token no connection issued', async () => {
+    const [, second] = await connectTwice();
+
+    const outcome = await confirmOn(second, 'token-that-was-never-issued');
+
+    expect(outcome.isError).toBe(true);
+    expect(contentText(outcome)).toContain('slack.confirmation_unknown:');
+    expectWrites({}, 'after an unknown token');
+  });
+
+  it('refuses a structurally invalid write item in SDK validation, before the handler runs', async () => {
+    const [first] = await connectTwice();
+
+    const outcome = await first.callTool({
+      name: 'slack_prepare_write',
+      arguments: { items: [{ action: 'delete', destination: messageLink(EXAMPLE.channelId, EXAMPLE.rootTs) }] },
+    });
+
+    expect(outcome.isError).toBe(true);
+    expect(contentText(outcome)).toContain('items');
+    expect(contentText(outcome)).not.toContain('confirmation_token');
+    expectWrites({}, 'after an invalid item');
+  });
+
+  it('refuses eleven write items in SDK validation, against the published cap of ten, and sends nothing', async () => {
+    const [first] = await connectTwice();
+    const items = Array.from({ length: 11 }, (_, index) => postItem(`reply number ${index}`));
+
+    const outcome = await first.callTool({ name: 'slack_prepare_write', arguments: { items } });
+
+    expect(outcome.isError).toBe(true);
+    expect(contentText(outcome)).toContain('items');
+    expect(contentText(outcome)).not.toContain('slack.batch_too_large');
+    expect(contentText(outcome)).not.toContain('confirmation_token');
+    expectWrites({}, 'after eleven items');
+  });
+
+  it('applies the slack.<code> checks after SDK validation passes', async () => {
+    const [first] = await connectTwice();
+    resetSandbox();
+
+    const outcome = await first.callTool({ name: 'slack_prepare_write', arguments: { items: [postItem('reply text')] } });
+
+    expect(outcome.isError).toBe(true);
+    expect(contentText(outcome)).toMatch(/^slack\.not_connected: /);
+    expect(contentText(outcome)).not.toContain('confirmation_token');
+    expectWrites({}, 'without a stored token');
   });
 });

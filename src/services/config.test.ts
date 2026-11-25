@@ -155,6 +155,12 @@ describe('loadConfluenceConfig', () => {
 
 describe('dotenv behavior', () => {
   it('calls dotenv config() with override: true', async () => {
+    // Load the module fresh so the assertion does not depend on an earlier test having imported it.
+    vi.resetModules();
+    dotenvConfigMock.mockClear();
+    await import('./config.js');
+
+    expect(dotenvConfigMock).toHaveBeenCalledOnce();
     const callArgs = dotenvConfigMock.mock.calls[0]?.[0];
     expect(callArgs).toBeDefined();
     expect(callArgs!.override).toBe(true);

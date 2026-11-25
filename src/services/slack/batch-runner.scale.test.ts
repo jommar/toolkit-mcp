@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runBatch } from './batch-runner.js';
 import {
+  anyEntries,
   deferred,
   failure,
   keyOf,
@@ -39,7 +40,7 @@ describe('runBatch scale limits', () => {
         limits: { maxItems: 20 },
       });
       await vi.runAllTimersAsync();
-      const { results } = await running;
+      const { results } = anyEntries(await running);
 
       expect(highWaterMark).toBe(4);
       expect(exec).toHaveBeenCalledTimes(20);
@@ -52,12 +53,12 @@ describe('runBatch scale limits', () => {
       const items = numberedItems(60);
       const exec = instantExec();
 
-      const { results } = await runBatch(items, {
+      const { results } = anyEntries(await runBatch(items, {
         key: keyOf,
         exec,
         resume: resumeCursorOf,
         limits: { maxItems: 60 },
-      });
+      }));
 
       expect(exec).toHaveBeenCalledTimes(50);
       expect(results.slice(0, 50).every((entry) => entry.status === 'ok')).toBe(true);
@@ -71,12 +72,12 @@ describe('runBatch scale limits', () => {
       const items = numberedItems(8);
       const exec = instantExec();
 
-      const { results } = await runBatch(items, {
+      const { results } = anyEntries(await runBatch(items, {
         key: keyOf,
         exec,
         resume: resumeCursorOf,
         limits: { maxItems: 8, callBudget: 5, concurrency: 2 },
-      });
+      }));
 
       expect(exec).toHaveBeenCalledTimes(5);
       expect(results.map((entry) => entry.status)).toEqual([
@@ -102,12 +103,12 @@ describe('runBatch scale limits', () => {
         return page([messageOf(item.id, 0)]);
       });
 
-      const { results } = await runBatch(items, {
+      const { results } = anyEntries(await runBatch(items, {
         key: keyOf,
         exec,
         resume: resumeCursorOf,
         limits: { maxItems: 6, concurrency: 1 },
-      });
+      }));
 
       expect(exec).toHaveBeenCalledTimes(3);
       expect(results.map((entry) => entry.status)).toEqual([
@@ -145,7 +146,7 @@ describe('runBatch scale limits', () => {
       await tick(25);
       expect(exec).toHaveBeenCalledTimes(2);
       stillRunning.resolve();
-      const { results } = await running;
+      const { results } = anyEntries(await running);
 
       expect(exec).toHaveBeenCalledTimes(2);
       expect(results[0]).toMatchObject({ status: 'error', error: { code: 'rate_limited', retry_after_s: 7 } });

@@ -1,6 +1,7 @@
 import { describeGitHubError } from '../../services/index.js';
 import type { GitHubClient, PrInfo, SlackClient } from '../../services/index.js';
 import { findThreadsForIssueKey, type IssueThread } from '../../services/slack/issue-threads.js';
+import { messageOf } from '../helpers.js';
 
 // The GitHub cap mirrors the one inside GitHubClient.findPrsForIssueKeys, which skips keys beyond it.
 const GITHUB_ISSUE_LIMIT = 20;
@@ -104,6 +105,7 @@ function toPullRequestLink({ number, title, state, repo, htmlUrl, reviewStatus }
   return { number, title, state, repo, htmlUrl, reviewStatus };
 }
 
+// SlackClient errors carry their own safe message; the request, which holds the token, stays out of it.
 async function findSlackThreads(slack: SlackClient | undefined, keys: string[]): Promise<Lookup<IssueThread>> {
   if (!slack) return unavailable('slack', SLACK_INACTIVE_MESSAGE);
   const lookedUp = keys.slice(0, SLACK_ISSUE_LIMIT);
@@ -141,9 +143,4 @@ async function searchThreads(slack: SlackClient, teamUrl: string, keys: string[]
 
 function isNotConnected(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === SLACK_NOT_CONNECTED_CODE;
-}
-
-// SlackClient errors carry their own safe message; the request, which holds the token, stays out of it.
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { resolveDownloadTarget, saveDownload } from '../../services/slack/download-target.js';
 import type { TokenRecord } from '../../services/slack/credential-store.js';
 import { TOOL_SCOPES } from '../../services/slack/slack-app.js';

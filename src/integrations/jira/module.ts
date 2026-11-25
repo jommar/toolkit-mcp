@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { JiraClient, describeError, toSlimIssue, toSlimChangelog, DEV_FIELDS } from '../../services/index.js';
 import type { SlimIssue, SlimChangelogEntry, SearchResult, JiraIssue, GitHubClient, SlackClient } from '../../services/index.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import { toListedComment } from '../../services/slim.js';
 import { MAX_INLINE_ATTACHMENT_BYTES } from '../../services/jira/attachment-limit.js';
-import { paginated, zodToJsonSchema } from '../helpers.js';
+import { paginated } from '../helpers.js';
+import type { PromptDescriptor, ResourceDescriptor, ToolDescriptor } from '../index.js';
+import { ADDITIVE_HINTS, DESTRUCTIVE_HINTS, IDEMPOTENT_HINTS, READ_ONLY_HINTS } from '../register.js';
 import { attachIssueLinks } from './issue-links.js';
 
 // ---------------------------------------------------------------------------
@@ -23,7 +25,7 @@ export const jiraGetIssuesSchema = z.object({
     .max(4096)
     .optional()
     .describe('JQL query string for searching issues.'),
-  limit: z.number().optional().default(20).describe('Maximum items per page (default 20).'),
+  limit: z.number().int().min(1).max(100).optional().default(20).describe('Maximum items per page (default 20).'),
   cursor: z.string().optional().describe('Opaque pagination token from a previous response.'),
   fields: z
     .array(z.string())
@@ -43,6 +45,10 @@ export const jiraGetIssuesSchema = z.object({
     .describe('Also return up to 5 Slack channel threads that mention each issue as `slackThreads`, links only (looked up for the first 10 issues).'),
 });
 
+const componentName = z
+  .string()
+  .max(255, { message: 'Component name must be 255 characters or fewer.' });
+
 export const jiraCreateIssueSchema = z.object({
   projectKey: z.string().max(20).describe('Project key (e.g., "TAP").'),
   issueType: z
@@ -56,13 +62,13 @@ export const jiraCreateIssueSchema = z.object({
     .optional()
     .describe('Plain-text description.'),
   fields: z
-    .record(z.unknown())
+    .record(z.string(), z.unknown())
     .optional()
     .describe(
       'Additional Jira fields to set. Set Components with the `components` param, not here. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
     ),
   components: z
-    .array(z.string().max(255))
+    .array(componentName)
     .min(1)
     .optional()
     .describe(
@@ -74,13 +80,13 @@ export const jiraUpdateIssueSchema = z
   .object({
     key: z.string().max(20).describe('Issue key to update.'),
     fields: z
-      .record(z.unknown())
+      .record(z.string(), z.unknown())
       .optional()
       .describe(
         'Fields to update (e.g., {"summary": "New title"}); optional when `components` is given. Set Components with the `components` param, not here; leave existing values untouched on unrelated updates. SECURITY: accepts arbitrary key-value pairs; validate inputs before passing user-supplied data.',
       ),
     components: z
-      .array(z.string().max(255))
+      .array(componentName)
       .min(1)
       .optional()
       .describe(
@@ -185,7 +191,7 @@ export const jiraGetAttachmentSchema = z.object({
 
 export const jiraGetCommentsSchema = z.object({
   key: z.string().max(20).describe('Issue key to fetch comments for.'),
-  limit: z.number().optional().default(50).describe('Maximum items per page (default 50).'),
+  limit: z.number().int().min(1).max(100).optional().default(50).describe('Maximum items per page (default 50).'),
   cursor: z.string().optional().describe('Opaque pagination token from a previous response.'),
   adf: z
     .boolean()
@@ -193,13 +199,15 @@ export const jiraGetCommentsSchema = z.object({
     .describe('Also return each comment\'s raw ADF document as `bodyAdf` (mentions, media, hard breaks). `body` stays plain text. Off by default.'),
 });
 
+const ISSUE_KEY_LENGTH_MESSAGE = 'Issue key must be 1 to 20 characters';
+
 export const jiraGetChangelogsSchema = z.object({
   keys: z
     .array(
       z
         .string()
-        .min(1)
-        .max(20)
+        .min(1, { message: ISSUE_KEY_LENGTH_MESSAGE })
+        .max(20, { message: ISSUE_KEY_LENGTH_MESSAGE })
         .refine((k) => k !== '.' && k !== '..', {
           message: 'Issue key must not be "." or ".."',
         }),
@@ -270,7 +278,7 @@ export const jiraCreateIssuePromptSchema = z.object({
   summary: z.string().min(1).max(255).describe('Issue summary.'),
   description: z.string().max(65536).optional().describe('Issue description.'),
   priority: z.string().max(50).optional().describe('Issue priority.'),
-  labels: z.array(z.string().max(100)).optional().describe('Issue labels.'),
+  labels: z.string().max(1000).optional().describe('Issue labels, comma-separated (e.g. "frontend,ux").'),
 });
 
 export const jiraTriageIssuePromptSchema = z.object({
@@ -314,8 +322,8 @@ async function resolveComponents(
   }));
   const unknown = matches.filter((m) => !m.match).map((m) => `"${m.name}"`);
   if (unknown.length > 0) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       `Component ${unknown.join(', ')} not found in project ${projectKey}. Available: ${available.map((c) => c.name).join(', ')}`,
     );
   }
@@ -362,7 +370,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
       return respond(result.issues.map(slim), result.isLast ? undefined : result.nextPageToken);
     }
 
-    throw new McpError(ErrorCode.InvalidParams, 'Provide either key or jql');
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Provide either key or jql');
   };
 
 export const jiraCreateIssueHandler: ToolHandler<z.infer<typeof jiraCreateIssueSchema>> =
@@ -403,8 +411,8 @@ export const jiraTransitionIssueHandler: ToolHandler<z.infer<typeof jiraTransiti
       );
       if (!match) {
         const available = transitions.map((t) => t.name).join(', ');
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           `Transition "${args.transitionName}" not found. Available: ${available}`,
         );
       }
@@ -413,8 +421,8 @@ export const jiraTransitionIssueHandler: ToolHandler<z.infer<typeof jiraTransiti
 
     // transitionId is guaranteed by refiner, but keep fallback for safety
     if (!transitionId) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
         'Provide either transitionId or transitionName',
       );
     }
@@ -442,12 +450,12 @@ export const jiraAssignIssueHandler: ToolHandler<z.infer<typeof jiraAssignIssueS
     // Search for user by display name or email
     const users = await _clients.jira.searchUsers(assignee!);
     if (users.length === 0) {
-      throw new McpError(ErrorCode.InvalidParams, `No user found matching "${assignee}"`);
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, `No user found matching "${assignee}"`);
     }
     if (users.length > 1) {
       const options = users.map((u) => `${u.displayName} (${u.emailAddress || u.accountId})`).join(', ');
-      throw new McpError(
-        ErrorCode.InvalidParams,
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
         `Multiple users match "${assignee}": ${options}. Please disambiguate.`,
       );
     }
@@ -573,21 +581,21 @@ export const jiraGetChangelogsHandler: ToolHandler<z.infer<typeof jiraGetChangel
 
     if (args.cursor !== undefined) {
       if (uniqueKeys.length > 1) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           'cursor is only supported when querying a single issue key',
         );
       }
       if (!/^\d+$/.test(args.cursor)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           'cursor must be a non-negative integer offset',
         );
       }
       startOffset = Number.parseInt(args.cursor, 10);
       if (!Number.isSafeInteger(startOffset)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           'cursor must be a non-negative integer offset',
         );
       }
@@ -702,8 +710,8 @@ export const jiraLinkIssuesHandler: ToolHandler<z.infer<typeof jiraLinkIssuesSch
     const match = linkTypes.find((lt) => lt.name.toLowerCase() === type.toLowerCase());
     if (!match) {
       const available = linkTypes.map((lt) => lt.name).join(', ');
-      throw new McpError(
-        ErrorCode.InvalidParams,
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
         `Link type "${type}" not found. Available: ${available}`,
       );
     }
@@ -735,96 +743,173 @@ const COMMENT_FORMAT_HINT =
   '"markdown" (use it for headings, bullet/ordered lists with one option per bullet, bold, code, links and tables, e.g. "| A | B |\\n|---|---|\\n| 1 | 2 |") ' +
   'or "adf" (a complete ADF JSON document, sent unchanged)';
 
-/** All tool descriptors for the ListToolsRequestSchema response. */
-export const jiraToolDescriptors = [
+/** All tool descriptors; register.ts registers them with the server. */
+export const jiraToolDescriptors: ToolDescriptor[] = [
   {
     name: 'jira_whoami',
+    title: 'Get current Jira user',
     description: 'Return the authenticated Jira user (accountId, displayName).',
-    inputSchema: zodToJsonSchema(jiraWhoamiSchema),
+    inputSchema: jiraWhoamiSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_get_issues',
+    title: 'Get Jira issues',
     description: 'Fetch one or more Jira issues. Pass `key` for a single issue, or `jql` to search.',
-    inputSchema: zodToJsonSchema(jiraGetIssuesSchema),
+    inputSchema: jiraGetIssuesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_create_issue',
+    title: 'Create Jira issue',
     description: 'Create a new Jira issue in a project.',
-    inputSchema: zodToJsonSchema(jiraCreateIssueSchema),
+    inputSchema: jiraCreateIssueSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'jira_update_issue',
+    title: 'Update Jira issue',
     description: 'Update fields on an existing Jira issue.',
-    inputSchema: zodToJsonSchema(jiraUpdateIssueSchema),
+    inputSchema: jiraUpdateIssueSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'jira_transition_issue',
+    title: 'Transition Jira issue',
     description: 'Transition a Jira issue to a new status.',
-    inputSchema: zodToJsonSchema(jiraTransitionIssueSchema),
+    inputSchema: jiraTransitionIssueSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'jira_assign_issue',
+    title: 'Assign Jira issue',
     description: 'Assign a Jira issue to a user or unassign it.',
-    inputSchema: zodToJsonSchema(jiraAssignIssueSchema),
+    inputSchema: jiraAssignIssueSchema,
+    annotations: IDEMPOTENT_HINTS,
   },
   {
     name: 'jira_add_comment',
+    title: 'Add Jira comment',
     description: `Add a comment to a Jira issue; ${COMMENT_FORMAT_HINT}.`,
-    inputSchema: zodToJsonSchema(jiraAddCommentSchema),
+    inputSchema: jiraAddCommentSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'jira_update_comment',
+    title: 'Update Jira comment',
     description: `Update an existing comment on a Jira issue; ${COMMENT_FORMAT_HINT}.`,
-    inputSchema: zodToJsonSchema(jiraUpdateCommentSchema),
+    inputSchema: jiraUpdateCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
   },
   {
     name: 'jira_link_issues',
+    title: 'Link Jira issues',
     description: 'Link two Jira issues together.',
-    inputSchema: zodToJsonSchema(jiraLinkIssuesSchema),
+    inputSchema: jiraLinkIssuesSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'jira_get_attachment',
+    title: 'Get Jira attachment',
     description: `Download a Jira attachment by ID: images come back as native image content, other files as base64. Files over ${MAX_INLINE_ATTACHMENT_BYTES} bytes return metadata only (id, filename, mimeType, size, message).`,
-    inputSchema: zodToJsonSchema(jiraGetAttachmentSchema),
+    inputSchema: jiraGetAttachmentSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_get_comments',
+    title: 'Get Jira comments',
     description: 'Get comments on a Jira issue, oldest first: id, author name, created, updated, plain-text body (`adf: true` adds the raw ADF as `bodyAdf`).',
-    inputSchema: zodToJsonSchema(jiraGetCommentsSchema),
+    inputSchema: jiraGetCommentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_get_changelogs',
+    title: 'Get Jira changelogs',
     description: 'Get changelog entries for one or more Jira issues, newest first, grouped by issue key.',
-    inputSchema: zodToJsonSchema(jiraGetChangelogsSchema),
+    inputSchema: jiraGetChangelogsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_list_transitions',
+    title: 'List Jira transitions',
     description: 'List available transitions for a Jira issue (id, name, `to` = destination status name).',
-    inputSchema: zodToJsonSchema(jiraListTransitionsSchema),
+    inputSchema: jiraListTransitionsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_list_issue_link_types',
+    title: 'List Jira issue link types',
     description: 'List available issue link types.',
-    inputSchema: zodToJsonSchema(jiraListIssueLinkTypesSchema),
+    inputSchema: jiraListIssueLinkTypesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_search_users',
+    title: 'Search Jira users',
     description: 'Search for Jira users by display name or email (accountId, displayName, active, emailAddress when Jira exposes it).',
-    inputSchema: zodToJsonSchema(jiraSearchUsersSchema),
+    inputSchema: jiraSearchUsersSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_list_fields',
+    title: 'List Jira fields',
     description: 'List Jira fields (id, name, custom) — use to find custom field IDs like Story Points.',
-    inputSchema: zodToJsonSchema(jiraListFieldsSchema),
+    inputSchema: jiraListFieldsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_list_components',
+    title: 'List Jira components',
     description: "List a Jira project's components (id, name) — use to find valid names for the Components field.",
-    inputSchema: zodToJsonSchema(jiraListComponentsSchema),
+    inputSchema: jiraListComponentsSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'jira_delete_comment',
+    title: 'Delete Jira comment',
     description: 'Delete a comment on a Jira issue.',
-    inputSchema: zodToJsonSchema(jiraDeleteCommentSchema),
+    inputSchema: jiraDeleteCommentSchema,
+    annotations: DESTRUCTIVE_HINTS,
+  },
+];
+
+/** Resources and resource templates the Jira module serves; reads go through JiraModule.getResourceHandler. */
+export const jiraResourceDescriptors: ResourceDescriptor[] = [
+  {
+    name: 'jira_myself',
+    title: 'Current Jira user',
+    description: 'The authenticated Jira user as JSON.',
+    mimeType: 'application/json',
+    uri: 'jira://myself',
+  },
+  {
+    name: 'jira_issue',
+    title: 'Jira issue',
+    description: 'One Jira issue by key as JSON.',
+    mimeType: 'application/json',
+    uriTemplate: 'jira://issue/{key}',
+  },
+  {
+    name: 'jira_search',
+    title: 'Jira search results',
+    description: 'Jira issues matching a JQL query as JSON; the query is percent-encoded in the URI.',
+    mimeType: 'application/json',
+    uriTemplate: 'jira://search/{+jql}',
+  },
+];
+
+/** Prompts the Jira module serves; each argument schema is the zod schema defined above. */
+export const jiraPromptDescriptors: PromptDescriptor[] = [
+  {
+    name: 'create-issue',
+    title: 'Create Jira issue',
+    description: 'Draft a request to create a Jira issue in a project from its type and summary.',
+    argsSchema: jiraCreateIssuePromptSchema,
+  },
+  {
+    name: 'triage-issue',
+    title: 'Triage Jira issue',
+    description: 'Gather a Jira issue with its comments and available transitions for triage.',
+    argsSchema: jiraTriageIssuePromptSchema,
   },
 ];

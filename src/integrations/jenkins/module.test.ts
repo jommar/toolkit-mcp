@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 import {
   jenkinsGetJobsHandler,
+  jenkinsGetJobsSchema,
   jenkinsGetBuildsHandler,
   jenkinsGetBuildHandler,
   jenkinsGetConsoleHandler,
@@ -45,13 +46,13 @@ describe('jenkins module handlers', () => {
       expect(jenkins.getJobs).toHaveBeenCalledWith({ offset: 2, limit: 2 });
     });
 
-    it('rejects an invalid cursor with McpError (M9)', async () => {
+    it('rejects an invalid cursor with ProtocolError (M9)', async () => {
       await expect(
         jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: 'abc' }),
-      ).rejects.toThrow(McpError);
+      ).rejects.toThrow(ProtocolError);
       await expect(
         jenkinsGetJobsHandler({ jenkins: jenkins as any })({ limit: 2, cursor: '-5' }),
-      ).rejects.toThrow(McpError);
+      ).rejects.toThrow(ProtocolError);
     });
   });
 
@@ -231,14 +232,14 @@ describe('jenkins module handlers', () => {
   });
 
   describe('error handling', () => {
-    it('wraps a plain client error as an McpError (not the raw Error)', async () => {
+    it('wraps a plain client error as a ProtocolError (not the raw Error)', async () => {
       jenkins.getJobs.mockRejectedValue(new Error('network down'));
-      await expect(jenkinsGetJobsHandler({ jenkins: jenkins as any })({})).rejects.toBeInstanceOf(McpError);
-      await expect(jenkinsGetJobsHandler({ jenkins: jenkins as any })({})).rejects.toThrow('network down');
+      await expect(jenkinsGetJobsHandler({ jenkins: jenkins as any })(jenkinsGetJobsSchema.parse({}))).rejects.toBeInstanceOf(ProtocolError);
+      await expect(jenkinsGetJobsHandler({ jenkins: jenkins as any })(jenkinsGetJobsSchema.parse({}))).rejects.toThrow('network down');
     });
 
-    it('passes an existing McpError through unchanged', async () => {
-      const original = new McpError(ErrorCode.InvalidParams, 'bad input');
+    it('passes an existing ProtocolError through unchanged', async () => {
+      const original = new ProtocolError(ProtocolErrorCode.InvalidParams, 'bad input');
       jenkins.getBuild.mockRejectedValue(original);
       await expect(
         jenkinsGetBuildHandler({ jenkins: jenkins as any })({ job: 'EZAT-backend-dev' }),

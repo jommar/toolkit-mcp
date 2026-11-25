@@ -41,7 +41,7 @@ async function watchWholeFileReads() {
   return {
     callsOnFixtureFiles: () =>
       pathReaders
-        .flatMap((spy) => spy.mock.calls)
+        .flatMap((spy): unknown[][] => spy.mock.calls)
         .filter(([target]) => typeof target === 'string' && target.startsWith(workDir)),
     handleReads: () => handleReader.mock.calls,
   };

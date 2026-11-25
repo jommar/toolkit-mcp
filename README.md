@@ -38,14 +38,18 @@ For the full architecture breakdown, see [`docs/plans/01-jira-cli-mcp-server.md`
 
 ## Quick Start
 
+Requires Node 24 or later; `.nvmrc` pins the target, 26.13.1.
+
 ```bash
 cd toolkit-mcp
 cp .env.example .env
-npm install
+npm ci
 npm run mcp              # start the MCP server (stdio)
 ```
 
-The server starts with stdio transport, ready for MCP client connections. Tools are conditionally registered based on your `.env` values — see [Configuration](#configuration).
+The server is built on the MCP TypeScript SDK v2 (`@modelcontextprotocol/server` 2.4.0) and serves stdio only. One process answers both protocol eras: a client that sends `initialize` for 2025-11-25 or an older revision, and a 2026-07-28 client that sends the per-request protocol envelope. Tools are conditionally registered based on your `.env` values — see [Configuration](#configuration).
+
+After pulling a version with changed dependencies, run `npm ci` before restarting the MCP client, or the server fails at import.
 
 ---
 
@@ -61,9 +65,7 @@ All variables are optional — tools only register if their required env vars ar
 | `FIGMA_TOKEN` | Figma | All Figma tools |
 | `JENKINS_URL` + `JENKINS_USER` + `JENKINS_TOKEN` | Jenkins | All Jenkins tools (API token preferred over a password) |
 | `SLACK_ENABLED` | Slack | All 11 Slack tools, when set to exactly `true`. `slack_login` adopts the Slack web session dev-dashboard captured in `~/.config/slack/session.json`; without one, the Slack app's client id is read from `~/.config/slack/toolkit-mcp/app.json`, not the environment — see [`docs/slack.md`](docs/slack.md) |
-| `MCP_TRANSPORT` | Server | Transport mode: `stdio` (default) or `http` |
-| `MCP_PORT` | Server | HTTP port (default `3000`, only used for `http` transport) |
-| `MCP_LOG_LEVEL` | Server | Log verbosity: `silent`, `info` (default), or `debug` |
+| `MCP_LOG_LEVEL` | Server | Log verbosity on stderr: `silent` (nothing), `info` (default: startup and registration lines), or `debug` (adds one line per tool call with the tool name, `ok` or `error`, and the duration; never arguments or results) |
 
 Full `.env.example` in the project root. If no integration env vars are set, the server starts with only the `mcp_get_health` tool — graceful degradation.
 
@@ -244,7 +246,7 @@ All list-style tools return a uniform envelope:
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `cursor` | string | — | Opaque pagination token from a previous response |
-| `limit` | number | 20 | Items per page (max 100) |
+| `limit` | integer | 20 | Items per page (1 to 100) |
 
 - `jira_get_issues` with `key` always returns a one-item `PaginatedResponse` with `hasMore: false` — consistent shape regardless of input mode.
 - `jira_get_changelogs` accepts 1–20 issue `keys` (e.g. `["PROJ-1", "EXAMPLE-1"]`) and returns a grouped per-issue envelope `{ items: [{ key, total, changelogs, hasMore, nextPageToken? }], warnings?: [{ key, message }] }` (`warnings` omitted when empty). `limit` applies per issue, and `cursor` is supported on single-key requests only.
@@ -255,30 +257,39 @@ All list-style tools return a uniform envelope:
 - The Slack read tools are the one exception to the single envelope and to a top-level `cursor`: they return `{results, truncated}` with one entry per input item, each carrying its own `items`, `hasMore` and `nextPageToken`, and a continuation is an item holding only `{cursor}`. Details in [`docs/slack.md`](docs/slack.md).
 - No tool auto-fetches all pages; the agent must explicitly paginate via `cursor`.
 
+### Tool metadata, schemas and errors
+
+- **Titles and annotations.** Every tool in `tools/list` has a short `title` and all four hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). 49 tools are read-only, 17 write without destroying anything, and 14 are destructive (overwrite, delete, merge, revoke). `openWorldHint` is `true` for every tool except `mcp_get_health`. `slack_prepare_write` is read-only, since it only previews; `slack_confirm_write` is the write.
+- **Input schemas.** Schemas are zod 4, and `tools/list` publishes their JSON Schema with the real bounds: integer or number, minimum and maximum, defaults, string lengths, enums, array bounds (including the Slack batch caps), nested object properties and unions. `slack_prepare_write` shows its items as three variants keyed by `action` (`post`, `react`, `upload`). Cross-field rules (such as "provide either `transitionId` or `transitionName`") are not expressible in JSON Schema; the field descriptions state them and validation still enforces them.
+- **Validation.** Arguments are validated against the schema before the handler runs; defaults are applied and unknown keys dropped. A refused call returns an `isError` result whose text is the SDK's `Input validation error: …` naming the field.
+- **Tool failures are results, not protocol errors.** A tool that fails returns `isError: true` with one text item: `API error (<status>): <detail>` for an upstream HTTP failure, or the handler's own message for a business rule (including Slack's `slack.<code>: …`).
+- **Protocol errors** are for requests the server cannot route: an unknown tool, prompt or resource is `-32602`, as is a prompt called without a required argument or a resource URI with an invalid issue key. A resource or prompt that fails upstream is `-32603` with the same detail text.
+- **List caching.** For 2026-07-28 clients, the tool, prompt, resource and resource-template lists carry a one-hour, private cache hint, since the set is fixed for the life of the process.
+
 ---
 
 ## Resources
 
-4 resources total (all conditional).
+4 resources total (all conditional). The static resource appears in `resources/list` and the three templates in `resources/templates/list`; none of the templates enumerates.
 
-| URI | Module | Description | Returns |
-|---|---|---|---|
-| `jira://issue/{key}` | Jira | Single Jira issue by key | `SlimIssue` as JSON |
-| `jira://search/{jql}` | Jira | Jira search results by JQL query (URI-encoded) | `SlimIssue[]` as JSON (max 20) |
-| `jira://myself` | Jira | Current authenticated Jira user profile | Jira user as JSON |
-| `github://prs/{issueKey}` | GitHub | Pull requests for an issue key | `PrInfo[]` as JSON |
+| URI | Name | Module | Description | Returns |
+|---|---|---|---|---|
+| `jira://issue/{key}` | `jira_issue` | Jira | Single Jira issue by key | `SlimIssue` as JSON |
+| `jira://search/{+jql}` | `jira_search` | Jira | Jira search results by JQL query (URI-encoded) | `SlimIssue[]` as JSON (max 20) |
+| `jira://myself` | `jira_myself` | Jira | Current authenticated Jira user profile | Jira user as JSON |
+| `github://prs/{issueKey}` | `github_prs` | GitHub | Pull requests for an issue key | `PrInfo[]` as JSON |
 
-JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%20TAP`). Restricted keywords (DELETE, UPDATE, CREATE, INSERT, DROP, ALTER, EXEC, ADMIN) are rejected for safety.
+JQL in `jira://search/{+jql}` is URI-encoded (e.g., `jira://search/project%20%3D%20TAP`); the template uses reserved expansion, so a query containing `/` still resolves. Restricted keywords (DELETE, UPDATE, CREATE, INSERT, DROP, ALTER, EXEC, ADMIN) are rejected for safety.
 
 ---
 
 ## Prompts
 
-2 prompts total (both conditional on Jira env vars).
+2 prompts total (both conditional on Jira env vars), listed by `prompts/list` with their arguments and which are required. Prompt arguments are strings on the wire.
 
 | Prompt | Arguments | Description |
 |---|---|---|
-| `create-issue` | `projectKey`, `issueType`, `summary` (required); `description`, `priority`, `labels` (optional) | Produces a guided issue-creation message prompting the agent to call `jira_create_issue`. |
+| `create-issue` | `projectKey`, `issueType`, `summary` (required); `description`, `priority`, `labels` (optional; `labels` is a comma-separated string, e.g. `frontend,ux`) | Produces a guided issue-creation message prompting the agent to call `jira_create_issue`. |
 | `triage-issue` | `key` | Fetches the issue + available transitions + comments, returns a structured analysis: summary, status, assignee, priority, description, available transitions, comment history. |
 
 ---
@@ -298,11 +309,12 @@ JQL in `jira://search/{jql}` is URI-encoded (e.g., `jira://search/project%20%3D%
 
 ## Testing
 
-More than 1,200 tests across 49 test files using **vitest**:
+More than 1,700 tests across 55 test files using **vitest**, including a stdio end-to-end test that spawns the server and speaks both protocol eras:
 
 ```bash
 npm run test                 # Run all tests
 npx vitest path/to/file.test.ts   # Single test file
+npm run typecheck:tests      # Type-check the tests and fixtures as well
 ```
 
 All tool handlers are testable via **dependency injection** — mock clients are passed to handler factories, no real credentials needed.
@@ -313,11 +325,12 @@ All tool handlers are testable via **dependency injection** — mock clients are
 
 | Script | Description |
 |---|---|
-| `npm run mcp` | Dev mode — `tsx` TypeScript execution, stdio transport (default) |
+| `npm run mcp` | Dev mode — `tsx` TypeScript execution, stdio transport |
 | `npm run mcp:prod` | Production mode — compiled JS (`npm run build` first) |
 | `npm run mcp:inspect` | Launch MCP inspector for debugging |
 | `npm run build` | TypeScript compilation (`tsc`) |
 | `npm run typecheck` | TypeScript type-check only (`tsc --noEmit`) |
+| `npm run typecheck:tests` | Type-check tests and fixtures too (`tsc -p tsconfig.test.json`) |
 | `npm run test` | Run all tests (vitest) |
 | `npm run test:watch` | Vitest watch mode |
 
@@ -371,9 +384,10 @@ All tool handlers are testable via **dependency injection** — mock clients are
 
 ```
 src/
-├── mcp-server.ts              # Entry: bootstrap, transport, central dispatch
-├── mcp-config.ts              # MCP-specific config (transport, port, log level)
-├── mcp-health.ts              # mcp_get_health tool handler
+├── mcp-server.ts              # Entry: runtime built once, McpServer factory served by serveStdio, process hooks
+├── mcp-config.ts              # MCP_LOG_LEVEL and the stderr logger
+├── mcp-health.ts              # mcp_get_health descriptor and handler
+├── server-info.ts             # Server name and version, read once from package.json
 ├── services/
 │   ├── index.ts               # Barrel — re-exports all service classes/types
 │   ├── config.ts              # loadConfig() + dotenv (shared by Jira/GitHub)
@@ -386,8 +400,9 @@ src/
 │   └── slack/                 # SlackClient, login by link, dev-dashboard session adoption, token store, links, cursors, batching, upload source
 │       └── __fixtures__/      # Synthetic test fixtures (compiled with the source, imported only by tests)
 ├── integrations/
-│   ├── index.ts               # Module registry + IntegrationModule interface
-│   ├── helpers.ts             # PaginatedResponse helper, zodToJsonSchema
+│   ├── index.ts               # Module registry + IntegrationModule interface and descriptor types
+│   ├── register.ts            # The only SDK registration code: tools, resources, prompts, error mapping, annotation presets
+│   ├── helpers.ts             # PaginatedResponse helper, messageOf
 │   ├── jira/
 │   │   ├── index.ts           # JiraModule: needsEnv, createToolHandlers, resources, prompts
 │   │   └── module.ts          # Jira tool handlers, Zod schemas, descriptors
@@ -412,9 +427,10 @@ docs/
 
 ## Dependencies
 
-- **@modelcontextprotocol/sdk** — MCP protocol implementation (server, transport, types).
-- **zod** — Schema validation for tool input parameters.
-- **axios** — HTTP client for Jira and GitHub API calls.
+- **@modelcontextprotocol/server** (2.4.0, exact) — MCP SDK v2 server: `McpServer`, `serveStdio`, protocol types. `@modelcontextprotocol/client` 2.4.0 is a development dependency used only by tests.
+- **zod** (4.6.7, exact, the copy the SDK resolves) — Tool input schemas; the SDK validates with them and publishes their JSON Schema.
+- **axios** (exact pin) — HTTP client for Jira and GitHub API calls.
+- **he** — HTML entity decoding in the Confluence service.
 - **marked** — Markdown lexer behind the `markdown` format of `jira_add_comment` / `jira_update_comment` (exact version pinned).
 - **dotenv** — Environment variable loading from `.env`.
 

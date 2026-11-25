@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import os from 'node:os';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolErrorCode, ProtocolError } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { describeFailure } from '../../services/slack/batch-runner.js';
 import { readToken, slackPaths, type TokenRecord } from '../../services/slack/credential-store.js';
@@ -33,8 +33,11 @@ const expectedDestinationField = z
   );
 const threadField = z.string().min(1).optional().describe('Thread to reply in: a Slack ts or a message link.');
 
+const actionField = <A extends 'post' | 'react' | 'upload'>(action: A) =>
+  z.literal(action).describe('The write to make.');
+
 const postItemSchema = z.object({
-  action: z.literal('post'),
+  action: actionField('post'),
   ref: refField,
   destination: destinationField,
   expected_destination: expectedDestinationField,
@@ -44,18 +47,20 @@ const postItemSchema = z.object({
 });
 
 const reactItemSchema = z.object({
-  action: z.literal('react'),
+  action: actionField('react'),
   ref: refField,
-  message: z.union([
-    z.string().min(1).describe('A message link.'),
-    z.object({ channel: z.string().min(1), ts: z.string().refine(isSlackTs, 'Expected a Slack ts.') }),
-  ]),
+  message: z
+    .union([
+      z.string().min(1).describe('A message link.'),
+      z.object({ channel: z.string().min(1), ts: z.string().refine(isSlackTs, 'Expected a Slack ts.') }),
+    ])
+    .describe('react: a message link, or {channel, ts}.'),
   expected_destination: expectedDestinationField,
   emoji: z.string().min(1).max(100).describe('Emoji name, with or without colons.'),
 });
 
 const uploadItemSchema = z.object({
-  action: z.literal('upload'),
+  action: actionField('upload'),
   ref: refField,
   destination: destinationField,
   expected_destination: expectedDestinationField,
@@ -66,10 +71,12 @@ const uploadItemSchema = z.object({
   comment: z.string().max(40_000).optional().describe('Initial comment posted with the file.'),
 });
 
-const writeItemSchema = z.discriminatedUnion('action', [postItemSchema, reactItemSchema, uploadItemSchema]);
+const writeItemSchema = z
+  .discriminatedUnion('action', [postItemSchema, reactItemSchema, uploadItemSchema])
+  .describe('One write, sent only after its preview is confirmed. Every item may add ref and expected_destination.');
 
 export const slackPrepareWriteSchema = z.object({
-  items: z.array(writeItemSchema).min(1).describe('1 to 10 write items, all sent under one confirmation token.'),
+  items: z.array(writeItemSchema).min(1).max(MAX_WRITE_ITEMS).describe('1 to 10 write items, all sent under one confirmation token.'),
 });
 
 export const slackConfirmWriteSchema = z.object({
@@ -203,12 +210,6 @@ type CompletedUploadResponse = SlackResponse & { files?: Array<{ permalink?: str
 
 export const slackPrepareWriteHandler = (context: WriteToolContext) => async (args: unknown) => {
   const { items } = slackPrepareWriteSchema.parse(args);
-  if (items.length > MAX_WRITE_ITEMS) {
-    throw callError(
-      'batch_too_large',
-      `${items.length} items were sent, at most ${MAX_WRITE_ITEMS} fit in one confirmation. Split the list.`,
-    );
-  }
   for (const item of items) requireExpectedForConversationId(item);
 
   const token = await connectedWorkspace();
@@ -237,8 +238,8 @@ function jsonResult(body: unknown): { content: Array<{ type: 'text'; text: strin
   return { content: [{ type: 'text', text: JSON.stringify(body) }] };
 }
 
-function callError(code: string, sentence: string): McpError {
-  return new McpError(ErrorCode.InvalidParams, `slack.${code}: ${sentence}`);
+function callError(code: string, sentence: string): ProtocolError {
+  return new ProtocolError(ProtocolErrorCode.InvalidParams, `slack.${code}: ${sentence}`);
 }
 
 function itemError(code: string, message: string): Error {
@@ -263,8 +264,8 @@ async function connectedWorkspace(): Promise<TokenRecord> {
 function requireExpectedForConversationId(item: WriteItem): void {
   const target = item.action === 'react' ? reactChannelInput(item) : item.destination;
   if (target !== undefined && CONVERSATION_ID.test(target) && item.expected_destination === undefined) {
-    throw new McpError(
-      ErrorCode.InvalidParams,
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidParams,
       'expected_destination is required with a conversation id. Give the channel name, the DM partner or ' +
         "the other members' handles for a group DM, or send the Slack link instead.",
     );

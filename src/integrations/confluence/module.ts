@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { ConfluenceClient, describeConfluenceError, markdownToStorage } from '../../services/index.js';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { paginated, zodToJsonSchema } from '../helpers.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import { paginated } from '../helpers.js';
+import type { ToolDescriptor } from '../index.js';
+import { ADDITIVE_HINTS, DESTRUCTIVE_NON_IDEMPOTENT_HINTS, READ_ONLY_HINTS } from '../register.js';
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -98,7 +100,7 @@ type ToolHandler<T = unknown> = (
 ) => (args: T) => Promise<{ content: { type: 'text'; text: string }[] }>;
 
 function toMcp(err: unknown): never {
-  throw new McpError(ErrorCode.InternalError, describeConfluenceError(err));
+  throw new ProtocolError(ProtocolErrorCode.InternalError, describeConfluenceError(err));
 }
 
 export const confluenceSearchHandler: ToolHandler<z.infer<typeof confluenceSearchSchema>> =
@@ -124,14 +126,14 @@ export const confluenceGetPageHandler: ToolHandler<z.infer<typeof confluenceGetP
         ? await clients.confluence.getPageById(args.id, { includeStorage: args.includeStorage })
         : await clients.confluence.getPageByTitle(args.space!, args.title!, { includeStorage: args.includeStorage });
       if (!page) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
+        throw new ProtocolError(
+          ProtocolErrorCode.InvalidParams,
           `No page found for space="${args.space}" title="${args.title}"`,
         );
       }
       return { content: [{ type: 'text', text: JSON.stringify(page) }] };
     } catch (err) {
-      if (err instanceof McpError) throw err;
+      if (err instanceof ProtocolError) throw err;
       toMcp(err);
     }
   };
@@ -206,42 +208,54 @@ export const confluenceWhoamiHandler: ToolHandler<z.infer<typeof confluenceWhoam
     }
   };
 
-/** All tool descriptors for the ListToolsRequestSchema response. */
-export const confluenceToolDescriptors = [
+/** All tool descriptors; register.ts registers them with the server. */
+export const confluenceToolDescriptors: ToolDescriptor[] = [
   {
     name: 'confluence_search',
+    title: 'Search Confluence',
     description:
       'Search Confluence content via free text or raw CQL.',
-    inputSchema: zodToJsonSchema(confluenceSearchSchema),
+    inputSchema: confluenceSearchSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'confluence_get_page',
+    title: 'Get Confluence page',
     description:
       'Fetch a Confluence page by ID, or by space + exact title.',
-    inputSchema: zodToJsonSchema(confluenceGetPageSchema),
+    inputSchema: confluenceGetPageSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'confluence_list_spaces',
+    title: 'List Confluence spaces',
     description: 'List Confluence spaces (key, name, type, url) for discovery.',
-    inputSchema: zodToJsonSchema(confluenceListSpacesSchema),
+    inputSchema: confluenceListSpacesSchema,
+    annotations: READ_ONLY_HINTS,
   },
   {
     name: 'confluence_create_page',
+    title: 'Create Confluence page',
     description:
       'Create a Confluence page. Accepts `format: "storage"` (XHTML, default) or `format: "markdown"` ' +
       '(limited subset — see schema).',
-    inputSchema: zodToJsonSchema(confluenceCreatePageSchema),
+    inputSchema: confluenceCreatePageSchema,
+    annotations: ADDITIVE_HINTS,
   },
   {
     name: 'confluence_update_page',
+    title: 'Update Confluence page',
     description:
       'Update an existing Confluence page in place, auto-incrementing the version. Accepts ' +
       '`format: "storage"` (XHTML, default) or `format: "markdown"` (limited subset — see schema).',
-    inputSchema: zodToJsonSchema(confluenceUpdatePageSchema),
+    inputSchema: confluenceUpdatePageSchema,
+    annotations: DESTRUCTIVE_NON_IDEMPOTENT_HINTS,
   },
   {
     name: 'confluence_whoami',
+    title: 'Get current Confluence user',
     description: 'Return the authenticated Confluence user profile.',
-    inputSchema: zodToJsonSchema(confluenceWhoamiSchema),
+    inputSchema: confluenceWhoamiSchema,
+    annotations: READ_ONLY_HINTS,
   },
 ];

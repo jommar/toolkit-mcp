@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
 
 interface TextResult {
   content: Array<{ type: string; text?: string }>;
@@ -24,23 +24,23 @@ async function rejectionOf(action: Promise<unknown> | (() => unknown)): Promise<
   return undefined;
 }
 
-/** The action must throw an McpError whose message names `slack.<code>:`. */
+/** The action must throw a ProtocolError whose message names `slack.<code>:`. */
 export async function expectSlackError(
   action: Promise<unknown> | (() => unknown),
   code: string,
-): Promise<McpError> {
+): Promise<ProtocolError> {
   const error = await rejectionOf(action);
-  expect(error, `expected a thrown slack.${code} error`).toBeInstanceOf(McpError);
-  expect((error as McpError).message).toContain(`slack.${code}:`);
-  return error as McpError;
+  expect(error, `expected a thrown slack.${code} error`).toBeInstanceOf(ProtocolError);
+  expect((error as ProtocolError).message).toContain(`slack.${code}:`);
+  return error as ProtocolError;
 }
 
-/** The action must throw an McpError carrying the InvalidParams code. */
+/** The action must throw a ProtocolError carrying the InvalidParams code. */
 export async function expectInvalidParams(
   action: Promise<unknown> | (() => unknown),
-): Promise<McpError> {
+): Promise<ProtocolError> {
   const error = await rejectionOf(action);
-  expect(error, 'expected a thrown InvalidParams error').toBeInstanceOf(McpError);
-  expect((error as McpError).code).toBe(ErrorCode.InvalidParams);
-  return error as McpError;
+  expect(error, 'expected a thrown InvalidParams error').toBeInstanceOf(ProtocolError);
+  expect((error as ProtocolError).code).toBe(ProtocolErrorCode.InvalidParams);
+  return error as ProtocolError;
 }

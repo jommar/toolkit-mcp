@@ -5,6 +5,8 @@ vi.mock('../../services/index.js', () => ({
   ISSUE_KEY_PATTERN: /^[A-Z][A-Z0-9]{0,10}-\d{1,6}$/i,
 }));
 
+import { ProtocolError, ProtocolErrorCode, ResourceNotFoundError } from '@modelcontextprotocol/server';
+import { contentText, inputJsonSchema, rawToolHandlers } from '../../__fixtures__/mcp.js';
 import { GitHubModule } from './index.js';
 
 function makeMockGitHub() {
@@ -62,7 +64,7 @@ describe('GitHubModule', () => {
     });
 
     it('returns 30 handlers', () => {
-      const handlers = mod.createToolHandlers({ github: mockGitHub as any });
+      const handlers = rawToolHandlers(mod, { github: mockGitHub as any });
       expect(Object.keys(handlers)).toHaveLength(30);
       expect(handlers).toHaveProperty('github_get_copilot_unresolved_prs');
       expect(handlers).toHaveProperty('github_get_prs');
@@ -99,7 +101,7 @@ describe('GitHubModule', () => {
       mockGitHub.getCopilotUnresolvedPrs.mockResolvedValue({
         items: [{ repo: 'Org/Repo', prNumber: 42, comments: ['Handle the empty response.'] }], hasMore: false,
       });
-      const handlers = mod.createToolHandlers({ github: mockGitHub as any });
+      const handlers = rawToolHandlers(mod, { github: mockGitHub as any });
 
       expect(handlers.github_get_copilot_unresolved_prs).toBeTypeOf('function');
       const result = await handlers.github_get_copilot_unresolved_prs({ repo: 'Org/Repo' });
@@ -117,20 +119,40 @@ describe('GitHubModule', () => {
     it('github_get_prs delegates to handler with parsed args', async () => {
       mockGitHub.searchPrs.mockResolvedValue([{ number: 1, title: 'PR', repo: 'Org/Repo', state: 'open' }]);
 
-      const handlers = mod.createToolHandlers({ github: mockGitHub as any });
+      const handlers = rawToolHandlers(mod, { github: mockGitHub as any });
       const result = await handlers.github_get_prs({ issueKey: 'TAP-1' });
 
       expect(mockGitHub.searchPrs).toHaveBeenCalledWith('TAP-1', 21, 'open');
-      const parsed = JSON.parse(result.content[0].text);
+      const parsed = JSON.parse(contentText(result));
       expect(parsed.items).toHaveLength(1);
     });
 
     it('rejects invalid args through Zod validation', async () => {
-      const handlers = mod.createToolHandlers({ github: mockGitHub as any });
+      const handlers = rawToolHandlers(mod, { github: mockGitHub as any });
       // state must be 'open', 'closed', or 'all'
       await expect(
         handlers.github_get_prs({ issueKey: 'TAP-1', state: 'invalid' }),
       ).rejects.toThrow();
+    });
+
+    const review = { repo: 'Org/Repo', prNumber: 1, body: 'x' };
+    it.each([
+      ['github_get_file_contents', { repo: 'Org/Repo', path: 'f.ts', startLine: 5, endLine: 2 },
+        'startLine must be less than or equal to endLine'],
+      ['github_update_pr', { repo: 'Org/Repo', prNumber: 1 },
+        'At least one of title, body, state, base, maintainerCanModify, or draft must be provided'],
+      ['github_search_prs', {},
+        'At least one of query, author, repo, label, reviewRequested, or base must be provided'],
+      ['github_create_pr_review_comment', review,
+        'path, commitId, and line are required unless inReplyTo is provided'],
+      ['github_create_pr_review_comment', { ...review, path: 'f.ts', commitId: 'abc', line: 2, startLine: 3 },
+        'startLine must be less than line for multi-line comments'],
+      ['github_create_pr_review_comment', { ...review, path: 'f.ts', commitId: 'abc', line: 2, startSide: 'LEFT' },
+        'startSide requires startLine to be provided'],
+    ])('%s keeps its refine rule on the descriptor schema: %j', async (name, args, message) => {
+      const handlers = rawToolHandlers(mod, { github: mockGitHub as any });
+      await expect(handlers[name](args)).rejects.toThrow(message);
+      for (const fn of Object.values(mockGitHub)) expect(fn).not.toHaveBeenCalled();
     });
   });
 
@@ -140,19 +162,29 @@ describe('GitHubModule', () => {
       expect(descriptors).toHaveLength(30);
       expect(descriptors.find((d) => d.name === 'github_get_copilot_unresolved_prs')).toMatchObject({
         description: 'List PRs with full originating comment bodies from every unresolved Copilot-started review thread.',
-        inputSchema: {
-          type: 'object', required: ['repo'],
-          properties: {
-            prNumbers: { type: 'array', items: { type: 'integer', exclusiveMinimum: 0, maximum: 2147483647 } },
-            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-            state: { enum: ['open', 'closed', 'all'], default: 'open' },
-            cursor: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
-          },
+      });
+      const schema = inputJsonSchema(descriptors.find((d) => d.name === 'github_get_copilot_unresolved_prs')!) as any;
+      expect(schema).toMatchObject({
+        type: 'object', required: ['repo'],
+        properties: {
+          prNumbers: { type: 'array', items: { type: 'integer', exclusiveMinimum: 0, maximum: 2147483647 } },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          state: { enum: ['open', 'closed', 'all'], default: 'open' },
+          cursor: { type: 'string', pattern: '^[A-Za-z0-9_-]+$' },
         },
       });
-      const schema = descriptors.find((d) => d.name === 'github_get_copilot_unresolved_prs')!.inputSchema as any;
       expect(schema.properties.prNumbers).not.toHaveProperty('default');
       expect(schema.properties.cursor).not.toHaveProperty('maxLength');
+    });
+
+    it('every descriptor has a title and four boolean hints', () => {
+      // Hint values are owned by the 80-tool table in src/integrations/index.test.ts.
+      for (const d of mod.getToolDescriptors()) {
+        expect(d.title, d.name).toEqual(expect.stringMatching(/\S/));
+        for (const hint of ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const) {
+          expect(typeof d.annotations?.[hint], `${d.name}.${hint}`).toBe('boolean');
+        }
+      }
     });
 
     it('descriptors have name, description, and inputSchema', () => {
@@ -166,6 +198,21 @@ describe('GitHubModule', () => {
         expect(d.description).toBeTruthy();
         expect(d.inputSchema).toBeDefined();
       }
+    });
+  });
+
+  describe('getResourceDescriptors', () => {
+    it('declares the github://prs/{issueKey} template and no static resources', () => {
+      const descriptors = mod.getResourceDescriptors();
+      expect(descriptors).toHaveLength(1);
+      expect(descriptors[0]).toMatchObject({
+        uriTemplate: 'github://prs/{issueKey}',
+        name: expect.stringMatching(/\S/),
+        title: expect.stringMatching(/\S/),
+        description: expect.stringMatching(/\S/),
+        mimeType: 'application/json',
+      });
+      expect(descriptors[0].uri).toBeUndefined();
     });
   });
 
@@ -189,14 +236,31 @@ describe('GitHubModule', () => {
       expect(result.contents[0].mimeType).toBe('application/json');
     });
 
-    it('throws when issue key is empty', async () => {
+    it('throws InvalidParams when issue key is empty', async () => {
       const rh = mod.getResourceHandler({ github: mockGitHub as any });
-      await expect(rh('github://prs/')).rejects.toThrow('Missing issue key');
+      const err = await rh('github://prs/').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ProtocolError);
+      expect(err).not.toBeInstanceOf(ResourceNotFoundError);
+      expect(err).toMatchObject({ code: ProtocolErrorCode.InvalidParams, message: expect.stringContaining('Missing issue key') });
     });
 
-    it('throws for unknown URI', async () => {
+    it('throws InvalidParams for a malformed issue key without calling GitHub', async () => {
       const rh = mod.getResourceHandler({ github: mockGitHub as any });
-      await expect(rh('github://unknown')).rejects.toThrow('Unknown resource');
+      const err = await rh('github://prs/notakey').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ProtocolError);
+      expect(err).not.toBeInstanceOf(ResourceNotFoundError);
+      expect(err).toMatchObject({
+        code: ProtocolErrorCode.InvalidParams,
+        message: expect.stringContaining('Invalid issue key format: "notakey"'),
+      });
+      expect(mockGitHub.searchPrs).not.toHaveBeenCalled();
+    });
+
+    it('throws ResourceNotFoundError for unknown URI', async () => {
+      const rh = mod.getResourceHandler({ github: mockGitHub as any });
+      const err = await rh('github://unknown').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ResourceNotFoundError);
+      expect(err).toMatchObject({ code: ProtocolErrorCode.InvalidParams, data: { uri: 'github://unknown' } });
     });
   });
 });

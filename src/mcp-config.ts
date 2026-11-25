@@ -1,26 +1,36 @@
+import type { Logger } from './integrations/register.js';
+
+export type LogLevel = 'silent' | 'info' | 'debug';
+
 export interface McpConfig {
-  transport: 'stdio' | 'http';
-  port: number;
-  logLevel: 'silent' | 'info' | 'debug';
+  logLevel: LogLevel;
 }
 
-const VALID_TRANSPORTS = new Set(['stdio', 'http']);
-const VALID_LOG_LEVELS = new Set(['silent', 'info', 'debug']);
+const VALID_LOG_LEVELS = new Set<string>(['silent', 'info', 'debug']);
 
 export function loadMcpConfig(): McpConfig {
-  const rawTransport = process.env.MCP_TRANSPORT?.trim() || 'stdio';
-  if (!VALID_TRANSPORTS.has(rawTransport)) {
-    console.error(`[mcp] Invalid MCP_TRANSPORT "${rawTransport}"; falling back to "stdio"`);
-  }
-  const transport = (VALID_TRANSPORTS.has(rawTransport) ? rawTransport : 'stdio') as 'stdio' | 'http';
-
-  const port = Number(process.env.MCP_PORT?.trim()) || 3000;
-
   const rawLogLevel = process.env.MCP_LOG_LEVEL?.trim() || 'info';
   if (!VALID_LOG_LEVELS.has(rawLogLevel)) {
     console.error(`[mcp] Invalid MCP_LOG_LEVEL "${rawLogLevel}"; falling back to "info"`);
   }
-  const logLevel = (VALID_LOG_LEVELS.has(rawLogLevel) ? rawLogLevel : 'info') as 'silent' | 'info' | 'debug';
+  const logLevel = (VALID_LOG_LEVELS.has(rawLogLevel) ? rawLogLevel : 'info') as LogLevel;
+  return { logLevel };
+}
 
-  return { transport, port, logLevel };
+/** Every line goes to stderr; stdout is the protocol. */
+export function createLogger(level: LogLevel): Logger {
+  const write = (line: string) => {
+    process.stderr.write(`[mcp] ${line}\n`);
+  };
+  return {
+    info: (line) => {
+      if (level !== 'silent') write(line);
+    },
+    debug: (line) => {
+      if (level === 'debug') write(line);
+    },
+    error: (line) => {
+      if (level !== 'silent') write(line);
+    },
+  };
 }

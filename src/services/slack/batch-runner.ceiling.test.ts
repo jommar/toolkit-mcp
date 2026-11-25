@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runBatch } from './batch-runner.js';
-import { keyOf, messageOf, page, resumeCursorOf, type BatchItem } from './__fixtures__/batch-helpers.js';
+import { anyEntries, keyOf, messageOf, page, resumeCursorOf, type BatchItem } from './__fixtures__/batch-helpers.js';
 
 describe('runBatch response ceiling', () => {
   it('drops whole messages from the end, sets truncated and points the cut entry at its first omitted message', async () => {
@@ -12,12 +12,12 @@ describe('runBatch response ceiling', () => {
         : page(later, { hasMore: true, nextPageToken: 'slack-next-page-of-B' }),
     );
 
-    const { results, truncated } = await runBatch([{ id: 'A' }, { id: 'B' }], {
+    const { results, truncated } = anyEntries(await runBatch([{ id: 'A' }, { id: 'B' }], {
       key: keyOf,
       exec,
       resume: resumeCursorOf,
       limits: { maxItems: 20, maxResponseChars: 700 },
-    });
+    }));
 
     const kept = results[1].items?.length ?? -1;
     expect(truncated).toBe(true);
@@ -35,12 +35,12 @@ describe('runBatch response ceiling', () => {
     const small = [messageOf('A', 0), messageOf('A', 1)];
     const exec = vi.fn(async () => page(small, { hasMore: true, nextPageToken: 'slack-next-page-of-A' }));
 
-    const { results, truncated } = await runBatch([{ id: 'A' }], {
+    const { results, truncated } = anyEntries(await runBatch([{ id: 'A' }], {
       key: keyOf,
       exec,
       resume: resumeCursorOf,
       limits: { maxItems: 20, maxResponseChars: 100_000 },
-    });
+    }));
 
     expect(truncated).toBe(false);
     expect(results[0].items).toEqual(small);
@@ -51,12 +51,12 @@ describe('runBatch response ceiling', () => {
     const huge = Array.from({ length: 5 }, (_unused, index) => messageOf('A', index, 30_000));
     const exec = vi.fn(async () => page(huge));
 
-    const { results, truncated } = await runBatch([{ id: 'A' }], {
+    const { results, truncated } = anyEntries(await runBatch([{ id: 'A' }], {
       key: keyOf,
       exec,
       resume: resumeCursorOf,
       limits: { maxItems: 20 },
-    });
+    }));
 
     expect(truncated).toBe(true);
     expect(results[0].items).toEqual(huge.slice(0, 3));

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
-import { GitHubClient, PrSearchResult, legacyIssueKey } from './github-client.js';
+import { GitHubClient, PrSearchResult, legacyIssueKey, type CopilotUnresolvedPrsOptions } from './github-client.js';
 
 // Mock only axios.create — keep real AxiosError and isAxiosError for other tests
 const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
@@ -2999,7 +2999,7 @@ describe('getReviewStatus regression', () => {
       expect(http.get).not.toHaveBeenCalled();
     });
 
-    it.each([
+    it.each<Partial<CopilotUnresolvedPrsOptions>>([
       { repo: 'Other/Repo' }, { state: 'closed' }, { prNumbers: undefined }, { prNumbers: [1, 2] }, { limit: 3 },
     ])('binds discovery cursors to their selection scope: %j', async (changes) => {
       http.post.mockResolvedValueOnce(candidatePage([], 'prs-2', true));
