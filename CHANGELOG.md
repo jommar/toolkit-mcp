@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Served agent guide** — `skills/toolkit-mcp/` (`SKILL.md` plus six `references/`) is served over the MCP Skills extension (`io.modelcontextprotocol/skills`): `skills/list` returns `skill://toolkit-mcp/SKILL.md` and its files read over `resources/read`. The guide is workspace-neutral, covers every registered tool (including `jira_get_changelogs` and `slack_download_file`), and a test fails when it drifts from the registered tools.
+- **Served agent guide** — `skills/toolkit-mcp/` (`SKILL.md` plus six `references/`) is served over the MCP Skills extension (`io.modelcontextprotocol/skills`): `skills/list` returns `skill://toolkit-mcp/SKILL.md` and its files read over `resources/read`. The guide is workspace-neutral, covers every registered tool and top-level parameter (including `jira_get_changelogs` and `slack_download_file`), and a test fails when it drifts from them. The server fingerprints the files at startup, so restart it after changing `skills/`.
 
 ### Changed
 
-- **`resources` is always advertised** — The skill files are resources, so the capability is present even with no integration active, for legacy and 2026-07-28 clients alike.
+- **`resources` and the Skills extension are always advertised** — The skill files are resources, so even with no integration active, legacy and 2026-07-28 clients alike see the `resources` capability, the `io.modelcontextprotocol/skills` extension, `skill://toolkit-mcp/SKILL.md` in `resources/list` and the `skill://{+path}` template in `resources/templates/list`.
 
 ## [0.4.0] — 2026-11-25
 

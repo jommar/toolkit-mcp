@@ -159,6 +159,14 @@ describe('legacy client', () => {
       expect(list.error).toBeUndefined();
       expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(['mcp_get_health']);
       expect(list.result).not.toHaveProperty('ttlMs');
+
+      // The skill's files are resources: SKILL.md is listed, and every file reads through the skill template.
+      const resources = await session.request(3, 'resources/list');
+      expect(resources.result.resources.map((r: { uri: string }) => r.uri)).toEqual(['skill://toolkit-mcp/SKILL.md']);
+      const templates = await session.request(4, 'resources/templates/list');
+      expect(templates.result.resourceTemplates.map((t: { uriTemplate: string }) => t.uriTemplate)).toEqual(['skill://{+path}']);
+      const read = await session.request(5, 'resources/read', { uri: 'skill://toolkit-mcp/references/slack.md' });
+      expect(read.result.contents[0].text).toContain('slack_prepare_write');
     },
     TEST_TIMEOUT_MS,
   );

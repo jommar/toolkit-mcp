@@ -294,9 +294,9 @@ JQL in `jira://search/{+jql}` is URI-encoded (e.g., `jira://search/project%20%3D
 
 ## Skills
 
-The server ships an agent guide, [`skills/toolkit-mcp/`](skills/toolkit-mcp/SKILL.md), over the MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640): which tool to call, how to chain them, the response shapes to expect and the write rules. A 2026-07-28 client that supports the extension finds it with `skills/list` and reads `skill://toolkit-mcp/SKILL.md` and its `references/` over `resources/read`. It is always served, whichever integrations are active, so the `resources` capability is always advertised. Clients without the extension can copy or point at the folder instead.
+The server ships an agent guide, [`skills/toolkit-mcp/`](skills/toolkit-mcp/SKILL.md), over the MCP Skills extension (`io.modelcontextprotocol/skills`, SEP-2640): which tool to call, how to chain them, the response shapes to expect and the write rules. A 2026-07-28 client that supports the extension finds it with `skills/list` and reads `skill://toolkit-mcp/SKILL.md` and its `references/` over `resources/read`. It is always served, whichever integrations are active, so the `resources` capability is always advertised. Clients without the extension still see `skill://toolkit-mcp/SKILL.md` in `resources/list` and can read every file through the `skill://{+path}` template, or point at the folder on disk. The server fingerprints the files at startup: restart it after editing or pulling changes to `skills/`.
 
-The guide is workspace-neutral (placeholders such as `PROJ-123` and `acme/api`). Put your own conventions — project keys, required fields, repos, channels — in a skill in your workspace that sits on top of it. `src/mcp-skills.test.ts` fails when a registered tool is missing from the guide or the guide names a tool that does not exist.
+The guide is workspace-neutral (placeholders such as `PROJ-123` and `acme/api`). Put your own conventions — project keys, required fields, repos, channels — in a skill in your workspace that sits on top of it. `src/mcp-skills.test.ts` fails when a registered tool or one of its top-level parameters is missing from the guide, or the guide names a tool that does not exist.
 
 ---
 

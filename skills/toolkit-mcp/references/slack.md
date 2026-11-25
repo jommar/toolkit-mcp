@@ -11,11 +11,11 @@ Setup, limits and every error code are in the server's `docs/slack.md`.
 | `slack_login` | Start or finish a login | `workspace?`, `redirected_url?` |
 | `slack_logout` | Forget the login (revokes an app token) | `revoke?` |
 | `slack_get_status` | Report the login state | `verify?` (default true: asks Slack, cached 60s; `false` makes no call) |
-| `slack_search_messages` | Search | `queries[]` (max 5) |
-| `slack_get_messages` | One message, or a channel's history | `messages[]` (max 20) |
-| `slack_get_threads` | Whole threads | `threads[]` (max 20) |
-| `slack_get_channels` | Look up channels | `channels[]` (max 20) |
-| `slack_get_users` | Look up users | `users[]` (max 100 ids, 20 otherwise) |
+| `slack_search_messages` | Search | `queries[]` (max 5); `fields?`, `limit?`, `max_text_chars?` |
+| `slack_get_messages` | One message, or a channel's history | `messages[]` (max 20); `fields?`, `limit?`, `max_text_chars?` |
+| `slack_get_threads` | Whole threads | `threads[]` (max 20); `fields?`, `limit?`, `max_text_chars?` |
+| `slack_get_channels` | Look up channels | `channels[]` (max 20); `limit?` |
+| `slack_get_users` | Look up users | `users[]` (max 100 ids, 20 otherwise); `fields?`, `limit?` |
 | `slack_download_file` | Save one Slack-hosted file to disk; returns metadata only | `file` (file id or file link), `path` (absolute), `overwrite?` |
 | `slack_prepare_write` | Preview a post / react / upload, get a `confirmation_token` | `items[]` (max 10) |
 | `slack_confirm_write` | Send what was previewed | `confirmation_token` |
@@ -38,7 +38,7 @@ Slack id or a pasted `https` Slack link.
 | `unverified` | Slack was unreachable; try again |
 
 A call without a login throws `slack.not_connected`, `slack.login_pending` or `slack.session_rejected`.
-That is the login, not "nothing found". One workspace at a time: switch with `slack_logout`, then
+That is the login, not "nothing found". A write preview made while not connected fails `slack.not_connected` and sends nothing. One workspace at a time: switch with `slack_logout`, then
 `slack_login`. A login adopted from a browser session is only removed locally by `slack_logout`.
 
 ## Writing: prepare, show, confirm

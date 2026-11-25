@@ -128,10 +128,12 @@ Handlers receive input the SDK has already validated against the zod schema (def
 
 ### Served Skill
 
-`skills/toolkit-mcp/` (`SKILL.md` plus `references/`) is the agent guide to the tools, served over the MCP Skills extension (`io.modelcontextprotocol/skills`). `buildRuntime` loads it once with `loadServedSkills` and `createServer` attaches it to each connection's server. A skill problem is logged and that skill skipped; a catalog that cannot be built is logged and the server runs without skills. Skill files are resources, so `resources` is always advertised, even to legacy clients.
+`skills/toolkit-mcp/` (`SKILL.md` plus `references/`) is the agent guide to the tools, served over the MCP Skills extension (`io.modelcontextprotocol/skills`). `buildRuntime` loads it once with `loadServedSkills` and `createServer` attaches it to each connection's server. A skill problem is logged and that skill skipped; a catalog that cannot be built is logged and the server runs without skills. Skill files are resources, so `resources` and the extension are always advertised, even to legacy clients, which see `skill://toolkit-mcp/SKILL.md` in `resources/list` and the `skill://{+path}` template.
 
-- **Keep it in step with the tools.** Adding, renaming or removing a tool means updating the guide: `src/mcp-skills.test.ts` fails when a registered tool is not named in it or it names a tool that does not exist.
-- **Workspace-neutral.** Examples use placeholders (`PROJ-123`, `acme/api`, `main`); no real project key, org, repo, site or channel. A workspace's own conventions belong in that workspace's skills. `SKILL.md` and `references/slack.md` are in the `workspace-neutral` scan.
+The catalog records each file's digest at startup, so a running server refuses to serve a skill file edited after it started (`-32603 … changed since the skills catalog was loaded`). After editing or pulling changes to `skills/`, restart the server (for example `/mcp` reconnect).
+
+- **Keep it in step with the tools.** Adding, renaming or removing a tool or a top-level parameter means updating the guide: `src/mcp-skills.test.ts` fails when a registered tool is not named in it, it names a tool that does not exist, or a tool's table row in `references/` leaves out one of its top-level parameters.
+- **Workspace-neutral.** Examples use placeholders (`PROJ-123`, `acme/api`, `main`); no real project key, org, repo, site or channel. A workspace's own conventions belong in that workspace's skills. Every file of the skill is in the `workspace-neutral` scan.
 
 ### Error Model
 
@@ -316,7 +318,7 @@ This avoids needing real credentials or network calls.
 | `src/project-contract.test.ts` | Dependency pins, SDK imports, removed names in docs, CHANGELOG heading |
 | `src/mcp-config.test.ts` | Log level and logger |
 | `src/mcp-health.test.ts` | Health handler |
-| `src/mcp-skills.test.ts` | Served skill: strict catalog build, every file published, guide names exactly the registered tools, load failures |
+| `src/mcp-skills.test.ts` | Served skill: strict catalog build, every file published, guide names exactly the registered tools and every top-level parameter, load failures |
 | `src/node-version.test.ts` | Node guard: `assertSupportedNode`, and `MINIMUM_NODE_MAJOR` read from `engines.node` |
 | `src/launcher.e2e.test.ts` | `bin/toolkit-mcp` with fake nvm and PATH `node` shims: picks the `.nvmrc` node, falls back to PATH, runs from the repo root, nothing on stdout (POSIX only) |
 | `src/services/slack/*.test.ts` | Slack service layer — credential store, app config, login and loopback listener, client, model, links, cursors, batch runner, upload source, scope table |

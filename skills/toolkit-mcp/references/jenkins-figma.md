@@ -11,7 +11,7 @@ Loaded from [`../SKILL.md`](../SKILL.md). Jenkins is read-only and registers onl
 | `jenkins_get_jobs` | List jobs with current build status | `limit`(20), `cursor` |
 | `jenkins_get_builds` | Recent builds for a job, newest first | `job`; `limit`(20), `cursor` |
 | `jenkins_get_build` | One build's details; omit `buildNumber` for the most recent | `job`; `buildNumber?` |
-| `jenkins_get_console` | Build console log, paginated by line | `job`; `buildNumber?`, `limit`(200), `cursor` |
+| `jenkins_get_console` | Build console log, paginated by line, or its last lines | `job`; `buildNumber?`, `limit`(200), `cursor`, `tail?` (last `limit` lines; not with `cursor`) |
 | `jenkins_healthcheck` | Did the last build of each requested job succeed? | `jobs[]?` (omit → every visible job) |
 
 ## Figma tools
@@ -20,7 +20,7 @@ Loaded from [`../SKILL.md`](../SKILL.md). Jenkins is read-only and registers onl
 |------|---------|-----------|
 | `figma_get_me` | Authenticated Figma user | _none_ |
 | `figma_get_file` | File by key; document tree slimmed unless narrowed | `fileKey`; `depth?`, `ids?`, `geometry?`, `version?` |
-| `figma_get_nodes` | Specific nodes by id | `fileKey`, `ids` |
+| `figma_get_nodes` | Specific nodes by id | `fileKey`, `ids`; `depth?` |
 | `figma_get_images` | Export images for nodes | `fileKey`, `ids`; `format`(png), `scale`(1) |
 | `figma_get_comments` | Comments on a file | `fileKey` |
 | `figma_get_styles` | Styles published to a file | `fileKey` |
@@ -43,7 +43,7 @@ Loaded from [`../SKILL.md`](../SKILL.md). Jenkins is read-only and registers onl
 jenkins_healthcheck { jobs: ["api-build", "web-build"] }
 jenkins_get_builds { job: "api-build", limit: 5 }
 jenkins_get_build { job: "api-build", buildNumber: 123 }
-jenkins_get_console { job: "api-build" }              // latest build, first 200 lines
+jenkins_get_console { job: "api-build", tail: true }  // latest build, last 200 lines
 ```
 
 **Read a Figma file and export assets**
@@ -53,4 +53,5 @@ figma_get_file { fileKey: "ABC123def456", depth: 2 }
 figma_get_nodes { fileKey: "ABC123def456", ids: "1:2,3:4" }
 figma_get_images { fileKey: "ABC123def456", ids: "1:2,3:4", format: "png", scale: 2 }
 figma_get_comments { fileKey: "ABC123def456" }
+figma_post_comment { fileKey: "ABC123def456", message: "..." }   // after the user approves the wording
 ```

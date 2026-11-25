@@ -19,8 +19,9 @@ const SKILL_FILES = [
 ];
 /** Words in the guide shaped like a tool name that are not tools. */
 const NOT_TOOLS = new Set(['slack_connect']);
-const TOOL_NAME = /\b(?:jira|github|confluence|jenkins|figma|slack|mcp)_[a-z]+(?:_[a-z]+)*\b/g;
+const TOOL_NAME = /\b(?:jira|github|confluence|jenkins|figma|slack|mcp)_[a-z0-9]+(?:_[a-z0-9]+)*\b/g;
 
+const descriptors = () => [healthDescriptor, ...modules.flatMap((m) => m.getToolDescriptors())];
 const registeredTools = () => [healthDescriptor.name, ...modules.flatMap((m) => m.getToolDescriptors().map((d) => d.name))];
 const guideText = () => SKILL_FILES.map((file) => readFileSync(path.join(SKILL_DIR, file), 'utf8')).join('\n');
 const logger = () => ({ info: vi.fn(), error: vi.fn(), debug: vi.fn() });
@@ -64,6 +65,21 @@ describe('the guide matches the registered tools', () => {
 
     expect(unknown).toEqual([]);
   });
+
+  it('gives every tool a table row in references/ that names each of its top-level parameters', () => {
+    const rows = SKILL_FILES.filter((file) => file.startsWith('references/'))
+      .flatMap((file) => readFileSync(path.join(SKILL_DIR, file), 'utf8').split('\n'))
+      .filter((line) => line.startsWith('| `'));
+    const gaps = descriptors().flatMap((descriptor) => {
+      const row = rows.find((line) => line.startsWith(`| \`${descriptor.name}\` |`));
+      if (!row) return [`${descriptor.name}: no table row`];
+      return Object.keys(descriptor.inputSchema.shape)
+        .filter((param) => !new RegExp(`\`${param}\\b`).test(row))
+        .map((param) => `${descriptor.name}: ${param}`);
+    });
+
+    expect(gaps).toEqual([]);
+  });
 });
 
 describe('loadServedSkills', () => {
@@ -92,9 +108,11 @@ describe('loadServedSkills', () => {
   });
 
   it('serves no skills when the folder cannot be read', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'toolkit-skills-'));
+    temps.push(root);
     const log = logger();
 
-    const skills = await loadServedSkills(log, path.join(tmpdir(), 'toolkit-skills-missing-folder'));
+    const skills = await loadServedSkills(log, path.join(root, 'missing'));
 
     expect(skills).toBeUndefined();
     expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/^Failed to load skills: /));

@@ -30,13 +30,13 @@ whenever the Jira credentials are set (it shares the Atlassian token); `CONFLUEN
 
 ```text
 confluence_search { query: "approval workflow", space: "ENG", limit: 5 }   // → results[].id, title, url, excerpt
-confluence_get_page { id: "99057676" }                                     // → body as plain text
+confluence_get_page { id: "<page id>" }                                     // → body as plain text
 confluence_get_page { space: "ENG", title: "Release checklist" }            // straight by exact title
 ```
 
 **Update a page without losing content** (after the user said yes)
 
 ```text
-confluence_get_page { id: "99057676", includeStorage: true }   // edit the returned storage body
-confluence_update_page { pageId: "99057676", body: "<edited storage>", format: "storage" }
+confluence_get_page { id: "<page id>", includeStorage: true }   // edit the returned storage body
+confluence_update_page { pageId: "<page id>", body: "<edited storage>", format: "storage" }
 ```

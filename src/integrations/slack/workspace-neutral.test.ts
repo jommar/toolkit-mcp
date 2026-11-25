@@ -20,6 +20,11 @@ const SHIPPED_FILES = [
   '.env.example',
   'CHANGELOG.md',
   'skills/toolkit-mcp/SKILL.md',
+  'skills/toolkit-mcp/references/confluence.md',
+  'skills/toolkit-mcp/references/github.md',
+  'skills/toolkit-mcp/references/jenkins-figma.md',
+  'skills/toolkit-mcp/references/jira.md',
+  'skills/toolkit-mcp/references/server.md',
   'skills/toolkit-mcp/references/slack.md',
 ];
 
