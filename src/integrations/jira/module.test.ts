@@ -284,6 +284,29 @@ describe('jiraGetIssuesHandler', () => {
       expect(JSON.parse(contentText(result)).items).toEqual([{ key: 'TAP-1' }]);
     });
 
+    it('also fetches the description when adf is set and returns it only as descriptionAdf', async () => {
+      mockJira.getIssue.mockResolvedValue(rawIssue);
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      const result = await handler(
+        jiraGetIssuesSchema.parse({ key: 'TAP-1', fields: ['summary'], fieldsOnly: true, adf: true }),
+      );
+
+      expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', ['summary', 'description']);
+      expect(JSON.parse(contentText(result)).items).toEqual([
+        { key: 'TAP-1', summary: 'A', descriptionAdf: rawIssue.fields.description },
+      ]);
+    });
+
+    it('does not request the description twice when it is named and adf is set', async () => {
+      mockJira.getIssue.mockResolvedValue(rawIssue);
+
+      const handler = jiraGetIssuesHandler({ jira: mockJira as any });
+      await handler(jiraGetIssuesSchema.parse({ key: 'TAP-1', fields: ['description'], fieldsOnly: true, adf: true }));
+
+      expect(mockJira.getIssue).toHaveBeenCalledWith('TAP-1', ['description']);
+    });
+
     it('rejects fieldsOnly without fields', async () => {
       const handler = jiraGetIssuesHandler({ jira: mockJira as any });
 

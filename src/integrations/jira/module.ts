@@ -350,12 +350,14 @@ const SLIM_FIELD_NAMES: readonly string[] = DEV_FIELDS.map((f) => JIRA_TO_SLIM_F
 /**
  * Resolve `fieldsOnly` names (SlimIssue names, Jira ids accepted as aliases) into the SlimIssue
  * properties to keep, the custom field ids, and the Jira fields to request. `key` is always returned.
+ * With `adf`, the description is requested too, so `descriptionAdf` can be returned.
  */
-function resolveFieldsOnly(fields: string[]) {
+function resolveFieldsOnly(fields: string[], adf: boolean) {
   const names = [...new Set(fields.filter((f) => f !== 'key').map((f) => JIRA_TO_SLIM_FIELD[f] ?? f))];
   const standard = names.filter((n) => SLIM_FIELD_NAMES.includes(n));
   const custom = names.filter((n) => !SLIM_FIELD_NAMES.includes(n));
   const jiraFields = [...standard.map((n) => SLIM_TO_JIRA_FIELD[n] ?? n), ...custom];
+  if (adf && !jiraFields.includes('description')) jiraFields.push('description');
   // An empty list would make the single-issue endpoint return every field.
   return { standard, custom, jiraFields: jiraFields.length > 0 ? jiraFields : ['summary'] };
 }
@@ -375,7 +377,7 @@ export const jiraGetIssuesHandler: ToolHandler<z.infer<typeof jiraGetIssuesSchem
     if (fieldsOnly && !fields?.length) {
       throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'fieldsOnly needs fields');
     }
-    const only = fieldsOnly && fields ? resolveFieldsOnly(fields) : undefined;
+    const only = fieldsOnly && fields ? resolveFieldsOnly(fields, !!adf) : undefined;
     const customFieldIds = only
       ? only.custom
       : fields ? [...new Set(fields.filter((f) => !(DEV_FIELDS as readonly string[]).includes(f)))] : undefined;
